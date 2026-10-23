@@ -154,7 +154,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning(f"Erro ao finalizar Telegram Bot API local: {exc}")
 
-app = FastAPI(title="Auto-Send Multi-Bot API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Auto-Send Multi-Bot API", version="0.4.0", lifespan=lifespan)
 
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 allowed_origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
