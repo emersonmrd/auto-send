@@ -163,7 +163,7 @@ Todo agente, ao concluir uma tarefa ou ciclo de trabalho, é **estritamente obri
 1. **Nunca commitar direto na `main`.** Toda mudança começa numa branch `feature/...`, `fix/...`, `chore/...` ou `docs/...`.
 2. **Commits** seguem Conventional Commits pelo tipo da mudança (`feat`, `fix`, `test`, `docs`, `chore`, `refactor`), com escopo opcional (`feat(backend): ...`). Commits `fix` e reversões explicam o porquê no corpo.
 3. **Nada de commits vazios** para registrar aprovação ou métricas. A evidência de verificação vai na descrição do PR e no CI.
-4. **Merge** só via Pull Request, com CI verde e revisão humana do diff.
+4. **Merge** só via Pull Request, com CI verde e revisão humana do diff. Quem faz o merge é o usuário: o agente nunca roda `gh pr merge` nem mergeia pela API, nem em release e nem quando o pedido é "pode fazer a release". Ele abre o PR, mostra o CI e espera (correção do usuário em 2026-10-23: "não faça mais isso se não vc quebra o fluxo").
 
 ## 8. Política Estrita de Tags Pinned/LTS, Segurança de Containers e Boas Práticas Arquiteturais
 Todas as implementações e revisões do time de agentes devem cumprir compulsoriamente os seguintes guardrails:
