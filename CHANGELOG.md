@@ -5,6 +5,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Fixed
+- A aba do navegador mostra "Auto-Send" em vez de "Create Next App", o título padrão do template do Next.js (#5).
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
