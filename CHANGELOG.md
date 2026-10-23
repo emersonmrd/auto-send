@@ -5,6 +5,8 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
 ### Added
 - Código aberto sob a licença MIT, com `README.md`, `SECURITY.md` e `THIRD_PARTY_NOTICES.md`. O pacote portátil passa a levar a `LICENSE` e os avisos de terceiros (FFmpeg GPL-3.0, telegram-bot-api, OpenSSL, Python e bibliotecas).
 
