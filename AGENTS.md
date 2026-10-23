@@ -163,7 +163,7 @@ Todo agente, ao concluir uma tarefa ou ciclo de trabalho, é **estritamente obri
 1. **Nunca commitar direto na `main`.** Toda mudança começa numa branch `feature/...`, `fix/...`, `chore/...` ou `docs/...`.
 2. **Commits** seguem Conventional Commits pelo tipo da mudança (`feat`, `fix`, `test`, `docs`, `chore`, `refactor`), com escopo opcional (`feat(backend): ...`). Commits `fix` e reversões explicam o porquê no corpo.
 3. **Nada de commits vazios** para registrar aprovação ou métricas. A evidência de verificação vai na descrição do PR e no CI.
-4. **Merge** só via Pull Request, com CI verde e revisão humana do diff.
+4. **Merge** só via Pull Request, com CI verde e revisão humana do diff. Quem faz o merge é o usuário: o agente nunca roda `gh pr merge` nem mergeia pela API, nem em release e nem quando o pedido é "pode fazer a release". Ele abre o PR, mostra o CI e espera (correção do usuário em 2026-10-23: "não faça mais isso se não vc quebra o fluxo").
 
 ## 8. Política Estrita de Tags Pinned/LTS, Segurança de Containers e Boas Práticas Arquiteturais
 Todas as implementações e revisões do time de agentes devem cumprir compulsoriamente os seguintes guardrails:
@@ -197,6 +197,7 @@ Usado pela skill `security-audit` e na revisão de PRs:
 - XSS: markdown/HTML sanitizado antes de ir para o Telegram. SSRF: URLs dos botões de link inline validadas (apenas `https`, sem hosts privados).
 - Sem path traversal no upload e na remoção de mídia temporária; MIME type e extensão validados.
 - Dependências, actions e imagens fixadas (seção 8 e CI); o job `security-scan` do CI precisa passar.
+- O repositório é público: fixtures, exemplos e textos usam dados genéricos ("Acme", "Canal de Novidades", IDs falsos como `-1001234567890`), nunca nomes, canais, IDs ou tokens reais. Contexto de negócio de quem usa o app não entra no repositório (kaizen de 2026-10-23: a abertura do código exigiu neutralizar fixtures e documentos).
 
 ## 10. Arquitetura e Domínio
 Monólito modular em Clean Architecture. **Regra de dependência:** as setas apontam para o domínio, nunca para fora.
@@ -294,7 +295,7 @@ Referência: https://ailair.akitaonrails.com/pt-br/workflow/ — um agente faz a
 2. **Restrições:** os invariantes acima, os comandos de verificação abaixo e as armadilhas registradas no ai-memory (`gotchas/`, `decisions/`).
 3. **Execução pelo agente, sem pedir permissão a cada passo:** branch → teste de regressão que falha antes da correção → implementação → comandos de verificação → PR.
 4. **Revisão humana:** o usuário lê o diff do PR e o resultado do CI, e decide o merge.
-5. **Kaizen:** ao fechar o ciclo, rode a skill `kaizen`. Cada falha, retrabalho ou correção do usuário vira teste, check de CI, regra aqui, ajuste de skill ou página no ai-memory.
+5. **Kaizen:** ao fechar o ciclo, rode a skill `kaizen`. Cada falha, retrabalho ou correção do usuário vira teste, check de CI, regra aqui, ajuste de skill ou página no ai-memory. Depois, grave um handoff no ai-memory com o próximo passo concreto: uma sessão que fecha sem ele obriga a seguinte a reconstruir o estado pelo git (kaizen de 2026-10-23).
 
 ### Linhas de instrução (fila do GitHub)
 - **Dia normal:** `run pr-audit and iss-audit, then run github-resolution`
@@ -307,6 +308,7 @@ Referência: https://ailair.akitaonrails.com/pt-br/workflow/ — um agente faz a
 - Nunca peça a quem usa o pacote portátil para rodar testes, scripts ou diagnósticos: é usuário final. A evidência vem do CI (smoke Windows) ou do próprio agente.
 - Não pergunte o que dá para verificar: permissões, ferramentas disponíveis, estado do repositório, como o código funciona. Teste primeiro.
 - Agrupe as perguntas num único momento, em vez de interromper o trabalho várias vezes.
+- Resposta do usuário em forma de pergunta ou dúvida ("isso quebra X?", "dá para desfazer depois?") não é aprovação: responda e espere a decisão antes de executar (correção do usuário em 2026-10-23: "então calma").
 
 ## 3. Comandos de verificação
 Rode antes de abrir o PR e cole a saída relevante na descrição. `backend/tests/conftest.py` isola a suíte num banco e num diretório de mídia temporários; nenhum teste toca o `auto_send.db`.
@@ -338,3 +340,4 @@ Chamadas ao ai-memory neste projeto passam sempre `workspace: "default"` e `proj
 - Estado do CI de um PR: `gh run list --commit <headRefOid>` (o commit atual do PR, não só a branch, que lista runs antigos), `gh run view <id> --json jobs` e `gh run view <id> --log-failed`; resumo rápido: `gh pr view <n> --json mergeStateStatus` (`UNSTABLE` = CI falhando).
 - Skills montadas no sandbox do agente são só leitura. Um agente que escreve nas próprias skills consegue ampliar ou sair da própria jaula; ajuste de skill vira PR no repositório dela.
 - Workflows nunca usam `pull_request_target` nem expõem segredos a PRs de fork: o repositório é público, e o CI de quem é de fora só roda com aprovação do mantenedor.
+- No sandbox, só a pasta do projeto e o `~/.claude` persistem. Antes de gravar qualquer coisa fora do projeto (backup, clone, export), rode `findmnt -T <caminho>`: se for `tmpfs`, some ao fechar a sessão (kaizen de 2026-10-23: um backup gravado em `~/backups` teria se perdido).
