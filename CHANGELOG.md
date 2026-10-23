@@ -5,6 +5,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Fixed
+- Acessibilidade: os campos dos formulários (perfil, canal, botão inline, link de texto, agendamento e edição) têm o rótulo visível associado (`<label htmlFor>`), e o campo de mensagem tem `aria-label`; leitores de tela anunciam o rótulo, não o placeholder (#6).
+
 ## [0.4.0] - 2026-10-23
 
 ### Added

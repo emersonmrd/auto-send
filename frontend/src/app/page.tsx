@@ -1917,6 +1917,7 @@ export default function Home() {
                   )}
                   <textarea
                     ref={textareaRef}
+                    aria-label="Mensagem do canal"
                     value={text}
                     onChange={(e) => setText(e.target.value)}
                     placeholder="Escreva a mensagem do canal..."
@@ -1996,8 +1997,9 @@ export default function Home() {
             </p>
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Texto do Botão</label>
+                <label htmlFor="field-temp-button-text" className="text-xs text-gray-400 block mb-1">Texto do Botão</label>
                 <input
+                  id="field-temp-button-text"
                   type="text"
                   placeholder="Ex: Saiba mais"
                   value={tempButtonText}
@@ -2007,8 +2009,9 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">URL do Botão (https://)</label>
+                <label htmlFor="field-temp-button-url" className="text-xs text-gray-400 block mb-1">URL do Botão (https://)</label>
                 <input
+                  id="field-temp-button-url"
                   type="text"
                   placeholder="https://t.me/seucanal"
                   value={tempButtonUrl}
@@ -2065,8 +2068,9 @@ export default function Home() {
             </p>
             <div className="space-y-3">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Palavra / Texto exibido</label>
+                <label htmlFor="field-text-link-word" className="text-xs text-gray-400 block mb-1">Palavra / Texto exibido</label>
                 <input
+                  id="field-text-link-word"
                   type="text"
                   placeholder="Ex: CLIQUE AQUI!"
                   value={textLinkWord}
@@ -2076,8 +2080,9 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">URL de destino</label>
+                <label htmlFor="field-text-link-url" className="text-xs text-gray-400 block mb-1">URL de destino</label>
                 <input
+                  id="field-text-link-url"
                   type="text"
                   placeholder="https://seulink.com"
                   value={textLinkUrl}
@@ -2201,11 +2206,12 @@ export default function Home() {
 
               {/* Seletor unificado de Data e Hora */}
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
+                <label htmlFor="field-scheduled-at-input" className="text-xs text-gray-400 block mb-1">
                   Data e Hora de Disparo (Horário Local)
                 </label>
                 <div className="flex items-center gap-2">
                   <input
+                    id="field-scheduled-at-input"
                     ref={scheduleDateTimeInputRef}
                     type="datetime-local"
                     required
@@ -2280,8 +2286,9 @@ export default function Home() {
             </p>
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Nome do Perfil</label>
+                <label htmlFor="field-edit-profile-name" className="text-xs text-gray-400 block mb-1">Nome do Perfil</label>
                 <input
+                  id="field-edit-profile-name"
                   type="text"
                   required
                   placeholder="Ex: Acme"
@@ -2291,10 +2298,11 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
+                <label htmlFor="field-edit-profile-bot-token" className="text-xs text-gray-400 block mb-1">
                   Token do Bot (@BotFather)
                 </label>
                 <input
+                  id="field-edit-profile-bot-token"
                   type="password"
                   required
                   placeholder="123456789:ABCdefGhIJKlmNoPQRstu..."
@@ -2405,8 +2413,9 @@ export default function Home() {
             </h3>
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Nome do Perfil</label>
+                <label htmlFor="field-new-profile-name" className="text-xs text-gray-400 block mb-1">Nome do Perfil</label>
                 <input
+                  id="field-new-profile-name"
                   type="text"
                   required
                   placeholder="Ex: Acme"
@@ -2416,10 +2425,11 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
+                <label htmlFor="field-new-bot-token" className="text-xs text-gray-400 block mb-1">
                   Token do Bot (@BotFather)
                 </label>
                 <input
+                  id="field-new-bot-token"
                   type="password"
                   required
                   placeholder="123456789:ABCdefGhIJKlmNoPQRstu..."
@@ -2471,8 +2481,9 @@ export default function Home() {
             )}
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Título do Canal</label>
+                <label htmlFor="field-new-channel-title" className="text-xs text-gray-400 block mb-1">Título do Canal</label>
                 <input
+                  id="field-new-channel-title"
                   type="text"
                   required
                   placeholder="Ex: Canal de Novidades"
@@ -2482,10 +2493,11 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
+                <label htmlFor="field-new-channel-chat-id" className="text-xs text-gray-400 block mb-1">
                   Chat ID do Telegram (começa com -100...)
                 </label>
                 <input
+                  id="field-new-channel-chat-id"
                   type="text"
                   required
                   placeholder="-1001234567890"
@@ -2532,8 +2544,9 @@ export default function Home() {
             </p>
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Título do Canal</label>
+                <label htmlFor="field-edit-channel-title" className="text-xs text-gray-400 block mb-1">Título do Canal</label>
                 <input
+                  id="field-edit-channel-title"
                   type="text"
                   required
                   placeholder="Ex: Canal de Novidades"
@@ -2543,10 +2556,11 @@ export default function Home() {
                 />
               </div>
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
+                <label htmlFor="field-edit-channel-chat-id" className="text-xs text-gray-400 block mb-1">
                   Chat ID do Telegram (começa com -100...)
                 </label>
                 <input
+                  id="field-edit-channel-chat-id"
                   type="text"
                   required
                   placeholder="-1001234567890"
@@ -2802,8 +2816,9 @@ export default function Home() {
 
             <div className="space-y-4">
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Texto da Mensagem</label>
+                <label htmlFor="field-edit-text" className="text-xs text-gray-400 block mb-1">Texto da Mensagem</label>
                 <textarea
+                  id="field-edit-text"
                   rows={3}
                   value={editText}
                   onChange={(e) => setEditText(e.target.value)}
@@ -2849,11 +2864,12 @@ export default function Home() {
 
               {/* Seletor unificado de Data e Hora na Edição */}
               <div>
-                <label className="text-xs text-gray-400 block mb-1">
+                <label htmlFor="field-edit-scheduled-at-input" className="text-xs text-gray-400 block mb-1">
                   Data e Hora de Disparo (Horário Local)
                 </label>
                 <div className="flex items-center gap-2">
                   <input
+                    id="field-edit-scheduled-at-input"
                     ref={editDateTimeInputRef}
                     type="datetime-local"
                     required
@@ -2888,8 +2904,9 @@ export default function Home() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs text-gray-400 block mb-1">Texto do Botão Inline</label>
+                  <label htmlFor="field-edit-button-text" className="text-xs text-gray-400 block mb-1">Texto do Botão Inline</label>
                   <input
+                    id="field-edit-button-text"
                     type="text"
                     placeholder="Ex: Ver Link"
                     value={editButtonText}
@@ -2898,8 +2915,9 @@ export default function Home() {
                   />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-400 block mb-1">URL (https://)</label>
+                  <label htmlFor="field-edit-button-url" className="text-xs text-gray-400 block mb-1">URL (https://)</label>
                   <input
+                    id="field-edit-button-url"
                     type="url"
                     placeholder="https://exemplo.com"
                     value={editButtonUrl}
