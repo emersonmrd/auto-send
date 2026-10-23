@@ -1,0 +1,43 @@
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /backend
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Os tipos acompanham a major do runtime (node:22); a troca de LTS é manual, junto com a imagem e o CI.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories: [/backend, /frontend, /docker/windows-smoke]
+    schedule:
+      interval: weekly
+    ignore:
+      # AGENTS.md §8.1 exige LTS: majors ímpares (25, 27...) nunca viram LTS, e a troca para a próxima LTS é manual.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly

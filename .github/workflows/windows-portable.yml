@@ -1,0 +1,70 @@
+name: Windows Portable Package
+
+# Build do pacote portátil e smoke test num Windows limpo, num lugar só.
+# Chamado pelo ci.yml (PR de release, label windows-build ou disparo manual) e pelo release.yml (antes de publicar).
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows Portable Package Build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Install build dependencies
+        run: |
+          npm ci --prefix frontend
+          python -m pip install httpx==0.28.1
+
+      - name: Build portable package
+        run: python scripts/bundle_portable_windows.py --download-binaries --zip
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: AutoSend-Portable
+          path: dist/AutoSend-Portable.zip
+          retention-days: 7
+
+  # O runner tem Python e Node no PATH e esconde o que falta no pacote; o container windows/server não tem nenhum dos dois.
+  smoke:
+    name: Windows Portable Smoke Test (clean container)
+    needs: build
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download portable package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: AutoSend-Portable
+          path: dist
+
+      - name: Build smoke test image
+        run: docker build -f docker/windows-smoke/Dockerfile -t auto-send-windows-smoke:${{ github.sha }} .
+
+      - name: Run smoke test in a clean Windows container
+        run: docker run --rm auto-send-windows-smoke:${{ github.sha }}

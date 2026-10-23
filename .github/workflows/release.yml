@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+jobs:
+  ci-gate:
+    name: Require green CI on the tagged commit
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Require green CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" --json conclusion --jq '[.[] | select(.conclusion != "")][0].conclusion')
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI is '$conclusion' for $GITHUB_SHA; a release requires a green CI run on this exact commit"
+            exit 1
+          fi
+
+  # Gera o .zip e roda o smoke test num Windows limpo; a release só sai se os dois passarem.
+  windows-portable:
+    name: Windows Portable
+    needs: ci-gate
+    uses: ./.github/workflows/windows-portable.yml
+
+  publish:
+    name: Publish GitHub Release
+    needs: windows-portable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # O mesmo .zip que passou no smoke test, não um build novo.
+      - name: Download tested portable package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: AutoSend-Portable
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" dist/AutoSend-Portable.zip --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag

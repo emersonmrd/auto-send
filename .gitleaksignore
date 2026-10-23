@@ -1,0 +1,4 @@
+# Valores falsos de teste no commit ea341d1 (TELEGRAM_API_HASH), já trocados por "fake-api-hash" em 3963f44.
+# O gitleaks lê todos os commits do PR, então o achado antigo só sai por fingerprint.
+ea341d1d4f8cfc73021e37363f6aeb01cb55b8e4:backend/tests/unit/test_telegram_process_manager.py:generic-api-key:29
+ea341d1d4f8cfc73021e37363f6aeb01cb55b8e4:backend/tests/unit/test_telegram_gateway_http.py:generic-api-key:418

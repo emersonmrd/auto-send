@@ -1,0 +1,9 @@
+# Regras padrão do gitleaks, mais uma exceção estreita: checksums SHA-256 públicos de artefatos
+# fixados no código (ex.: scripts/setup_windows_binaries.py, issue #10) não são segredos.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "SHA-256 de artefatos públicos (pinning de download)"
+regexTarget = "line"
+regexes = ['''^\s*[A-Z0-9_]+_SHA256 = "[0-9a-f]{64}"$''']

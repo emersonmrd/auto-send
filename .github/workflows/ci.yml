@@ -1,0 +1,276 @@
+name: CI/CD Pipeline - Auto-Send
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    # labeled: pôr o label windows-build num PR dispara o build Windows sem esperar novo commit.
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: "Também gerar o pacote Windows e rodar o smoke (cerca de 14 min de runner Windows)"
+        type: boolean
+        default: false
+
+# Um push novo no mesmo PR cancela o run anterior, que já não vale para o código atual.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Filtro por caminho: em PR, cada job só roda se o PR mexe no que ele verifica;
+  # em push na main e no disparo manual, tudo roda. scripts/dev/verify.sh roda as mesmas verificações localmente.
+  changes:
+    name: Decide what to run
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      domain: ${{ steps.filter.outputs.domain }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Match changed paths
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            files=$(git diff --name-only "$BASE_SHA" HEAD)
+          else
+            files=ALL
+          fi
+          echo "$files"
+          # Mudança no próprio workflow roda tudo.
+          wf='^\.github/workflows/'
+          out() {
+            if [ "$files" = ALL ] || grep -qE "$wf|$2" <<<"$files"; then echo "$1=true"; else echo "$1=false"; fi >> "$GITHUB_OUTPUT"
+          }
+          # Os testes de backend também cobrem políticas de Dockerfile, scripts do pacote e package.json.
+          out code '^(backend|frontend|scripts|docker)/|^docker-compose\.yml$|^\.gitleaks'
+          out domain '^backend/src/domain/|^backend/pyproject\.toml$|^backend/tests/unit/test_.*_domain\.py$|^backend/tests/test_mutation_audit\.py$'
+          out frontend '^frontend/'
+          # A suíte da aplicação real sobe o backend.
+          out e2e '^frontend/|^backend/src/|^backend/pyproject\.toml$|^backend/uv\.lock$'
+
+  backend-quality:
+    name: Backend Tests & 100% Domain Coverage
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install Backend Dependencies
+        run: |
+          cd backend
+          uv sync --frozen
+
+      - name: Domain & Application Coverage Gate (100%)
+        run: |
+          cd backend
+          uv run pytest --cov=src/domain --cov=src/application --cov-fail-under=100 tests/unit
+
+      - name: Full Test Suite (unit, integration, OpenAPI contract)
+        run: |
+          cd backend
+          uv run pytest
+
+  backend-mutation:
+    name: Domain Mutation Testing (0 survivors)
+    needs: changes
+    if: needs.changes.outputs.domain == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Run mutmut on src/domain
+        run: |
+          cd backend
+          uv sync --frozen
+          set +e
+          uvx --from mutmut==2.5.1 mutmut run
+          rc=$?
+          set -e
+          uvx --from mutmut==2.5.1 mutmut results
+          # Código de saída do mutmut 2 é bitmask: 1 fatal, 2 sobreviventes, 4 timeout, 8 suspeito (morto, só lento).
+          if (( rc & 7 )); then
+            echo "::error::mutmut failed (exit $rc): fatal error, surviving or timed-out mutants in src/domain"
+            exit 1
+          fi
+
+  frontend-quality:
+    name: Frontend Lint & Production Build
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run Frontend Lint
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Build Next.js Production App
+        run: |
+          cd frontend
+          npm run build
+
+  frontend-e2e:
+    name: Frontend E2E (Playwright)
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies and Chromium
+        run: |
+          cd frontend
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: |
+          cd frontend
+          npx playwright test
+
+      # Aplicação real: backend FastAPI servindo o export do frontend, com a API do Telegram falsa.
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          uv sync --frozen
+
+      - name: Run Playwright against the real app
+        run: |
+          cd frontend
+          npm run test:real-app
+
+      # O agente não roda Chromium no ai-jail: numa falha, o error-context.md de cada teste fica como artefato.
+      - name: Upload Playwright results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-test-results
+          path: frontend/test-results/
+          retention-days: 7
+
+  # Windows só onde ele decide algo: no PR da release (antes da tag), num PR com o label windows-build
+  # ou por disparo manual com a opção windows. O release.yml chama o mesmo workflow antes de publicar o .zip.
+  windows-portable:
+    name: Windows Portable
+    needs: changes
+    if: >-
+      inputs.windows ||
+      startsWith(github.head_ref, 'release/') ||
+      contains(github.event.pull_request.labels.*.name, 'windows-build')
+    uses: ./.github/workflows/windows-portable.yml
+
+  security-scan:
+    name: Dependency, Code & Secret Scan
+    # Roda em todo run habilitado: segredo vazado pode estar em qualquer arquivo.
+    needs: changes
+    runs-on: ubuntu-latest
+    # O gitleaks-action lista os commits do PR pela API (GET /pulls/{n}/commits).
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Audit Python dependencies (pip-audit)
+        run: |
+          cd backend
+          uv export --frozen --no-hashes --no-dev --format requirements-txt > "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit@2.10.1 -r "$RUNNER_TEMP/requirements.txt"
+
+      - name: Static analysis of backend code (bandit)
+        run: |
+          cd backend
+          uvx bandit@1.9.4 -r src -ll
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Audit frontend dependencies (npm audit)
+        run: |
+          cd frontend
+          npm audit --omit=dev --audit-level=high
+
+      - name: Scan git history for secrets (gitleaks)
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

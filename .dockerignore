@@ -1,0 +1,5 @@
+# Só o docker/windows-smoke usa a raiz como contexto (backend/ e frontend/ têm contexto próprio no compose).
+# Lista de permissão: nada entra no contexto além do que o Dockerfile copia.
+*
+!scripts/smoke_test_portable.ps1
+!dist/AutoSend-Portable.zip

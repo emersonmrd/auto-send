@@ -1,0 +1,40 @@
+[project]
+name = "auto-send-backend"
+version = "0.3.0"
+description = "Auto-Send backend: manage Telegram bots and schedule channel broadcasts"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "aiogram>=3.31.0",
+    "aiosqlite>=0.22.1",
+    "apscheduler>=3.11.3",
+    "fastapi>=0.148.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.5",
+    "python-multipart>=0.0.32",
+    "sqlalchemy[asyncio]>=2.1.5",
+    "uvicorn>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.16.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "schemathesis>=4",
+]
+
+# mutmut 2.5.1, via `uvx --from mutmut==2.5.1 mutmut run`: o 3.x recusa módulos chamados `src.*` (o import deste projeto).
+# As portas ficam de fora: são ABCs sem comportamento.
+[tool.mutmut]
+paths_to_mutate = "src/domain/broadcast/,src/domain/channels/,src/domain/profiles/"
+tests_dir = "tests/"
+runner = "uv run --frozen pytest -x -q -p no:cacheprovider tests/unit/test_broadcast_domain.py tests/unit/test_channel_domain.py tests/unit/test_chat_discovery_domain.py tests/unit/test_profile_domain.py tests/unit/test_value_objects_domain.py tests/unit/test_schedule_time_domain.py tests/test_mutation_audit.py"
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["@abstractmethod"]
