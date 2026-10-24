@@ -38,6 +38,8 @@ docker compose up --build
 
 Frontend at `http://localhost:3000`, API at `http://localhost:8000` (OpenAPI docs at `/docs`).
 
+Both ports are published on `127.0.0.1` only. The API has no authentication: to reach it from another machine (a VPS, your LAN), put a reverse proxy with authentication in front of it instead of publishing the ports on `0.0.0.0`.
+
 ### From source
 
 Requires Python 3.12 with [uv](https://docs.astral.sh/uv/) and Node.js 22.

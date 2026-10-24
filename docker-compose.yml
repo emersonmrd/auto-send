@@ -8,8 +8,6 @@ services:
       - TELEGRAM_LOCAL=1
     volumes:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
-    ports:
-      - "8081:8081"
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/ || exit 1"]
@@ -24,7 +22,7 @@ services:
       dockerfile: Dockerfile
     container_name: auto-send-backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
       - DATABASE_URL=sqlite+aiosqlite:////app/data/auto_send.db
       - TEMP_MEDIA_DIR=/app/temp_media
@@ -52,7 +50,7 @@ services:
       dockerfile: Dockerfile
     container_name: auto-send-frontend
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
