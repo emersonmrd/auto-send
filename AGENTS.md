@@ -164,6 +164,11 @@ Todo agente, ao concluir uma tarefa ou ciclo de trabalho, é **estritamente obri
 2. **Commits** seguem Conventional Commits pelo tipo da mudança (`feat`, `fix`, `test`, `docs`, `chore`, `refactor`), com escopo opcional (`feat(backend): ...`). Commits `fix` e reversões explicam o porquê no corpo.
 3. **Nada de commits vazios** para registrar aprovação ou métricas. A evidência de verificação vai na descrição do PR e no CI.
 4. **Merge** só via Pull Request, com CI verde e revisão humana do diff. Quem faz o merge é o usuário: o agente nunca roda `gh pr merge` nem mergeia pela API, nem em release e nem quando o pedido é "pode fazer a release". Ele abre o PR, mostra o CI e espera (correção do usuário em 2026-10-23: "não faça mais isso se não vc quebra o fluxo").
+5. **Rulesets do GitHub** (configurados em 2026-10-24) garantem os itens acima no servidor; só o admin do repositório faz bypass, e o token do agente não é admin:
+   - `main`: PR obrigatório (0 aprovações, porque os PRs saem pela conta do mantenedor), branch atualizada antes do merge, sem apagar e sem force push, e estes checks obrigatórios: `Decide what to run`, `Backend Tests & 100% Domain Coverage`, `Domain Mutation Testing (0 survivors)`, `Frontend Lint & Production Build`, `Frontend E2E (Playwright)` e `Dependency, Code & Secret Scan`.
+   - `release-tags` (`v*`): criar é livre; atualizar, apagar e force push são bloqueados.
+   - Renomear ou remover um desses jobs do CI trava todo PR esperando um check que não existe mais. O PR que muda o nome de um job avisa o mantenedor para atualizar o ruleset `main` antes do merge; o agente não tem permissão para alterá-lo.
+   - Depois do merge, o GitHub apaga a branch sozinho.
 
 ## 8. Política Estrita de Tags Pinned/LTS, Segurança de Containers e Boas Práticas Arquiteturais
 Todas as implementações e revisões do time de agentes devem cumprir compulsoriamente os seguintes guardrails:
