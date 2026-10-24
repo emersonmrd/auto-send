@@ -105,6 +105,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -114,15 +116,47 @@ jobs:
         with:
           python-version: '3.12'
 
+      # O mutmut 2 guarda o resultado de cada mutante e só o refaz quando o código ou os testes mudam.
+      - name: Restore mutmut cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: backend/.mutmut-cache
+          key: mutmut-${{ github.head_ref || github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            mutmut-${{ github.head_ref || github.ref_name }}-
+            mutmut-main-
+
       - name: Run mutmut on src/domain
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.head_ref }}
         run: |
+          # PR: só os arquivos de domínio alterados (scripts/dev/mutation_targets.py).
+          # PR de release, push na main e disparo manual: o domínio inteiro.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [[ "$HEAD_REF" != release/* ]]; then
+            targets=$(git diff --name-only "$BASE_SHA" HEAD | python3 scripts/dev/mutation_targets.py)
+          else
+            targets=ALL
+          fi
+          if [ -z "$targets" ]; then
+            echo "Nenhum arquivo de domínio para mutar." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          args=()
+          [ "$targets" != ALL ] && args=(--paths-to-mutate "$targets")
           cd backend
           uv sync --frozen
           set +e
-          uvx --from mutmut==2.5.1 mutmut run
+          uvx --from mutmut==2.5.1 mutmut run "${args[@]}"
           rc=$?
           set -e
-          uvx --from mutmut==2.5.1 mutmut results
+          uvx --from mutmut==2.5.1 mutmut results | tee mutmut-results.txt
+          {
+            echo "### Mutação do domínio: ${targets//,/, }"
+            echo '```'
+            cat mutmut-results.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           # Código de saída do mutmut 2 é bitmask: 1 fatal, 2 sobreviventes, 4 timeout, 8 suspeito (morto, só lento).
           if (( rc & 7 )); then
             echo "::error::mutmut failed (exit $rc): fatal error, surviving or timed-out mutants in src/domain"
