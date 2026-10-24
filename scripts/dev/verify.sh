@@ -52,19 +52,25 @@ gitleaks_bin() {
   echo "$bin"
 }
 
-domain_changed() {
-  $FORCE_MUTATION && return 0
+# Arquivos que o mutmut deve mutar (scripts/dev/mutation_targets.py): ALL, lista separada por vírgula ou vazio.
+# Como o CI, mas olhando também o que ainda não foi commitado (mudanças e arquivos novos).
+mutation_targets() {
+  local flags=()
+  $FORCE_MUTATION && flags=(--full)
   git -C "$ROOT" fetch -q origin main 2>/dev/null
-  # Mesmo filtro do job de mutação no ci.yml.
-  git -C "$ROOT" diff --name-only origin/main... -- \
-    backend/src/domain backend/pyproject.toml 'backend/tests/unit/test_*_domain.py' backend/tests/test_mutation_audit.py \
-    | grep -q .
+  {
+    git -C "$ROOT" diff --name-only origin/main...
+    git -C "$ROOT" diff --name-only HEAD
+    git -C "$ROOT" ls-files --others --exclude-standard
+  } | sort -u | python3 "$ROOT/scripts/dev/mutation_targets.py" "${flags[@]}"
 }
 
 run_mutation() {
+  local targets="$1" args=()
+  [[ "$targets" != ALL ]] && args=(--paths-to-mutate "$targets")
   cd backend || return 1
   rm -f .mutmut-cache
-  uvx --from mutmut==2.5.1 mutmut run >/dev/null
+  uvx --from mutmut==2.5.1 mutmut run "${args[@]}" >/dev/null
   local rc=$?
   uvx --from mutmut==2.5.1 mutmut results | sed -n '/Survived\|Timed out/,$p'
   rm -f .mutmut-cache
@@ -83,10 +89,11 @@ run_gitleaks() {
 step "Backend: cobertura 100% (domínio e aplicação)" \
   bash -c 'cd backend && uv run pytest -q --cov=src/domain --cov=src/application --cov-fail-under=100 tests/unit'
 step "Backend: suíte completa (unit, integração, contrato OpenAPI)" bash -c 'cd backend && uv run pytest -q'
-if domain_changed; then
-  step "Backend: mutação do domínio (0 sobreviventes)" run_mutation
+targets="$(mutation_targets)"
+if [[ -n "$targets" ]]; then
+  step "Backend: mutação do domínio (0 sobreviventes; ${targets})" run_mutation "$targets"
 else
-  results+=("SKIP  Backend: mutação do domínio (domínio igual à origin/main; --all força)")
+  results+=("SKIP  Backend: mutação do domínio (nenhum arquivo de domínio alterado; --all força)")
 fi
 step "Frontend: lint" bash -c 'cd frontend && npm run lint'
 step "Frontend: build de produção" bash -c 'cd frontend && npm run build'
