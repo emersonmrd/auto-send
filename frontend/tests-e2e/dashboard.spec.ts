@@ -74,6 +74,11 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
     await expect(page.locator("text=@acme_news_bot").first()).toBeVisible();
   });
 
+  test("a aba do navegador mostra o nome do app (issue #5)", async ({ page }) => {
+    await page.goto("/");
+    await expect(page).toHaveTitle("Auto-Send");
+  });
+
   test("deve digitar mensagem e refletir no Live Preview do balão do Telegram", async ({ page }) => {
     await page.goto("/");
     const input = page.getByPlaceholder("Escreva a mensagem do canal");
