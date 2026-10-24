@@ -13,6 +13,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - `POST /api/v1/profiles/{profile_id}/discover-chats` com webhook ativo no bot responde `400 "Bot webhook is active: automatic discovery is unavailable"`, sem abrir o circuit breaker; a tela explica em português e leva para a entrada manual. O app nunca apaga o webhook (#12).
 - O painel de busca de canais orienta a publicar uma mensagem no canal antes de buscar e, com a lista vazia, aponta o link de um post ou o ID (#12).
 
+### Fixed
+- Busca de canais do bot: cada chat mostra o tipo e o ID com rótulo explícito (`Canal: -1001234567890`, ou `Canal: @acme (-1001234567890)` com username), em vez do separador `·` que confundia o tipo com o ID (#13).
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
