@@ -295,7 +295,7 @@ Referência: https://ailair.akitaonrails.com/pt-br/workflow/ — um agente faz a
 2. **Restrições:** os invariantes acima, os comandos de verificação abaixo e as armadilhas registradas no ai-memory (`gotchas/`, `decisions/`).
 3. **Execução pelo agente, sem pedir permissão a cada passo:** branch → teste de regressão que falha antes da correção → implementação → comandos de verificação → PR.
 4. **Revisão humana:** o usuário lê o diff do PR e o resultado do CI, e decide o merge.
-5. **Kaizen:** ao fechar o ciclo, rode a skill `kaizen`. Cada falha, retrabalho ou correção do usuário vira teste, check de CI, regra aqui, ajuste de skill ou página no ai-memory. Depois, grave um handoff no ai-memory com o próximo passo concreto: uma sessão que fecha sem ele obriga a seguinte a reconstruir o estado pelo git (kaizen de 2026-10-23).
+5. **Kaizen:** ao fechar o ciclo, rode a skill `kaizen`. Cada falha, retrabalho ou correção do usuário vira teste, check de CI, regra aqui, ajuste de skill ou página no ai-memory. Depois, grave um handoff no ai-memory com o próximo passo concreto: uma sessão que fecha sem ele obriga a seguinte a reconstruir o estado pelo git (kaizen de 2026-10-23). Quando o usuário encerrar a sessão ("pode fechar a sessão", "mergeei, pode fechar"), grave o handoff com `memory_handoff_begin` e `next_steps` preenchido antes de responder; o handoff automático do hook guarda só a última frase da conversa, sem próximo passo (kaizen de 2026-10-23: a sessão seguinte abriu com "Continue from: mergeei, pode fechar a sessão").
 
 ### Linhas de instrução (fila do GitHub)
 - **Dia normal:** `run pr-audit and iss-audit, then run github-resolution`
