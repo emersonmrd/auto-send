@@ -26,13 +26,8 @@ exact libraries and configuration used.
 
 | Package | License |
 |---|---|
-| aiofiles | Apache-2.0 |
-| aiogram, magic-filter | MIT |
-| aiohappyeyeballs | PSF-2.0 |
-| aiohttp | Apache-2.0 AND MIT |
-| aiosignal, frozenlist, multidict, propcache, yarl | Apache-2.0 |
 | aiosqlite | MIT |
-| annotated-doc, annotated-types, anyio, attrs, h11, pydantic, pydantic-core, typing-inspection | MIT |
+| annotated-doc, annotated-types, anyio, h11, pydantic, pydantic-core, typing-inspection | MIT |
 | APScheduler, tzlocal | MIT |
 | certifi | MPL-2.0 |
 | click, httpcore, httpx, idna, starlette, uvicorn | BSD-3-Clause |

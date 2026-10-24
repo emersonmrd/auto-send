@@ -5,6 +5,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Removed
+- Dependências `aiogram` e `aiofiles` do backend, declaradas sem nenhum uso: saem da imagem Docker e do pacote portátil junto com 9 dependências transitivas (`aiohttp` e afins). Um teste reprova dependência de runtime que o `src/` não usa (#4).
+
 ### Fixed
 - Busca de canais do bot: cada chat mostra o tipo e o ID com rótulo explícito (`Canal: -1001234567890`, ou `Canal: @acme (-1001234567890)` com username), em vez do separador `·` que confundia o tipo com o ID (#13).
 - A aba do navegador mostra "Auto-Send" em vez de "Create Next App", o título padrão do template do Next.js (#5).
