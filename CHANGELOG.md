@@ -15,6 +15,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ### Fixed
 - Busca de canais do bot: cada chat mostra o tipo e o ID com rótulo explícito (`Canal: -1001234567890`, ou `Canal: @acme (-1001234567890)` com username), em vez do separador `·` que confundia o tipo com o ID (#13).
+- A aba do navegador mostra "Auto-Send" em vez de "Create Next App", o título padrão do template do Next.js (#5).
 
 ## [0.4.0] - 2026-10-23
 
