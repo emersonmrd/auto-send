@@ -34,8 +34,7 @@ function ChatRow({
       <div className="min-w-0">
         <p className="truncate text-sm text-gray-100">{chat.title || chat.chat_id}</p>
         <p className="truncate text-[11px] text-gray-400">
-          {TYPE_LABEL[chat.type]} · {chat.username ? `@${chat.username} · ` : ""}
-          {chat.chat_id}
+          {TYPE_LABEL[chat.type]}: {chat.username ? `@${chat.username} (${chat.chat_id})` : chat.chat_id}
         </p>
       </div>
       {alreadyRegistered ? (
