@@ -1568,7 +1568,7 @@ export default function Home() {
       </div>
 
       {/* CHAT CANVAS / ÁREA CENTRAL ESTILO TELEGRAM WEB */}
-      <div className="flex-1 flex flex-col bg-[#0e1621] relative">
+      <div className="flex-1 min-w-0 flex flex-col bg-[#0e1621] relative">
         {selectedProfile ? (
           <>
             {/* Header do Chat: Seleção de Canais */}
@@ -1871,17 +1871,17 @@ export default function Home() {
                 </button>
 
                 {/* Área de Texto Expansível */}
-                <div className="flex-1 bg-[#242f3d] rounded-2xl px-4 py-2 flex flex-col">
+                <div className="flex-1 min-w-0 bg-[#242f3d] rounded-2xl px-4 py-2 flex flex-col">
                   {mediaFile && (
                     <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
                       <div className="flex items-center justify-between text-xs text-green-400">
-                        <span className="truncate flex items-center gap-1.5">
+                        <span className="truncate min-w-0 flex items-center gap-1.5">
                           {isImageMedia(mediaFile) ? (
                             <ImageIcon className="w-3.5 h-3.5 shrink-0" />
                           ) : (
                             <Video className="w-3.5 h-3.5 shrink-0" />
                           )}
-                          <span className="truncate">{mediaFile.name}</span>
+                          <span className="truncate" title={mediaFile.name}>{mediaFile.name}</span>
                           <span className="text-[11px] text-gray-400 shrink-0">
                             ({formatFileSize(mediaFile.size)})
                           </span>
