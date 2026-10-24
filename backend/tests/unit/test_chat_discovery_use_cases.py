@@ -3,7 +3,7 @@ from src.application.discover_chats_use_case import DiscoverChatsUseCase
 from src.application.errors import ProfileNotFoundError
 from src.application.resolve_chat_use_case import ResolveChatUseCase
 from src.domain.channels.channel import Channel
-from src.domain.channels.chat_discovery import DiscoveredChat, PublicChatIdentifier
+from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.profiles.profile import Profile
 from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway
@@ -84,16 +84,26 @@ async def test_resolve_parses_the_identifier_and_uses_the_profile_bot(repos):
     chat = await ResolveChatUseCase(profiles, gateway).execute("p-1", "https://t.me/canalnovidades")
 
     assert chat == CHANNEL
-    assert gateway.calls == [("resolve", TOKEN, PublicChatIdentifier(username="canalnovidades"))]
+    assert gateway.calls == [("resolve", TOKEN, ChatIdentifier("@canalnovidades"))]
 
 
 async def test_resolve_rejects_invalid_identifier_before_calling_telegram(repos):
     profiles, _ = repos
     gateway = FakeDiscoveryGateway()
 
-    with pytest.raises(ValueError, match="Invalid public chat identifier"):
-        await ResolveChatUseCase(profiles, gateway).execute("p-1", "https://t.me/+convite")
+    for raw in ("https://t.me/+convite", "@x"):
+        with pytest.raises(ValueError, match="cannot be resolved by a bot|Invalid chat identifier"):
+            await ResolveChatUseCase(profiles, gateway).execute("p-1", raw)
     assert gateway.calls == []
+
+
+async def test_resolve_converts_a_private_post_link_to_the_channel_id(repos):
+    profiles, _ = repos
+    gateway = FakeDiscoveryGateway()
+
+    await ResolveChatUseCase(profiles, gateway).execute("p-1", "https://t.me/c/1234567890/15")
+
+    assert gateway.calls == [("resolve", TOKEN, ChatIdentifier("-1001234567890"))]
 
 
 async def test_resolve_for_missing_profile_does_not_call_telegram(repos):

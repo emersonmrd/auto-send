@@ -16,6 +16,7 @@ type TelegramCall = {
 
 const FAKE_TOKEN = "123456789:AAFakeTokenForTheRealAppSuite_0001";
 const REJECTED_TOKEN = "100000000:AAFakeTokenTheTelegramRejects_0001";
+const WEBHOOK_TOKEN = "200000000:AAFakeTokenWithAnActiveWebhook_0002";
 const botToken = process.env.E2E_BOT_TOKEN || FAKE_TOKEN;
 const channelId = process.env.E2E_CHANNEL_ID || "-1001234567890";
 const profileName = `Perfil ${Date.now()}`;
@@ -155,23 +156,85 @@ test.describe.serial("aplicação real", () => {
     await panel.getByRole("listitem").filter({ hasText: "Canal Descoberto" }).getByRole("button", { name: "Adicionar canal" }).click();
     await expect(page.getByText('Canal "Canal Descoberto" vinculado.').first()).toBeVisible();
 
-    await panel.getByPlaceholder("@meucanal ou t.me/meucanal").fill("https://t.me/canalpublico");
-    await panel.getByRole("button", { name: "Buscar canal público" }).click();
+    const identifier = panel.getByLabel("Link de um post, ID ou @username do canal");
+    const resolveButton = panel.getByRole("button", { name: "Buscar canal pelo link ou ID" });
+    await identifier.fill("https://t.me/canalpublico");
+    await resolveButton.click();
     await panel.getByRole("listitem").filter({ hasText: "Canal Público" }).getByRole("button", { name: "Adicionar canal" }).click();
     await expect(page.getByText('Canal "Canal Público" vinculado.').first()).toBeVisible();
-    await expect(panel.getByText("Já vinculado")).toHaveCount(2);
+
+    // Canal privado pelo "Copiar link" de um post (#12): t.me/c/<id>/<post> vira -100<id>.
+    await identifier.fill("https://t.me/c/4444444444/7");
+    await resolveButton.click();
+    await panel.getByRole("listitem").filter({ hasText: "Canal Privado" }).getByRole("button", { name: "Adicionar canal" }).click();
+    await expect(page.getByText('Canal "Canal Privado" vinculado.').first()).toBeVisible();
+
+    // Link de convite não é resolvido e nem chega ao Telegram.
+    await identifier.fill("https://t.me/+convite");
+    await resolveButton.click();
+    await expect(panel.getByRole("alert")).toContainText("Link de convite não serve");
 
     const calls = await telegramCalls(page);
-    expect(calls.map((c) => c.method)).toEqual(["getUpdates", "getChat"]);
+    expect(calls.map((c) => c.method)).toEqual(["getUpdates", "getChat", "getChat"]);
     // A busca só lê: sem offset nenhum update é confirmado, sem allowed_updates a configuração do bot fica igual.
     expect(calls[0].query).toEqual({ timeout: "0" });
     expect(calls[1].query).toEqual({ chat_id: "@canalpublico" });
+    expect(calls[2].query).toEqual({ chat_id: "-1004444444444" });
 
     // Os dois canais vinculados pela busca aparecem na barra de canais do perfil.
     await page.goto("/");
     await page.getByText(profileName, { exact: true }).first().click();
     await expect(page.getByText("Canal Descoberto").first()).toBeVisible();
     await expect(page.getByText("Canal Público").first()).toBeVisible();
+  });
+
+  // Também roda com o Telegram real: o bot de teste está no canal de teste, e o getChat por ID não depende de mensagens.
+  test("resolve o canal de teste pelo ID e pelo link de um post", async ({ page }) => {
+    await openProfile(page);
+    await page.getByRole("button", { name: "Adicionar Canal" }).click();
+    const panel = page.getByRole("region", { name: "Buscar canais do bot" });
+    const identifier = panel.getByLabel("Link de um post, ID ou @username do canal");
+    const resolveButton = panel.getByRole("button", { name: "Buscar canal pelo link ou ID" });
+
+    for (const raw of [channelId, `https://t.me/c/${channelId.replace(/^-100/, "")}/1`]) {
+      await identifier.fill(raw);
+      await resolveButton.click();
+      await expect(panel.getByRole("listitem").filter({ hasText: channelId }).getByText("Já vinculado")).toBeVisible();
+    }
+    if (!USES_REAL_TELEGRAM) {
+      const calls = await telegramCalls(page);
+      expect(calls.map((c) => [c.method, c.query.chat_id])).toEqual([
+        ["getChat", channelId],
+        ["getChat", channelId],
+      ]);
+    }
+  });
+
+  test("bot com webhook ativo: explica e vincula pelo ID", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM, "o webhook ativo é simulado pela API falsa");
+    await page.goto("/");
+    await page.getByTitle("Adicionar Novo Perfil").click();
+    await page.getByPlaceholder("Ex: Acme").fill("Perfil com webhook");
+    await page.getByPlaceholder("123456789:ABCdefGhIJKlmNoPQRstu...").fill(WEBHOOK_TOKEN);
+    await page.getByRole("button", { name: "Cadastrar Perfil" }).click();
+    await page.getByText("Perfil com webhook", { exact: true }).first().click();
+    await page.getByRole("button", { name: "Adicionar Canal" }).click();
+    const panel = page.getByRole("region", { name: "Buscar canais do bot" });
+
+    await panel.getByRole("button", { name: "Buscar canais do bot" }).click();
+    await expect(panel.getByRole("alert")).toContainText("Este bot está ligado a outro sistema (webhook)");
+
+    const identifier = panel.getByLabel("Link de um post, ID ou @username do canal");
+    await expect(identifier).toBeFocused();
+    await identifier.fill("-1004444444444");
+    await panel.getByRole("button", { name: "Buscar canal pelo link ou ID" }).click();
+    await panel.getByRole("listitem").filter({ hasText: "Canal Privado" }).getByRole("button", { name: "Adicionar canal" }).click();
+    await expect(page.getByText('Canal "Canal Privado" vinculado.').first()).toBeVisible();
+
+    // O app nunca apaga o webhook do bot: nenhuma chamada a deleteWebhook/setWebhook.
+    const methods = (await telegramCalls(page)).map((c) => c.method);
+    expect(methods).not.toContain("deleteWebhook");
+    expect(methods).not.toContain("setWebhook");
   });
 
   test("não deixa mídia temporária depois de enviar e cancelar", () => {

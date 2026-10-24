@@ -1,7 +1,7 @@
 import pytest
 import httpx
-from src.domain.channels.chat_discovery import DiscoveredChat, PublicChatIdentifier
-from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError
+from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
+from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, WebhookActiveError
 from src.infrastructure.resilience import CircuitBreaker, CircuitBreakerOpenException, CircuitState
 from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
 from tests.unit.test_resilience import FakeClock
@@ -99,7 +99,7 @@ async def test_resolve_calls_get_chat_with_the_username(monkeypatch):
     )
 
     result = await TelegramGatewayHttp(base_url="https://api.telegram.org").resolve_chat(
-        TOKEN, PublicChatIdentifier(username="canala")
+        TOKEN, ChatIdentifier("@canala")
     )
 
     [request] = requests
@@ -109,12 +109,44 @@ async def test_resolve_calls_get_chat_with_the_username(monkeypatch):
     assert result == DiscoveredChat(chat_id="-1001111111111", title="Canal A", chat_type="channel", username="canala")
 
 
+async def test_resolve_calls_get_chat_with_the_numeric_chat_id(monkeypatch):
+    # Canal privado informado pelo link do post ou pelo ID: getChat aceita o -100... e funciona com webhook ativo.
+    requests = use_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True, "result": chat(-1001234567890, "Canal Privado")}))
+
+    result = await TelegramGatewayHttp(base_url="https://api.telegram.org").resolve_chat(TOKEN, ChatIdentifier("-1001234567890"))
+
+    [request] = requests
+    assert request.url.path == f"/bot{TOKEN}/getChat"
+    assert request.url.params["chat_id"] == "-1001234567890"
+    assert result == DiscoveredChat(chat_id="-1001234567890", title="Canal Privado", chat_type="channel")
+
+
+async def test_discover_with_active_webhook_raises_a_typed_error_without_token(monkeypatch):
+    use_transport(
+        monkeypatch,
+        lambda r: httpx.Response(
+            409,
+            json={"ok": False, "error_code": 409, "description": "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first"},
+        ),
+    )
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+
+    with pytest.raises(WebhookActiveError) as exc:
+        await gateway.discover_chats(TOKEN)
+    assert isinstance(exc.value, ChatDiscoveryError)
+    assert str(exc.value) == "Bot webhook is active: automatic discovery is unavailable"
+    assert TOKEN not in str(exc.value)
+    # Webhook ativo é configuração do bot, não falha do Telegram: não conta para o circuit breaker.
+    assert gateway.circuit_breaker.state == CircuitState.CLOSED
+    assert gateway.circuit_breaker.failure_count == 0
+
+
 async def test_resolve_rejects_a_private_chat(monkeypatch):
     use_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True, "result": {"id": 42, "type": "private"}}))
 
     with pytest.raises(ChatDiscoveryError, match="not a channel or group"):
         await TelegramGatewayHttp(base_url="https://api.telegram.org").resolve_chat(
-            TOKEN, PublicChatIdentifier(username="umapessoa")
+            TOKEN, ChatIdentifier("@umapessoa")
         )
 
 
@@ -123,7 +155,6 @@ async def test_resolve_rejects_a_private_chat(monkeypatch):
     [
         (400, "Bad Request: chat not found"),
         (401, "Unauthorized"),
-        (409, "Conflict: can't use getUpdates method while webhook is active"),
         (500, "Internal Server Error"),
     ],
 )
@@ -131,7 +162,7 @@ async def test_telegram_error_becomes_chat_discovery_error_without_token(monkeyp
     use_transport(monkeypatch, lambda r: httpx.Response(status, json={"ok": False, "error_code": status, "description": description}))
     gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
 
-    for call in (gateway.discover_chats(TOKEN), gateway.resolve_chat(TOKEN, PublicChatIdentifier(username="canala"))):
+    for call in (gateway.discover_chats(TOKEN), gateway.resolve_chat(TOKEN, ChatIdentifier("@canala"))):
         with pytest.raises(ChatDiscoveryError) as exc:
             await call
         assert description in str(exc.value)
@@ -172,7 +203,7 @@ async def test_network_failure_becomes_chat_discovery_error_and_counts_for_the_c
     gateway = TelegramGatewayHttp(base_url="https://api.telegram.org", circuit_breaker=cb)
 
     with pytest.raises(ChatDiscoveryError) as exc:
-        await gateway.resolve_chat(TOKEN, PublicChatIdentifier(username="canala"))
+        await gateway.resolve_chat(TOKEN, ChatIdentifier("@canala"))
     assert TOKEN not in str(exc.value)
     assert cb.state == CircuitState.OPEN
 

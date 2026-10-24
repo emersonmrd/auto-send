@@ -75,8 +75,8 @@ test.describe("Buscar canais do bot", () => {
       return json(route, 200, { chat_id: "-1003333333333", title: "Canal Público", type: "channel", username: "publico", registrable: true });
     });
 
-    await page.getByPlaceholder("@meucanal ou t.me/meucanal").fill("t.me/publico");
-    await page.getByRole("button", { name: "Buscar canal público" }).click();
+    await page.getByLabel("Link de um post, ID ou @username do canal").fill("t.me/publico");
+    await page.getByRole("button", { name: "Buscar canal pelo link ou ID" }).click();
 
     await expect(page.getByText("Canal Público", { exact: true })).toBeVisible();
     expect(identifier).toEqual({ identifier: "t.me/publico" });
@@ -84,12 +84,55 @@ test.describe("Buscar canais do bot", () => {
 
   test("mostra o motivo quando o Telegram recusa a busca", async ({ page }) => {
     await page.route("**/api/v1/profiles/profile-1/discover-chats", (route) =>
-      json(route, 400, { detail: "Telegram API error (409): Conflict: can't use getUpdates method while webhook is active" }),
+      json(route, 400, { detail: "Telegram API error (401): Unauthorized" }),
     );
 
     await page.getByRole("button", { name: "Buscar canais do bot" }).click();
 
-    await expect(page.getByRole("alert").filter({ hasText: "webhook is active" })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "Unauthorized" })).toBeVisible();
+  });
+
+  test("bot com webhook ativo: explica em português e leva para a entrada manual (issue #12)", async ({ page }) => {
+    await page.route("**/api/v1/profiles/profile-1/discover-chats", (route) =>
+      json(route, 400, { detail: "Bot webhook is active: automatic discovery is unavailable" }),
+    );
+
+    await page.getByRole("button", { name: "Buscar canais do bot" }).click();
+
+    const alert = page.getByRole("region", { name: "Buscar canais do bot" }).getByRole("alert");
+    await expect(alert).toContainText("Este bot está ligado a outro sistema (webhook)");
+    await expect(alert).toContainText("Vincule o canal pelo link de um post, pelo ID ou pelo @username");
+    await expect(alert).not.toContainText("webhook is active");
+    await expect(page.getByLabel("Link de um post, ID ou @username do canal")).toBeFocused();
+  });
+
+  test("resolve um canal privado pelo link de um post (issue #12)", async ({ page }) => {
+    let identifier: unknown;
+    await page.route("**/api/v1/profiles/profile-1/resolve-chat", (route) => {
+      identifier = route.request().postDataJSON();
+      return json(route, 200, { chat_id: "-1001234567890", title: "Canal Privado", type: "channel", username: null, registrable: true });
+    });
+
+    await page.getByLabel("Link de um post, ID ou @username do canal").fill("https://t.me/c/1234567890/15");
+    await page.getByRole("button", { name: "Buscar canal pelo link ou ID" }).click();
+
+    await expect(page.getByText("Canal Privado", { exact: true })).toBeVisible();
+    expect(identifier).toEqual({ identifier: "https://t.me/c/1234567890/15" });
+  });
+
+  test("link de convite: explica que não serve e pede o link de um post (issue #12)", async ({ page }) => {
+    await page.route("**/api/v1/profiles/profile-1/resolve-chat", (route) =>
+      json(route, 422, {
+        detail: "Invite links (t.me/+...) cannot be resolved by a bot: use the link of a post in the channel or the -100... chat ID",
+      }),
+    );
+
+    await page.getByLabel("Link de um post, ID ou @username do canal").fill("https://t.me/+convite");
+    await page.getByRole("button", { name: "Buscar canal pelo link ou ID" }).click();
+
+    const alert = page.getByRole("region", { name: "Buscar canais do bot" }).getByRole("alert");
+    await expect(alert).toContainText("Link de convite não serve");
+    await expect(alert).toContainText("Copiar link");
   });
 
   test("avisa quando o bot não tem mensagens recentes", async ({ page }) => {
@@ -98,5 +141,6 @@ test.describe("Buscar canais do bot", () => {
     await page.getByRole("button", { name: "Buscar canais do bot" }).click();
 
     await expect(page.getByText(/Nenhum canal encontrado/)).toBeVisible();
+    await expect(page.getByText(/link de um post/)).toBeVisible();
   });
 });

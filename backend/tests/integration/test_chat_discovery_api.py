@@ -5,7 +5,7 @@ from src.domain.channels.channel import Channel
 from src.domain.channels.chat_discovery import DiscoveredChat
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.profiles.profile import Profile
-from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway
+from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway, WebhookActiveError
 from src.infrastructure.resilience import CircuitBreakerOpenException
 from src.infrastructure.sqlite_repositories import Base
 from src.presentation.main import app, channel_repo, engine, get_chat_discovery_gateway, profile_repo
@@ -80,7 +80,8 @@ async def test_discover_for_missing_profile_is_404(client):
 @pytest.mark.parametrize(
     "error",
     [
-        ChatDiscoveryError("Telegram API error (409): Conflict: can't use getUpdates method while webhook is active"),
+        ChatDiscoveryError("Telegram API error (401): Unauthorized"),
+        WebhookActiveError("Bot webhook is active: automatic discovery is unavailable"),
         CircuitBreakerOpenException(retry_after=25),
     ],
 )
@@ -99,6 +100,34 @@ async def test_resolve_returns_the_chat(client):
     assert resp.status_code == 200
     assert resp.json() == {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True}
     assert gateway.resolved == ["@canalnovidades"]
+
+
+@pytest.mark.parametrize(
+    "identifier, chat_id",
+    [
+        ("https://t.me/c/1234567890/15", "-1001234567890"),
+        ("-1001234567890", "-1001234567890"),
+        ("@canalnovidades", "@canalnovidades"),
+        ("https://t.me/canalnovidades/42", "@canalnovidades"),
+    ],
+)
+async def test_resolve_accepts_post_link_chat_id_and_username(client, identifier, chat_id):
+    gateway = use_gateway(StubGateway())
+
+    resp = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": identifier})
+
+    assert resp.status_code == 200
+    assert gateway.resolved == [chat_id]
+
+
+async def test_resolve_invite_link_is_422_explaining_what_to_use(client):
+    gateway = use_gateway(StubGateway())
+    resp = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": "https://t.me/+convite"})
+    assert resp.status_code == 422
+    assert resp.json() == {
+        "detail": "Invite links (t.me/+...) cannot be resolved by a bot: use the link of a post in the channel or the -100... chat ID"
+    }
+    assert gateway.resolved == []
 
 
 @pytest.mark.parametrize("body", [{"identifier": "https://t.me/+convite"}, {"identifier": ""}, {}, {"identifier": 123}])

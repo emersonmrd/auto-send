@@ -6,33 +6,43 @@ from src.domain.channels.channel import CHANNEL_CHAT_ID_PATTERN
 
 # Username público do Telegram: 5 a 32 caracteres, começa com letra, só letras, dígitos e "_".
 _USERNAME_PATTERN = r"[A-Za-z][A-Za-z0-9_]{4,31}"
-# Link público t.me/<username> (ou telegram.me), com ou sem esquema e barra final.
-_PUBLIC_LINK_PATTERN = r"(?:https?://)?(?:t|telegram)\.me/([^/?#]+)/?"
+_TME = r"(?:https?://)?(?:t|telegram)\.me/"
+# Convite (t.me/+hash, t.me/joinchat/hash): a Bot API não resolve.
+_INVITE_LINK_PATTERN = _TME + r"(?:\+|joinchat/).*"
+# "Copiar link" de um post de canal privado: t.me/c/<id>/<post>; o chat_id é -100<id>.
+_PRIVATE_POST_LINK_PATTERN = _TME + r"c/(\d+)(?:/\d+)?/?"
+# Canal público ou post dele: t.me/<username> ou t.me/<username>/<post>.
+_PUBLIC_LINK_PATTERN = _TME + r"([^/?#]+)(?:/\d+)?/?"
 _DISCOVERABLE_CHAT_TYPES = ("channel", "supergroup", "group")
 
 
 @dataclass(frozen=True)
-class PublicChatIdentifier:
-    """@username de um canal ou grupo público, para o Telegram resolver o chat_id numérico."""
+class ChatIdentifier:
+    """Canal informado pelo operador, no formato que o getChat aceita: @username ou o chat_id -100..."""
 
-    username: str
+    value: str
 
     def __post_init__(self):
-        if not re.fullmatch(_USERNAME_PATTERN, self.username):
-            raise ValueError("Invalid public chat identifier (use @username or t.me/username)")
+        if not (re.fullmatch("@" + _USERNAME_PATTERN, self.value) or re.fullmatch(CHANNEL_CHAT_ID_PATTERN, self.value)):
+            raise ValueError("Invalid chat identifier (use @username, t.me/username, a post link t.me/c/... or the -100... chat ID)")
 
     @classmethod
-    def parse(cls, raw: str) -> "PublicChatIdentifier":
+    def parse(cls, raw: str) -> "ChatIdentifier":
         value = raw.strip()
-        link = re.fullmatch(_PUBLIC_LINK_PATTERN, value, re.IGNORECASE)
-        if link:
-            value = link.group(1)
-        elif value.startswith("@"):
-            value = value[1:]
-        return cls(username=value)
+        if re.fullmatch(_INVITE_LINK_PATTERN, value, re.IGNORECASE):
+            raise ValueError("Invite links (t.me/+...) cannot be resolved by a bot: use the link of a post in the channel or the -100... chat ID")
+        private_post = re.fullmatch(_PRIVATE_POST_LINK_PATTERN, value, re.IGNORECASE)
+        public_link = re.fullmatch(_PUBLIC_LINK_PATTERN, value, re.IGNORECASE)
+        if private_post:
+            value = f"-100{private_post.group(1)}"
+        elif public_link:
+            value = f"@{public_link.group(1)}"
+        elif not value.startswith(("@", "-")):
+            value = f"@{value}"
+        return cls(value)
 
     def as_chat_id(self) -> str:
-        return f"@{self.username}"
+        return self.value
 
 
 @dataclass(frozen=True)
