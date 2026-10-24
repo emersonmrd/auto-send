@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useId, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { useChatDiscovery } from "@/hooks/useChatDiscovery";
 import type { DiscoveredChat } from "@/types";
@@ -58,9 +58,15 @@ function ChatRow({
 }
 
 export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredChatIds, onAdd }: ChatDiscoveryPanelProps) {
-  const { chats, resolved, isLoading, error, discover, resolve } = useChatDiscovery(apiBaseUrl, profileId);
+  const { chats, resolved, isLoading, error, webhookActive, discover, resolve } = useChatDiscovery(apiBaseUrl, profileId);
   const [identifier, setIdentifier] = useState("");
   const identifierId = useId();
+  const identifierRef = useRef<HTMLInputElement>(null);
+
+  // Com webhook ativo a busca automática nunca funciona: o foco vai direto para a entrada manual.
+  useEffect(() => {
+    if (webhookActive) identifierRef.current?.focus();
+  }, [webhookActive]);
 
   const isRegistered = (chatId: string) => registeredChatIds.includes(chatId);
   const handleResolve = () => {
@@ -71,7 +77,7 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
     <section className="mb-5 space-y-3 border-b border-[#242f3d] pb-5" aria-label="Buscar canais do bot">
       <ol className="list-decimal space-y-0.5 pl-4 text-xs leading-relaxed text-gray-400">
         <li>Adicione o bot do perfil como administrador do canal.</li>
-        <li>Envie uma mensagem no canal e clique em buscar.</li>
+        <li>Publique uma mensagem no canal e clique em buscar: o bot só enxerga canais com mensagem recente.</li>
       </ol>
 
       <button
@@ -87,7 +93,8 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
       {chats !== null &&
         (chats.length === 0 ? (
           <p className="text-xs text-gray-400">
-            Nenhum canal encontrado. O Telegram guarda as mensagens por 24 horas: envie uma nova no canal e busque de novo.
+            Nenhum canal encontrado. O Telegram guarda as mensagens por 24 horas: publique uma nova no canal e busque de
+            novo, ou cole abaixo o link de um post do canal (toque numa mensagem e use &quot;Copiar link&quot;) ou o ID -100...
           </p>
         ) : (
           <ul className="max-h-48 space-y-1.5 overflow-y-auto">
@@ -101,12 +108,13 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
       <div className="flex items-end gap-2">
         <div className="flex-1">
           <label htmlFor={identifierId} className="mb-1 block text-xs text-gray-400">
-            Canal público (opcional)
+            Link de um post, ID ou @username do canal
           </label>
           <input
             id={identifierId}
+            ref={identifierRef}
             type="text"
-            placeholder="@meucanal ou t.me/meucanal"
+            placeholder="t.me/c/123.../15, -100... ou @meucanal"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
             onKeyDown={(e) => {
@@ -122,8 +130,8 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
           type="button"
           onClick={handleResolve}
           disabled={isLoading || !identifier.trim()}
-          aria-label="Buscar canal público"
-          title="Buscar canal público"
+          aria-label="Buscar canal pelo link ou ID"
+          title="Buscar canal pelo link ou ID"
           className="rounded-lg bg-[#242f3d] p-2 text-[#5288c1] hover:bg-[#2b5278] hover:text-white disabled:opacity-50"
         >
           <Search className="h-4 w-4" />

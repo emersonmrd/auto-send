@@ -3,8 +3,8 @@ import json
 import logging
 from typing import Any, Callable, Dict, List, Optional
 import httpx
-from src.domain.channels.chat_discovery import DiscoveredChat, PublicChatIdentifier
-from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway
+from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
+from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway, WebhookActiveError
 from src.domain.ports.telegram_gateway import ITelegramGateway
 from src.domain.broadcast.broadcast_message import BroadcastMessage, DispatchStrategy, MediaType
 from src.infrastructure.progress_reader import ProgressFileReader
@@ -326,7 +326,7 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                     chats[raw_chat["id"]] = discovered
         return list(chats.values())
 
-    async def resolve_chat(self, bot_token: str, identifier: PublicChatIdentifier) -> DiscoveredChat:
+    async def resolve_chat(self, bot_token: str, identifier: ChatIdentifier) -> DiscoveredChat:
         result = await self._call_chat_api(bot_token, "getChat", {"chat_id": identifier.as_chat_id()})
         discovered = self._to_discovered_chat(result if isinstance(result, dict) else {})
         if discovered is None:
@@ -344,6 +344,10 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             await self.circuit_breaker.record_failure()
             logger.error("Network error calling Telegram %s: %s", method, type(exc).__name__)
             raise ChatDiscoveryError(f"Telegram unreachable ({type(exc).__name__})") from None
+        if resp.status_code == 409:
+            # Outro sistema recebe os updates por webhook. É configuração do bot, não falha: não abre o circuito,
+            # e o webhook nunca é apagado daqui (quebraria o sistema de quem usa o bot).
+            raise WebhookActiveError("Bot webhook is active: automatic discovery is unavailable")
         data = await self._handle_response(resp)
         if not data.get("ok"):
             raise ChatDiscoveryError(self.last_error or f"Telegram API error: {data.get('description', 'Unknown error')}")

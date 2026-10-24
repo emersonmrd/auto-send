@@ -8,11 +8,18 @@ import http from "node:http";
 const PORT = Number(process.env.FAKE_TELEGRAM_PORT || 8091);
 // Token que o Telegram recusa no getMe, para o teste do caminho de erro.
 const REJECTED_TOKEN_PREFIX = "100000000:";
+// Token de um bot ligado a outro sistema por webhook: o getUpdates responde 409 (#12).
+const WEBHOOK_TOKEN_PREFIX = "200000000:";
 const calls = [];
 let nextMessageId = 1;
 // Busca de canais (#23): o bot "está" neste canal pelos updates, e este canal público responde ao getChat.
 const DISCOVERED_CHANNEL = { id: -1002222222222, title: "Canal Descoberto", type: "channel" };
 const PUBLIC_CHANNEL = { id: -1003333333333, title: "Canal Público", type: "channel", username: "canalpublico" };
+// Canais privados que respondem ao getChat pelo chat_id (#12): um só alcançável por link de post/ID e o canal de teste.
+const CHATS_BY_ID = {
+  "-1004444444444": { id: -1004444444444, title: "Canal Privado", type: "channel" },
+  "-1001234567890": { id: -1001234567890, title: "Canal de Teste", type: "channel" },
+};
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -76,10 +83,19 @@ const server = http.createServer(async (req, res) => {
     });
   }
   if (method === "getUpdates") {
+    if (token.startsWith(WEBHOOK_TOKEN_PREFIX)) {
+      return send(res, 409, {
+        ok: false,
+        error_code: 409,
+        description: "Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first",
+      });
+    }
     return send(res, 200, { ok: true, result: [{ update_id: 1, channel_post: { message_id: 1, chat: DISCOVERED_CHANNEL, text: "oi" } }] });
   }
   if (method === "getChat") {
-    if (url.searchParams.get("chat_id") === `@${PUBLIC_CHANNEL.username}`) return send(res, 200, { ok: true, result: PUBLIC_CHANNEL });
+    const chatId = url.searchParams.get("chat_id");
+    if (chatId === `@${PUBLIC_CHANNEL.username}`) return send(res, 200, { ok: true, result: PUBLIC_CHANNEL });
+    if (CHATS_BY_ID[chatId]) return send(res, 200, { ok: true, result: CHATS_BY_ID[chatId] });
     return send(res, 400, { ok: false, error_code: 400, description: "Bad Request: chat not found" });
   }
   if (["sendMessage", "sendPhoto", "sendVideo"].includes(method)) {

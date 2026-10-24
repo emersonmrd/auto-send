@@ -1,5 +1,5 @@
 from src.application.errors import ProfileNotFoundError
-from src.domain.channels.chat_discovery import DiscoveredChat, PublicChatIdentifier
+from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
 from src.domain.ports.chat_discovery_gateway import IChatDiscoveryGateway
 from src.domain.ports.profile_repository import IProfileRepository
 
@@ -11,7 +11,7 @@ class ResolveChatUseCase:
 
     async def execute(self, profile_id: str, raw_identifier: str) -> DiscoveredChat:
         # Identificador inválido levanta ValueError antes de qualquer chamada ao Telegram.
-        identifier = PublicChatIdentifier.parse(raw_identifier)
+        identifier = ChatIdentifier.parse(raw_identifier)
         profile = await self.profile_repo.get_by_id(profile_id)
         if profile is None:
             raise ProfileNotFoundError(profile_id)

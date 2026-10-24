@@ -5,6 +5,14 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Added
+- Cadastro de canal pelo link de um post ou pelo ID: o campo da busca de canais aceita, além de `@username`/`t.me/username`, o link copiado de um post (`https://t.me/c/<id>/<post>`, convertido para `-100<id>`), o link de post de canal público (`t.me/<username>/<post>`) e o ID `-100…`. Serve para canal privado em que ninguém postou nas últimas 24 h e para bot ligado a outro sistema por webhook (#12).
+
+### Changed
+- `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).
+- `POST /api/v1/profiles/{profile_id}/discover-chats` com webhook ativo no bot responde `400 "Bot webhook is active: automatic discovery is unavailable"`, sem abrir o circuit breaker; a tela explica em português e leva para a entrada manual. O app nunca apaga o webhook (#12).
+- O painel de busca de canais orienta a publicar uma mensagem no canal antes de buscar e, com a lista vazia, aponta o link de um post ou o ID (#12).
+
 ## [0.4.0] - 2026-10-23
 
 ### Added

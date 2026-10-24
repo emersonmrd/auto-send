@@ -399,7 +399,7 @@ async def discover_chats(profile_id: str, gateway: IChatDiscoveryGateway = Depen
 @app.post(
     "/api/v1/profiles/{profile_id}/resolve-chat",
     response_model=DiscoveredChatResponse,
-    responses={**_CHAT_DISCOVERY_ERRORS, 422: {"description": "Invalid public chat identifier"}},
+    responses={**_CHAT_DISCOVERY_ERRORS, 422: {"description": "Invalid chat identifier or invite link"}},
 )
 async def resolve_chat(
     profile_id: str,
