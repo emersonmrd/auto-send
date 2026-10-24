@@ -7,8 +7,10 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List, Optional
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import parse_host_header
 from pydantic import BaseModel
 
 from src.domain.broadcast.broadcast_message import (
@@ -156,8 +158,26 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Auto-Send Multi-Bot API", version="0.4.0", lifespan=lifespan)
 
+def allowed_hosts(extra: str) -> set[str]:
+    """Nomes pelos quais a API aceita ser chamada: loopback, mais os de ALLOWED_HOSTS (proxy reverso, VPS)."""
+    return {"127.0.0.1", "localhost", "[::1]"} | {h.strip().lower() for h in extra.split(",") if h.strip()}
+
+
 cors_origins_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 allowed_origins = [orig.strip() for orig in cors_origins_env.split(",") if orig.strip()]
+
+ALLOWED_HOSTS = allowed_hosts(os.getenv("ALLOWED_HOSTS", ""))
+
+
+@app.middleware("http")
+async def reject_untrusted_host(request: Request, call_next):
+    # Anti DNS rebinding (#36): uma página maliciosa pode fazer o navegador chamar 127.0.0.1 com o próprio domínio
+    # no Host. O TrustedHostMiddleware do Starlette responde em texto puro; aqui o erro segue o {"detail"} da API.
+    parsed = parse_host_header(request.headers.get("host"))
+    if parsed is None or parsed.host.lower() not in ALLOWED_HOSTS:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": "Invalid host header"})
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
