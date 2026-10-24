@@ -196,7 +196,11 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
 
 
 ## 9. Checklist de Segurança do Domínio
-Usado pela skill `security-audit` e na revisão de PRs:
+Usado pela skill `security-audit` e na revisão de PRs. Ela é obrigatória em dois momentos (kaizen de 2026-10-24: nenhuma skill do fluxo a chamava, e a v0.4.0 saiu sem ela):
+- **Release:** antes de criar a tag, sobre o intervalo desde a última tag (`<última tag>..HEAD`). Achado crítico ou alto bloqueia a tag.
+- **PR arriscado:** quando o `pr-audit` vê o PR mexer em gateway do Telegram, upload ou mídia, autenticação, `.github/workflows/`, Dockerfile ou `docker-compose.yml`, `scripts/` do pacote portátil, ou adicionar dependência.
+
+O checklist:
 - Tokens de bot do Telegram nunca aparecem em logs, respostas HTTP ou no frontend.
 - Rotas administrativas protegidas (hash argon2/bcrypt, JWT ou sessão HttpOnly).
 - XSS: markdown/HTML sanitizado antes de ir para o Telegram. SSRF: URLs dos botões de link inline validadas (apenas `https`, sem hosts privados).
