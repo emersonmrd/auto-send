@@ -58,6 +58,16 @@ test.describe("Buscar canais do bot", () => {
     await expect(panel.getByText("Já vinculado")).toHaveCount(2);
   });
 
+  test("rotula o tipo e o ID do chat sem separador ambíguo (issue #13)", async ({ page }) => {
+    await page.getByRole("button", { name: "Buscar canais do bot" }).click();
+
+    const panel = page.getByRole("region", { name: "Buscar canais do bot" });
+    await expect(panel.getByText("Canal: @canalnovidades (-1001111111111)", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Canal: -1002222222222", { exact: true })).toBeVisible();
+    await expect(panel.getByText("Grupo: -444444444", { exact: true })).toBeVisible();
+    await expect(panel.getByText(/·/)).toHaveCount(0);
+  });
+
   test("resolve um canal público pelo link", async ({ page }) => {
     let identifier: unknown;
     await page.route("**/api/v1/profiles/profile-1/resolve-chat", (route) => {
