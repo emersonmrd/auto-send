@@ -49,3 +49,33 @@ def test_final_stage_runs_without_admin_rights(dockerfile):
 
     assert users, "o estágio final não declara USER e roda como root/administrador"
     assert users[-1].split(":")[0].lower() not in ROOT_USERS
+
+
+def _compose_ports() -> dict[str, list[str]]:
+    """Mapeamentos de `ports:` por serviço do docker-compose.yml (serviço em 2 espaços, chave em 4, item em 6)."""
+    ports: dict[str, list[str]] = {}
+    service, in_ports = None, False
+    for line in (ROOT / "docker-compose.yml").read_text(encoding="utf-8").splitlines():
+        if m := re.match(r"^  ([\w-]+):\s*$", line):
+            service, in_ports = m.group(1), False
+            ports[service] = []
+        elif re.match(r"^    \S", line):
+            in_ports = line.strip() == "ports:"
+        elif in_ports and (m := re.match(r'^\s+-\s*"?([^"\s]+)"?\s*$', line)):
+            ports[service].append(m.group(1))
+    return ports
+
+
+def test_compose_publishes_ports_only_on_loopback():
+    # A API não tem autenticação (issue #35): "8000:8000" publicaria em todas as interfaces do host,
+    # e o Docker passa por cima do firewall. Abrir para a rede exige autenticação antes.
+    ports = _compose_ports()
+    assert {"backend", "frontend"} <= ports.keys()
+    for service, mappings in ports.items():
+        for mapping in mappings:
+            assert mapping.startswith("127.0.0.1:"), f"{service} publica {mapping} fora do loopback"
+
+
+def test_internal_telegram_bot_api_is_not_published():
+    # Só o backend consome o servidor local do Telegram, pela rede do Compose.
+    assert _compose_ports()["telegram-bot-api"] == []

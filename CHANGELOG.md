@@ -23,6 +23,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Compositor: anexar um arquivo de nome muito longo não empurra mais o campo de mensagem e os botões Enviar/Agendar para fora da tela; o nome aparece truncado, com o nome completo no `title` (#17).
 - Acessibilidade: os campos dos formulários (perfil, canal, botão inline, link de texto, agendamento e edição) têm o rótulo visível associado (`<label htmlFor>`), e o campo de mensagem tem `aria-label`; leitores de tela anunciam o rótulo, não o placeholder (#6).
 
+### Security
+- `docker-compose.yml`: a API (que não tem autenticação) e a tela passam a ser publicadas só em `127.0.0.1` (`127.0.0.1:8000`, `127.0.0.1:3000`), e o servidor local do Telegram deixa de ser publicado no host: só o backend o usa, pela rede do Compose. Antes, as três portas abriam em todas as interfaces, e numa rede compartilhada ou num VPS qualquer um podia usar a API. Para acessar de outra máquina, ponha um proxy reverso com autenticação na frente (#35).
+
 ## [0.4.0] - 2026-10-23
 
 ### Added
