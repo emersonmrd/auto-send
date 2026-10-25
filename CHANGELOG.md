@@ -26,6 +26,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 ### Security
 - `docker-compose.yml`: a API (que não tem autenticação) e a tela passam a ser publicadas só em `127.0.0.1` (`127.0.0.1:8000`, `127.0.0.1:3000`), e o servidor local do Telegram deixa de ser publicado no host: só o backend o usa, pela rede do Compose. Antes, as três portas abriam em todas as interfaces, e numa rede compartilhada ou num VPS qualquer um podia usar a API. Para acessar de outra máquina, ponha um proxy reverso com autenticação na frente (#35).
 - A API recusa com `400 {"detail": "Invalid host header"}` qualquer requisição cujo `Host` não seja `127.0.0.1`, `localhost`, `[::1]` ou um nome listado em `ALLOWED_HOSTS`. Isso impede que uma página maliciosa aberta no navegador use a API local por DNS rebinding (enviar, agendar, apagar). Quem acessa por um proxy reverso precisa pôr o domínio dele em `ALLOWED_HOSTS` (#36).
+- Pacote portátil: o servidor local do Telegram (`telegram-bot-api.exe`) sobe com `--http-ip-address=127.0.0.1` e passa a aceitar conexões só da própria máquina. Antes ele escutava em todas as interfaces, e qualquer computador da rede podia usá-lo, embora só o backend precise dele. O smoke do Windows confere que a porta abre em `127.0.0.1` e fica fechada no IP da rede (#37).
 
 ## [0.4.0] - 2026-10-23
 

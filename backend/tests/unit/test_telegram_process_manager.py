@@ -101,6 +101,8 @@ def test_start_and_stop_success(tmp_path: Path):
                 assert str(fake_bin.resolve()) in cmd
                 assert "--local" in cmd
                 assert "--http-port=8081" in cmd
+                # Só o backend usa o servidor local: sem isso ele aceita conexões de toda a rede (#37).
+                assert "--http-ip-address=127.0.0.1" in cmd
 
                 # Agora testa parada graciosa
                 mgr.stop()
