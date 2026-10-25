@@ -120,6 +120,38 @@ Check 'Python embutido importa as dependencias do backend' {
     Assert-ExitZero $pythonExe @('-c', 'import fastapi, uvicorn, sqlalchemy, aiosqlite, httpx, apscheduler')
 }
 Check 'telegram-bot-api.exe abre' { Assert-ExitZero (Join-Path $root 'bin\telegram-bot-api.exe') @('--version') }
+function Test-TcpPort([System.Net.IPAddress]$Address, [int]$Port) {
+    $client = New-Object System.Net.Sockets.TcpClient($Address.AddressFamily)
+    try { return $client.ConnectAsync($Address, $Port).Wait(2000) } catch { return $false } finally { $client.Close() }
+}
+
+# Issue #37: o backend sobe o servidor local com --http-ip-address=127.0.0.1. Credenciais falsas bastam
+# para ele abrir a porta; a checagem prova que esta versao aceita a opcao e nao escuta no IP da rede.
+Check 'telegram-bot-api.exe escuta so em 127.0.0.1' {
+    $tgPort = 8091
+    $tgDir = Join-Path $WorkDir 'tg-smoke'
+    New-Item -ItemType Directory -Path $tgDir -Force | Out-Null
+    $tg = Start-Process -FilePath (Join-Path $root 'bin\telegram-bot-api.exe') -PassThru -WindowStyle Hidden `
+        -ArgumentList '--local', '--http-ip-address=127.0.0.1', "--http-port=$tgPort", "--dir=$tgDir",
+            '--api-id=1', '--api-hash=00000000000000000000000000000000'
+    try {
+        $up = $false
+        for ($i = 0; $i -lt 15 -and -not $tg.HasExited; $i++) {
+            if (Test-TcpPort ([System.Net.IPAddress]::Loopback) $tgPort) { $up = $true; break }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $up) { throw "nao abriu a porta $tgPort em 127.0.0.1 (encerrou: $($tg.HasExited))" }
+        $lan = [System.Net.Dns]::GetHostAddresses($env:COMPUTERNAME) |
+            Where-Object { $_.AddressFamily -eq 'InterNetwork' -and -not [System.Net.IPAddress]::IsLoopback($_) }
+        if (-not $lan) { return '(sem IPv4 de rede para conferir o lado de fora)' }
+        $open = @($lan | Where-Object { Test-TcpPort $_ $tgPort })
+        if ($open) { throw "porta $tgPort aberta em $($open -join ', ')" }
+        "(fechada em $($lan -join ', '))"
+    } finally {
+        if (-not $tg.HasExited) { Stop-Process -Id $tg.Id -Force }
+    }
+}
+
 Check 'ffmpeg.exe abre' { Assert-ExitZero (Join-Path $root 'bin\ffmpeg.exe') @('-version') }
 Check 'ffprobe.exe abre' { Assert-ExitZero (Join-Path $root 'bin\ffprobe.exe') @('-version') }
 

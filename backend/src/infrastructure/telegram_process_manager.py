@@ -224,6 +224,8 @@ class TelegramProcessManager:
         cmd: List[str] = [
             str(binary),
             "--local",
+            # Só o backend usa o servidor, por 127.0.0.1; sem isso ele escuta em todas as interfaces.
+            "--http-ip-address=127.0.0.1",
             f"--http-port={self.port}",
             f"--dir={data_directory}",
         ]
