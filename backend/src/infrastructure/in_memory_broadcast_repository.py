@@ -19,10 +19,13 @@ class InMemoryBroadcastRepository(IBroadcastRepository):
         scheduled = [
             b for b in self._broadcasts.values()
             if b.profile_id == profile_id
-            and b.status in [BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED]
+            and b.status in [BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED]
             and b.scheduled_at is not None
         ]
-        return sorted(scheduled, key=lambda b: b.scheduled_at)
+        return sorted(
+            scheduled,
+            key=lambda b: (0 if b.status == BroadcastStatus.MISFIRED else 1, b.scheduled_at),
+        )
 
     async def list_pending_scheduled(self) -> List[BroadcastMessage]:
         return [

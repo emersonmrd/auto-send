@@ -31,6 +31,11 @@ class FakeDiscoveryGateway(IChatDiscoveryGateway):
             raise self.error
         return CHANNEL
 
+    async def ensure_bot_can_post(self, bot_token, chat_id):
+        self.calls.append(("ensure_bot_can_post", bot_token, chat_id))
+        if self.error:
+            raise self.error
+
 
 @pytest.fixture
 async def repos():

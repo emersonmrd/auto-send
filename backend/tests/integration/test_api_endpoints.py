@@ -19,7 +19,11 @@ def future_at(day: int, time: str) -> str:
     return f"{(_FUTURE_BASE + _timedelta(days=day)).isoformat()}T{time}Z"
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_db():
+async def setup_db(monkeypatch):
+    async def _default_can_post(bot_token: str, chat_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(telegram_gateway, "ensure_bot_can_post", _default_can_post)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
@@ -1251,10 +1255,12 @@ def test_cors_configuration_does_not_mix_wildcard_with_credentials():
 
 
 async def test_health_check_endpoint(client):
-    """Verifica se o endpoint de health check /api/v1/health retorna status 200 e json saudável."""
+    """Verifica se o endpoint de health check /api/v1/health retorna status 200 e json saudável com app e version (#29)."""
+    from src.presentation.main import app
+
     resp = await client.get("/api/v1/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "healthy"}
+    assert resp.json() == {"status": "healthy", "app": "auto-send", "version": app.version}
 
 
 async def test_static_files_serving_and_api_route_precedence(tmp_path):
@@ -1285,7 +1291,7 @@ async def test_static_files_serving_and_api_route_precedence(tmp_path):
             # 2. GET /api/v1/health deve manter precedência e retornar JSON
             health_resp = await ac.get("/api/v1/health")
             assert health_resp.status_code == 200
-            assert health_resp.json() == {"status": "healthy"}
+            assert health_resp.json() == {"status": "healthy", "app": "auto-send", "version": app.version}
 
             # 3. GET /api/v1/profiles deve manter precedência
             profiles_resp = await ac.get("/api/v1/profiles")
@@ -1455,3 +1461,806 @@ def test_invalid_media_upload_limit_env_falls_back_to_the_default(monkeypatch, v
     monkeypatch.setenv("MAX_MEDIA_UPLOAD_MB", value)
 
     assert media_upload_limit_bytes() == 50 * 1024 * 1024
+
+
+# Issue #1: Agendamentos MISFIRED (Enviar agora, Reagendar via PATCH, Descartar via cancel)
+@pytest.mark.asyncio
+async def test_misfired_broadcast_appears_first_in_queue_and_supports_dispatch_now_reschedule_and_discard(
+    client, monkeypatch, tmp_path
+):
+    from datetime import datetime, timedelta, timezone
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    sent = await _profile_for_upload(monkeypatch, "profile-misfire-actions")
+    now = datetime.now(timezone.utc)
+
+    media_1 = tmp_path / "misfired_dispatch.mp4"
+    media_1.write_bytes(b"video-1")
+    thumb_1 = tmp_path / "misfired_dispatch_thumb.jpg"
+    thumb_1.write_bytes(b"thumb-1")
+
+    media_2 = tmp_path / "misfired_discard.mp4"
+    media_2.write_bytes(b"video-2")
+    thumb_2 = tmp_path / "misfired_discard_thumb.jpg"
+    thumb_2.write_bytes(b"thumb-2")
+
+    b_scheduled = BroadcastMessage(
+        id="b-sched-future",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Futuro normal",
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=now + timedelta(hours=1),
+    )
+    b_misfired_send = BroadcastMessage(
+        id="b-misfired-send",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Expirado enviar agora",
+        media=MediaAttachment(
+            file_path=str(media_1),
+            media_type=MediaType.VIDEO,
+            file_size=7,
+            thumbnail_path=str(thumb_1),
+        ),
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now - timedelta(hours=2),
+    )
+    b_misfired_resched = BroadcastMessage(
+        id="b-misfired-resched",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Expirado reagendar",
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now - timedelta(hours=1),
+    )
+    b_misfired_discard = BroadcastMessage(
+        id="b-misfired-discard",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Expirado descartar",
+        media=MediaAttachment(
+            file_path=str(media_2),
+            media_type=MediaType.VIDEO,
+            file_size=7,
+            thumbnail_path=str(thumb_2),
+        ),
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now - timedelta(minutes=45),
+    )
+
+    for b in (b_scheduled, b_misfired_send, b_misfired_resched, b_misfired_discard):
+        await broadcast_repo.save(b)
+
+    # 1. Na listagem da fila, os MISFIRED vêm antes dos SCHEDULED
+    queue_resp = await client.get("/api/v1/profiles/profile-misfire-actions/scheduled-broadcasts")
+    assert queue_resp.status_code == 200
+    ids = [item["id"] for item in queue_resp.json()]
+    assert ids == ["b-misfired-send", "b-misfired-resched", "b-misfired-discard", "b-sched-future"]
+
+    # 2. Enviar agora (dispatch-now): envia para o canal, muda para COMPLETED e apaga mídia + capa
+    dispatch_resp = await client.post("/api/v1/broadcasts/b-misfired-send/dispatch-now")
+    assert dispatch_resp.status_code == 200
+    assert dispatch_resp.json()["status"] == "COMPLETED"
+    assert dispatch_resp.json()["dispatched_count"] == 1
+    assert len(sent) == 1
+    assert not media_1.exists()
+    assert not thumb_1.exists()
+
+    # Tentar dispatch-now de novo em um broadcast já COMPLETED deve retornar 422
+    dup_resp = await client.post("/api/v1/broadcasts/b-misfired-send/dispatch-now")
+    assert dup_resp.status_code == 422
+
+    # 3. Reagendar via PATCH: aceita MISFIRED e volta para SCHEDULED
+    new_future = (now + timedelta(hours=3)).isoformat()
+    patch_resp = await client.patch(
+        "/api/v1/broadcasts/b-misfired-resched",
+        json={"text": "Expirado reagendado", "scheduled_at": new_future},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["status"] == "SCHEDULED"
+    assert patch_resp.json()["text"] == "Expirado reagendado"
+
+    # 4. Descartar via DELETE /cancel: muda para CANCELLED e apaga mídia + capa
+    cancel_resp = await client.delete("/api/v1/broadcasts/b-misfired-discard/cancel")
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "CANCELLED"
+    assert not media_2.exists()
+    assert not thumb_2.exists()
+
+
+# Issue #28: Exclusões e edições de canal/perfil não deixam agendamentos órfãos
+@pytest.mark.asyncio
+async def test_channel_delete_and_edit_update_pending_broadcasts_and_block_on_dispatching(
+    client, monkeypatch, tmp_path
+):
+    from datetime import datetime, timedelta, timezone
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+    from src.presentation.main import scheduler_service
+
+    await _profile_for_upload(monkeypatch, "p-orphan-28")
+    now = datetime.now(timezone.utc)
+
+    chan_a = Channel(id="chan-a", profile_id="p-orphan-28", title="Canal A", chat_id="-1001111111111")
+    chan_b = Channel(id="chan-b", profile_id="p-orphan-28", title="Canal B", chat_id="-1002222222222")
+    await channel_repo.save(chan_a)
+    await channel_repo.save(chan_b)
+
+    media_only_a = tmp_path / "only_a.mp4"
+    media_only_a.write_bytes(b"video-a")
+
+    # b1: só Canal A -> será cancelado ao excluir Canal A
+    b_only_a = BroadcastMessage(
+        id="b-only-a",
+        profile_id="p-orphan-28",
+        target_channel_ids=["-1001111111111"],
+        text="Só para o Canal A",
+        media=MediaAttachment(file_path=str(media_only_a), media_type=MediaType.VIDEO, file_size=7),
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=now + timedelta(hours=1),
+    )
+    # b2: Canal A e Canal B -> perde o Canal A e continua só com o Canal B
+    b_a_and_b = BroadcastMessage(
+        id="b-a-and-b",
+        profile_id="p-orphan-28",
+        target_channel_ids=["-1001111111111", "-1002222222222"],
+        text="Para A e B",
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=now + timedelta(hours=2),
+    )
+    # b3: histórico COMPLETED -> não muda
+    b_history = BroadcastMessage(
+        id="b-history",
+        profile_id="p-orphan-28",
+        target_channel_ids=["-1001111111111"],
+        text="Já enviado",
+        status=BroadcastStatus.COMPLETED,
+    )
+    for b in (b_only_a, b_a_and_b, b_history):
+        await broadcast_repo.save(b)
+
+    scheduler_service.start()
+    try:
+        scheduler_service.schedule_broadcast("b-only-a", b_only_a.scheduled_at)
+        assert scheduler_service.scheduler.get_job("broadcast_b-only-a") is not None
+
+        # 1. Consulta agendamentos afetados para o modal de exclusão do Canal A
+        aff_resp = await client.get("/api/v1/channels/chan-a/affected-broadcasts")
+        assert aff_resp.status_code == 200
+        aff_data = aff_resp.json()
+        assert [i["id"] for i in aff_data["will_be_cancelled"]] == ["b-only-a"]
+        assert [i["id"] for i in aff_data["will_lose_target"]] == ["b-a-and-b"]
+
+        # 2. Se houver envio DISPATCHING para o Canal A, excluir ou trocar ID é bloqueado com 422
+        b_disp = BroadcastMessage(
+            id="b-disp-a",
+            profile_id="p-orphan-28",
+            target_channel_ids=["-1001111111111"],
+            text="Enviando agora",
+            status=BroadcastStatus.DISPATCHING,
+        )
+        await broadcast_repo.save(b_disp)
+
+        del_blocked = await client.delete("/api/v1/channels/chan-a")
+        assert del_blocked.status_code == 422
+        assert del_blocked.json() == {
+            "detail": "There is a broadcast currently dispatching. Wait for it to finish and try again."
+        }
+        put_blocked = await client.put(
+            "/api/v1/channels/chan-a",
+            json={"name": "Canal A", "telegram_channel_id": "-1003333333333"},
+        )
+        assert put_blocked.status_code == 422
+        prof_blocked = await client.delete("/api/v1/profiles/p-orphan-28")
+        assert prof_blocked.status_code == 422
+
+        # Finaliza o envio em andamento
+        b_disp.finish_dispatch(delivered=1, total=1)
+        await broadcast_repo.save(b_disp)
+
+        # 3. Confirma exclusão do Canal A: b-only-a é cancelado (job removido, mídia apagada) e b-a-and-b fica só com B
+        del_ok = await client.delete("/api/v1/channels/chan-a")
+        assert del_ok.status_code == 200
+        assert (await broadcast_repo.get_by_id("b-only-a")).status is BroadcastStatus.CANCELLED
+        assert scheduler_service.scheduler.get_job("broadcast_b-only-a") is None
+        assert not media_only_a.exists()
+
+        updated_ab = await broadcast_repo.get_by_id("b-a-and-b")
+        assert updated_ab.status is BroadcastStatus.SCHEDULED
+        assert updated_ab.target_channel_ids == ["-1002222222222"]
+
+        # Histórico continua intacto
+        assert (await broadcast_repo.get_by_id("b-history")).target_channel_ids == ["-1001111111111"]
+
+        # 4. Trocar o ID do Canal B atualiza os agendamentos pendentes para o ID novo
+        put_b = await client.put(
+            "/api/v1/channels/chan-b",
+            json={"name": "Canal B Novo", "telegram_channel_id": "-1005555555555"},
+        )
+        assert put_b.status_code == 200
+        assert (await broadcast_repo.get_by_id("b-a-and-b")).target_channel_ids == ["-1005555555555"]
+
+        # 5. Excluir o perfil cancela os agendamentos pendentes restantes e remove jobs/mídia
+        scheduler_service.schedule_broadcast("b-a-and-b", b_a_and_b.scheduled_at)
+        prof_aff = await client.get("/api/v1/profiles/p-orphan-28/affected-broadcasts")
+        assert prof_aff.status_code == 200
+        assert [i["id"] for i in prof_aff.json()["will_be_cancelled"]] == ["b-a-and-b"]
+
+        del_prof = await client.delete("/api/v1/profiles/p-orphan-28")
+        assert del_prof.status_code == 200
+        assert scheduler_service.scheduler.get_job("broadcast_b-a-and-b") is None
+    finally:
+        scheduler_service.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_delivery_results_per_channel_in_immediate_response_and_history(monkeypatch):
+    """
+    Issue #31:
+    - Envio para Canal A e Canal B com o bot sem permissão em B -> PARTIALLY_COMPLETED,
+      A entregue e B com NO_POST_PERMISSION.
+    - Envio antigo sem delivery_results aparece no histórico com delivery_results=[].
+    """
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        DeliveryFailureCategory,
+    )
+    from src.presentation.main import broadcast_repo, profile_repo, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+
+    await profile_repo.save(
+        Profile(
+            id="p-31",
+            name="Acme 31",
+            credentials=BotCredentials(
+                token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz",
+                bot_username="acme31_bot",
+            ),
+        )
+    )
+
+    # Envio antigo sem delivery_results salvo direto no repositório
+    old_broadcast = BroadcastMessage(
+        id="b-old-31",
+        profile_id="p-31",
+        target_channel_ids=["-1001111111111"],
+        text="Envio antigo sem delivery_results",
+        status=BroadcastStatus.COMPLETED,
+    )
+    await broadcast_repo.save(old_broadcast)
+
+    async def fake_send_broadcast(*, bot_token: str, chat_id: str, message, **kwargs) -> bool:
+        if chat_id == "-1001111111111":
+            telegram_gateway.last_error = None
+            telegram_gateway.last_failure_category = None
+            telegram_gateway.last_failure_detail = None
+            return True
+        telegram_gateway.last_error = (
+            "Telegram API error (400): Bad Request: not enough rights to send text messages to the chat"
+        )
+        telegram_gateway.last_failure_category = DeliveryFailureCategory.NO_POST_PERMISSION
+        telegram_gateway.last_failure_detail = (
+            "Bad Request: not enough rights to send text messages to the chat"
+        )
+        return False
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send_broadcast)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-31",
+                "target_channel_ids": json.dumps(["-1001111111111", "-1002222222222"]),
+                "text": "Disparo para A e B",
+            },
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["status"] == "PARTIALLY_COMPLETED"
+        assert body["dispatched_count"] == 1
+        assert body["delivery_results"] == [
+            {
+                "chat_id": "-1001111111111",
+                "delivered": True,
+                "failure_category": None,
+                "detail": None,
+            },
+            {
+                "chat_id": "-1002222222222",
+                "delivered": False,
+                "failure_category": "NO_POST_PERMISSION",
+                "detail": "Bad Request: not enough rights to send text messages to the chat",
+            },
+        ]
+
+        hist_resp = await client.get("/api/v1/profiles/p-31/broadcasts")
+        assert hist_resp.status_code == 200
+        hist = hist_resp.json()
+        by_id = {item["id"]: item for item in hist}
+        assert by_id[body["broadcast_id"]]["delivery_results"] == body["delivery_results"]
+        assert by_id["b-old-31"]["delivery_results"] == []
+
+
+@pytest.mark.asyncio
+async def test_broadcast_escapes_plain_symbols_and_rejects_unsupported_html_or_http_links_with_422(monkeypatch):
+    """
+    Issue #16:
+    - Texto com <, > ou & é escapado antes de chegar ao Telegram.
+    - Texto com tag não suportada (<script>) ou link http:// enviado direto à API (POST ou PATCH) retorna 422.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import profile_repo, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+
+    await profile_repo.save(
+        Profile(
+            id="p-16",
+            name="Acme 16",
+            credentials=BotCredentials(
+                token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz",
+                bot_username="acme16_bot",
+            ),
+        )
+    )
+
+    dispatched_texts: list[str] = []
+
+    async def fake_send_broadcast(*, bot_token: str, chat_id: str, message, **kwargs) -> bool:
+        dispatched_texts.append(message.text)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send_broadcast)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        # 1. Símbolos <, > e & escapados no envio imediato
+        ok_resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-16",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": '2 < 3 & Tom & Jerry > 1 com <a href="https://example.com/p?x=1&y=2">link</a>',
+            },
+        )
+        assert ok_resp.status_code == 201
+        assert dispatched_texts == [
+            '2 &lt; 3 &amp; Tom &amp; Jerry &gt; 1 com <a href="https://example.com/p?x=1&amp;y=2">link</a>'
+        ]
+
+        # 2. Tag não suportada e link http:// recusados com 422 no POST
+        for invalid_text in (
+            "<script>alert(1)</script>",
+            '<a href="http://example.com">link</a>',
+            "<b>sem fechar",
+        ):
+            bad_post = await client.post(
+                "/api/v1/broadcasts",
+                data={
+                    "profile_id": "p-16",
+                    "target_channel_ids": json.dumps(["-1001111111111"]),
+                    "text": invalid_text,
+                },
+            )
+            assert bad_post.status_code == 422
+
+        # 3. Também no PATCH de agendamento
+        future_iso = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        sched_resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-16",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": "<b>Original</b>",
+                "scheduled_at": future_iso,
+            },
+        )
+        assert sched_resp.status_code == 201
+        broadcast_id = sched_resp.json()["broadcast_id"]
+
+        bad_patch = await client.patch(
+            f"/api/v1/broadcasts/{broadcast_id}",
+            json={"text": '<a href="http://example.com">inseguro</a>'},
+        )
+        assert bad_patch.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_broadcast_edit_lock_workflow_routes_and_scheduler_suppression(monkeypatch, tmp_path):
+    """
+    Issue #15:
+    - POST /api/v1/broadcasts/{id}/edit-lock trava o agendamento;
+    - O job do scheduler no horário NÃO posta enquanto a trava estiver ativa;
+    - Com a trava expirada depois do horário, vira CANCELLED, remove job e apaga mídia;
+    - PATCH atualiza target_channel_ids e texto sem duplicar, liberando a trava;
+    - DELETE /api/v1/broadcasts/{id}/edit-lock antes do horário libera a trava sem cancelar;
+    - DELETE /api/v1/broadcasts/{id}/edit-lock depois do horário cancela o agendamento.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import broadcast_repo, profile_repo, scheduler_service, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+
+    await profile_repo.save(
+        Profile(
+            id="p-15",
+            name="Acme 15",
+            credentials=BotCredentials(
+                token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz",
+                bot_username="acme15_bot",
+            ),
+        )
+    )
+
+    dispatched: list[str] = []
+
+    async def fake_send_broadcast(*, bot_token: str, chat_id: str, message, **kwargs) -> bool:
+        dispatched.append(chat_id)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send_broadcast)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        # 1. Cria agendamento futuro dentro da janela da trava (90s)
+        sched_time = datetime.now(timezone.utc) + timedelta(seconds=30)
+        resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-15",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": "Agendamento original",
+                "scheduled_at": sched_time.isoformat(),
+            },
+        )
+        assert resp.status_code == 201
+        b_id = resp.json()["broadcast_id"]
+
+        # 2. Adquire a trava de edição (POST /edit-lock com TTL de 90s)
+        lock_resp = await client.post(f"/api/v1/broadcasts/{b_id}/edit-lock")
+        assert lock_resp.status_code == 200
+        lock_data = lock_resp.json()
+        assert lock_data["id"] == b_id
+        assert lock_data["edit_locked_until"] is not None
+        assert lock_data["cancelled"] is False
+
+        # 3. No horário (30s depois, ainda dentro dos 90s da trava), o scheduler NÃO posta
+        clock_at_schedule = sched_time + timedelta(seconds=1)
+        monkeypatch.setattr(scheduler_service, "_clock", lambda: clock_at_schedule)
+        await scheduler_service.execute_scheduled_broadcast(b_id)
+        assert dispatched == []
+        b_locked = await broadcast_repo.get_by_id(b_id)
+        assert b_locked.status.value == "SCHEDULED"
+
+        # 4. PATCH atualiza texto e target_channel_ids (salva o mesmo item sem duplicar)
+        new_future = datetime.now(timezone.utc) + timedelta(hours=1)
+        patch_resp = await client.patch(
+            f"/api/v1/broadcasts/{b_id}",
+            json={
+                "text": "Texto atualizado via PATCH",
+                "scheduled_at": new_future.isoformat(),
+                "target_channel_ids": ["-1002222222222", "-1003333333333"],
+            },
+        )
+        assert patch_resp.status_code == 200
+        b_patched = await broadcast_repo.get_by_id(b_id)
+        assert b_patched.text == "Texto atualizado via PATCH"
+        assert b_patched.target_channel_ids == ["-1002222222222", "-1003333333333"]
+        assert b_patched.edit_locked_until is None
+
+        # 5. Sai sem salvar antes do horário: continua igual
+        lock_resp2 = await client.post(f"/api/v1/broadcasts/{b_id}/edit-lock")
+        assert lock_resp2.status_code == 200
+        rel_resp = await client.delete(f"/api/v1/broadcasts/{b_id}/edit-lock")
+        assert rel_resp.status_code == 200
+        assert rel_resp.json()["cancelled"] is False
+        b_rel = await broadcast_repo.get_by_id(b_id)
+        assert b_rel.status.value == "SCHEDULED"
+        assert b_rel.edit_locked_until is None
+
+        # 6. Trava ativa cujo horário já passou: liberar ou expirar cancela
+        past_sched = datetime.now(timezone.utc) + timedelta(minutes=5)
+        resp_past = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-15",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": "Agendamento para expirar em edicao",
+                "scheduled_at": past_sched.isoformat(),
+            },
+        )
+        assert resp_past.status_code == 201
+        b_past_id = resp_past.json()["broadcast_id"]
+
+        await client.post(f"/api/v1/broadcasts/{b_past_id}/edit-lock")
+        # Simula tempo após past_sched
+        monkeypatch.setattr(scheduler_service, "_clock", lambda: past_sched + timedelta(minutes=2))
+        rel_past = await client.delete(f"/api/v1/broadcasts/{b_past_id}/edit-lock")
+        assert rel_past.status_code == 200
+        assert rel_past.json()["cancelled"] is True
+        b_cancelled = await broadcast_repo.get_by_id(b_past_id)
+        assert b_cancelled.status.value == "CANCELLED"
+
+
+@pytest.mark.asyncio
+async def test_broadcast_media_get_preview_and_security(client, tmp_path):
+    import os
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import app, profile_repo, broadcast_repo, TEMP_MEDIA_DIR
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    p = Profile(id="p-media-get", name="P Media", credentials=BotCredentials(token="123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", bot_username="p_media_bot"))
+    await profile_repo.save(p)
+
+    # Cria arquivo real em TEMP_MEDIA_DIR
+    img_filename = f"{uuid.uuid4()}.jpg"
+    img_path = os.path.join(TEMP_MEDIA_DIR, img_filename)
+    with open(img_path, "wb") as f:
+        f.write(b"\xff\xd8\xff\xe0" + b"A" * 64)
+
+    sched_dt = datetime.now(timezone.utc) + timedelta(hours=2)
+    b_with_media = BroadcastMessage(
+        id="b-with-media",
+        profile_id="p-media-get",
+        target_channel_ids=["-1001234567890"],
+        text="Com imagem",
+        media=MediaAttachment(
+            file_path=img_path,
+            media_type=MediaType.PHOTO,
+            file_size=68,
+        ),
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    b_without_media = BroadcastMessage(
+        id="b-without-media",
+        profile_id="p-media-get",
+        target_channel_ids=["-1001234567890"],
+        text="Sem imagem",
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    await broadcast_repo.save(b_with_media)
+    await broadcast_repo.save(b_without_media)
+
+    try:
+        # 1. Sucesso: busca mídia para preview
+        resp = await client.get("/api/v1/broadcasts/b-with-media/media")
+        assert resp.status_code == 200
+        assert resp.headers["content-disposition"] == "inline"
+        assert resp.headers["content-type"].startswith("image/jpeg")
+        assert len(resp.content) == 68
+
+        # 2. 404 quando broadcast não existe
+        resp404_b = await client.get("/api/v1/broadcasts/non-existent/media")
+        assert resp404_b.status_code == 404
+        assert resp404_b.json()["detail"] == "Broadcast not found"
+
+        # 3. 404 quando broadcast não possui mídia
+        resp404_m = await client.get("/api/v1/broadcasts/b-without-media/media")
+        assert resp404_m.status_code == 404
+        assert resp404_m.json()["detail"] == "Media not found"
+
+        # 4. 404 quando o arquivo físico foi removido do disco
+        os.remove(img_path)
+        resp404_f = await client.get("/api/v1/broadcasts/b-with-media/media")
+        assert resp404_f.status_code == 404
+        assert resp404_f.json()["detail"] == "Media not found"
+
+        # 5. Segurança Anti-Path-Traversal (§9): arquivo fora de TEMP_MEDIA_DIR
+        outside_file = tmp_path / "outside.jpg"
+        outside_file.write_bytes(b"\xff\xd8\xff\xe0" + b"outside")
+        b_traversal = BroadcastMessage(
+            id="b-traversal",
+            profile_id="p-media-get",
+            target_channel_ids=["-1001234567890"],
+            text="Traversal",
+            media=MediaAttachment(
+                file_path=str(outside_file),
+                media_type=MediaType.PHOTO,
+                file_size=11,
+            ),
+            scheduled_at=sched_dt,
+            status=BroadcastStatus.SCHEDULED,
+        )
+        await broadcast_repo.save(b_traversal)
+        resp_trav = await client.get("/api/v1/broadcasts/b-traversal/media")
+        assert resp_trav.status_code == 404
+    finally:
+        if os.path.exists(img_path):
+            os.remove(img_path)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_media_put_replace_and_delete_workflow(client, tmp_path):
+    import io
+    import os
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import app, profile_repo, broadcast_repo, TEMP_MEDIA_DIR
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    p = Profile(id="p-media-ops", name="P Media Ops", credentials=BotCredentials(token="123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", bot_username="p_media_ops_bot"))
+    await profile_repo.save(p)
+
+    sched_dt = datetime.now(timezone.utc) + timedelta(hours=2)
+    b = BroadcastMessage(
+        id="b-media-ops",
+        profile_id="p-media-ops",
+        target_channel_ids=["-1001234567890"],
+        text="Mensagem para trocar midia",
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    await broadcast_repo.save(b)
+
+    # 1. Adicionar imagem via PUT
+    img_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"X" * 100
+    put_resp1 = await client.put(
+        "/api/v1/broadcasts/b-media-ops/media",
+        files={"media_file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert put_resp1.status_code == 200
+    data1 = put_resp1.json()
+    assert data1["media"] is not None
+    assert data1["media"]["media_type"] == "PHOTO"
+    assert "file_path" not in data1["media"]  # Não vaza caminho interno (§9, #18)
+
+    b_db1 = await broadcast_repo.get_by_id("b-media-ops")
+    assert b_db1.media is not None
+    assert b_db1.media.media_type == MediaType.PHOTO
+    first_file_path = b_db1.media.file_path
+    assert os.path.exists(first_file_path)
+
+    # 2. Trocar imagem por vídeo via PUT: verifica que arquivo antigo é deletado (Zero Clutter Policy §6)
+    # Assinatura ftyp para vídeo mp4
+    vid_header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00"
+    vid_bytes = vid_header + b"V" * 200
+    put_resp2 = await client.put(
+        "/api/v1/broadcasts/b-media-ops/media",
+        files={"media_file": ("video.mp4", io.BytesIO(vid_bytes), "video/mp4")},
+        data={"video_duration": 12, "video_width": 1280, "video_height": 720},
+    )
+    assert put_resp2.status_code == 200
+    data2 = put_resp2.json()
+    assert data2["media"]["media_type"] == "VIDEO"
+
+    b_db2 = await broadcast_repo.get_by_id("b-media-ops")
+    assert b_db2.media.media_type == MediaType.VIDEO
+    second_file_path = b_db2.media.file_path
+    assert os.path.exists(second_file_path)
+    assert not os.path.exists(first_file_path)  # Arquivo antigo foi apagado!
+
+    # 3. Remover mídia via DELETE
+    del_resp = await client.delete("/api/v1/broadcasts/b-media-ops/media")
+    assert del_resp.status_code == 200
+    data_del = del_resp.json()
+    assert data_del["media"] is None
+
+    b_db3 = await broadcast_repo.get_by_id("b-media-ops")
+    assert b_db3.media is None
+    assert not os.path.exists(second_file_path)  # Arquivo de vídeo também foi apagado!
+
+    # 4. Segundo DELETE retorna 404 (já removida)
+    del_resp2 = await client.delete("/api/v1/broadcasts/b-media-ops/media")
+    assert del_resp2.status_code == 404
+    assert del_resp2.json()["detail"] == "Media not found"
+
+    # 5. Não permite editar mídia de broadcast em estado terminal (ex: COMPLETED)
+    b_db3.status = BroadcastStatus.COMPLETED
+    await broadcast_repo.save(b_db3)
+    put_term = await client.put(
+        "/api/v1/broadcasts/b-media-ops/media",
+        files={"media_file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert put_term.status_code == 422
+    del_term = await client.delete("/api/v1/broadcasts/b-media-ops/media")
+    assert del_term.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_broadcast_media_replaced_dispatches_with_correct_gateway_endpoint(client, monkeypatch):
+    import io
+    import os
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import app, profile_repo, broadcast_repo, scheduler_service, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    p = Profile(
+        id="p-dispatch-check",
+        name="P Dispatch",
+        credentials=BotCredentials(token="123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", bot_username="p_dispatch_bot"),
+    )
+    await profile_repo.save(p)
+
+    now_utc = datetime.now(timezone.utc)
+    sched_dt = now_utc - timedelta(seconds=10)
+    b = BroadcastMessage(
+        id="b-dispatch-check",
+        profile_id="p-dispatch-check",
+        target_channel_ids=["-1001234567890"],
+        text="Legenda curta para video",
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    await broadcast_repo.save(b)
+
+    # 1. Adiciona foto
+    img_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"X" * 100
+    put_img = await client.put(
+        "/api/v1/broadcasts/b-dispatch-check/media",
+        files={"media_file": ("foto.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert put_img.status_code == 200
+
+    # 2. Troca foto por vídeo
+    vid_header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00"
+    vid_bytes = vid_header + b"V" * 200
+    put_vid = await client.put(
+        "/api/v1/broadcasts/b-dispatch-check/media",
+        files={"media_file": ("video.mp4", io.BytesIO(vid_bytes), "video/mp4")},
+        data={"video_duration": 10, "video_width": 1920, "video_height": 1080},
+    )
+    assert put_vid.status_code == 200
+    assert put_vid.json()["media"]["media_type"] == "VIDEO"
+
+    # 3. Intercepta envio no telegram_gateway para validar que recebe o vídeo e não a foto
+    sent_messages = []
+
+    async def mock_send_broadcast(bot_token, chat_id, message, **kwargs):
+        sent_messages.append((bot_token, chat_id, message))
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", mock_send_broadcast)
+
+    # Executa o disparo agendado
+    await scheduler_service.execute_scheduled_broadcast("b-dispatch-check")
+
+    assert len(sent_messages) == 1
+    _, chat_id, dispatched_msg = sent_messages[0]
+    assert chat_id == "-1001234567890"
+    assert dispatched_msg.media is not None
+    assert dispatched_msg.media.media_type == MediaType.VIDEO
+    assert dispatched_msg.get_dispatch_strategy().value == "SINGLE_MEDIA_WITH_CAPTION"
+
+    # Confirma que após a execução, a mídia temporária foi limpa do disco
+    assert not os.path.exists(dispatched_msg.media.file_path)
+
+
+

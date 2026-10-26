@@ -166,6 +166,14 @@ Check 'frontend exportado nao fixa a porta 8000' {
 $blocker = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 8000)
 $blocker.Start()
 
+# Issue #24: simula um banco da v0.4.0 em data\autosend.db e confere que o launcher o importa para
+# %LOCALAPPDATA%\Auto-Send\autosend.db sem apagar o original.
+$localAppData = Join-Path $WorkDir 'localappdata'
+New-Item -ItemType Directory -Path $localAppData -Force | Out-Null
+$env:LOCALAPPDATA = $localAppData
+$legacyDb = Join-Path $root 'data\autosend.db'
+& $pythonExe -c "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute('CREATE TABLE profiles (id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, bot_token VARCHAR NOT NULL, bot_username VARCHAR NOT NULL)'); c.execute('INSERT INTO profiles VALUES (\x27p-v040\x27, \x27Acme\x27, \x27123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef\x27, \x27acme_bot\x27)'); c.commit(); c.close()" $legacyDb
+
 # O launcher termina com "pause": a entrada vem de NUL para ele nao ficar esperando tecla.
 $log = Join-Path $WorkDir 'launcher.log'
 $launcher = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $root -PassThru -WindowStyle Hidden `
@@ -178,7 +186,11 @@ while ((Get-Date) -lt $deadline -and -not $launcher.HasExited) {
     foreach ($port in 8001..8020) {
         try {
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/health" -TimeoutSec 2
-            if ($health.status -eq 'healthy') { $base = "http://127.0.0.1:$port"; $healthy = $true; break }
+            if ($health.status -eq 'healthy' -and $health.app -eq 'auto-send' -and $health.version) {
+                $base = "http://127.0.0.1:$port"
+                $healthy = $true
+                break
+            }
         } catch { }
     }
     if ($healthy) { break }
@@ -220,7 +232,16 @@ if ($healthy) {
     }
     Check 'API lista perfis num banco novo' {
         $profiles = Invoke-RestMethod -Uri "$base/api/v1/profiles" -TimeoutSec 10
-        "($(@($profiles).Count) perfis)"
+        if (@($profiles).Count -lt 1 -or $profiles[0].name -ne 'Acme') {
+            throw "perfil da v0.4.0 nao foi importado: $($profiles | ConvertTo-Json -Compress)"
+        }
+        if (-not (Test-Path (Join-Path $localAppData 'Auto-Send\autosend.db'))) {
+            throw 'autosend.db nao foi criado em LOCALAPPDATA\Auto-Send'
+        }
+        if (-not (Test-Path $legacyDb)) {
+            throw 'data\autosend.db original foi apagado'
+        }
+        "($(@($profiles).Count) perfis; importado para LOCALAPPDATA\Auto-Send)"
     }
 }
 
@@ -228,6 +249,37 @@ $blocker.Stop()
 
 # O launcher pode ja ter terminado (ex.: sem Python); um taskkill sem alvo nao e falha do teste.
 if (-not $launcher.HasExited) { cmd.exe /c "taskkill /PID $($launcher.Id) /T /F >NUL 2>&1" }
+
+# Issue #29: segunda inicializacao com o Auto-Send ja aberto na porta 8000 nao sobe outra instancia.
+$logPrimary = Join-Path $WorkDir 'launcher-primary.log'
+$primary = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+    -ArgumentList '/c', "Iniciar-AutoSend.bat < NUL > `"$logPrimary`" 2>&1"
+try {
+    $primaryReady = $false
+    $deadline2 = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline2 -and -not $primary.HasExited) {
+        try {
+            $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/v1/health' -TimeoutSec 2
+            if ($h.status -eq 'healthy' -and $h.app -eq 'auto-send') { $primaryReady = $true; break }
+        } catch { }
+        Start-Sleep -Seconds 1
+    }
+    Check 'segunda inicializacao com o app ja aberto na 8000 nao sobe outra instancia' {
+        if (-not $primaryReady) { throw 'primeira instancia nao subiu na porta 8000' }
+        $logSecond = Join-Path $WorkDir 'launcher-second.log'
+        $second = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+            -ArgumentList '/c', "Iniciar-AutoSend.bat < NUL > `"$logSecond`" 2>&1"
+        if (-not $second.WaitForExit(30000)) {
+            cmd.exe /c "taskkill /PID $($second.Id) /T /F >NUL 2>&1"
+            throw 'segunda instancia ficou presa em vez de reutilizar a aberta'
+        }
+        $outSecond = Get-Content $logSecond -Raw
+        if ($outSecond -notmatch '127\.0\.0\.1:8000') { throw "saida inesperada:`n$outSecond" }
+        '(reutilizou http://127.0.0.1:8000)'
+    }
+} finally {
+    if (-not $primary.HasExited) { cmd.exe /c "taskkill /PID $($primary.Id) /T /F >NUL 2>&1" }
+}
 
 if ($failures.Count -gt 0) {
     Write-Host "`n===== launcher.log ====="

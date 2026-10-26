@@ -12,11 +12,13 @@ logger = logging.getLogger(__name__)
 
 
 def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
-    """Verifica se uma porta de rede já está em uso."""
+    """Verifica se uma porta de rede já está em uso em IPv4 ou IPv6."""
+    clean_host = host.strip("[]")
+    family = socket.AF_INET6 if ":" in clean_host else socket.AF_INET
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        with socket.socket(family, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.5)
-            return sock.connect_ex((host, port)) == 0
+            return sock.connect_ex((clean_host, port)) == 0
     except Exception:
         return False
 
@@ -26,10 +28,12 @@ def find_available_port(
 ) -> Optional[int]:
     """
     Busca a primeira porta TCP livre a partir de start_port até start_port + max_attempts - 1.
+    Em loopback, uma porta só é livre se estiver livre em 127.0.0.1 e em ::1 (#29).
     Retorna a porta encontrada ou None se todas estiverem em uso.
     """
+    hosts = ("127.0.0.1", "::1") if host in ("127.0.0.1", "::1", "[::1]", "localhost") else (host,)
     for port in range(start_port, start_port + max_attempts):
-        if not _is_port_in_use(port, host=host):
+        if not any(_is_port_in_use(port, host=h) for h in hosts):
             return port
     return None
 

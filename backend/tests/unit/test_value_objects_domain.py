@@ -8,6 +8,8 @@ import pytest
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     BroadcastStatus,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     DispatchStrategy,
     InlineButton,
     MediaAttachment,
@@ -41,11 +43,20 @@ def test_enum_values_are_the_persisted_strings():
     assert {m.name: m.value for m in BroadcastStatus} == {
         "PENDING": "PENDING",
         "SCHEDULED": "SCHEDULED",
+        "MISFIRED": "MISFIRED",
         "DISPATCHING": "DISPATCHING",
         "COMPLETED": "COMPLETED",
         "PARTIALLY_COMPLETED": "PARTIALLY_COMPLETED",
         "FAILED": "FAILED",
         "CANCELLED": "CANCELLED",
+    }
+    assert {m.name: m.value for m in DeliveryFailureCategory} == {
+        "BOT_NOT_IN_CHAT": "BOT_NOT_IN_CHAT",
+        "NO_POST_PERMISSION": "NO_POST_PERMISSION",
+        "INVALID_TOKEN": "INVALID_TOKEN",
+        "RATE_LIMITED": "RATE_LIMITED",
+        "TELEGRAM_UNAVAILABLE": "TELEGRAM_UNAVAILABLE",
+        "OTHER": "OTHER",
     }
 
 
@@ -53,6 +64,7 @@ def test_value_objects_are_immutable():
     button = InlineButton(text="Saiba mais", url="https://t.me/+news")
     media = MediaAttachment(file_path="/tmp/v.mp4", media_type=MediaType.VIDEO, file_size=1)
     credentials = BotCredentials(token=VALID_TOKEN, bot_username="acme_bot")
+    delivery_result = ChannelDeliveryResult.success("-1001234567890")
 
     with pytest.raises(FrozenInstanceError):
         button.url = "https://evil.example"
@@ -60,6 +72,8 @@ def test_value_objects_are_immutable():
         media.file_path = "/etc/passwd"
     with pytest.raises(FrozenInstanceError):
         credentials.token = "leaked"
+    with pytest.raises(FrozenInstanceError):
+        delivery_result.delivered = False
 
 
 def test_media_attachment_metadata_defaults_to_none():
@@ -74,6 +88,7 @@ def test_broadcast_message_defaults():
     assert msg.button is None
     assert msg.status is BroadcastStatus.PENDING
     assert msg.scheduled_at is None
+    assert msg.delivery_results == []
     _assert_recent_utc(msg.created_at)
 
 

@@ -7,12 +7,48 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ### Added
 - Cadastro de canal pelo link de um post ou pelo ID: o campo da busca de canais aceita, além de `@username`/`t.me/username`, o link copiado de um post (`https://t.me/c/<id>/<post>`, convertido para `-100<id>`), o link de post de canal público (`t.me/<username>/<post>`) e o ID `-100…`. Serve para canal privado em que ninguém postou nas últimas 24 h e para bot ligado a outro sistema por webhook (#12).
+- Persistência do banco de dados entre atualizações e migrações numeradas com backup (#24):
+  - No pacote portátil para Windows, os dados (`autosend.db`, `media_temp/` e `telegram_bot_api/`) ficam em `%LOCALAPPDATA%\Auto-Send\`, preservando perfis, canais e agendamentos quando o usuário extrai uma versão nova em outra pasta.
+  - Na primeira inicialização sem banco em `%LOCALAPPDATA%\Auto-Send\`, o app procura `data\autosend.db` da `v0.4.0` na própria pasta da release, na pasta pai e em Downloads, Área de Trabalho e Documentos, oferecendo importar sem apagar o arquivo original.
+  - Migrações numeradas em `PRAGMA user_version` (em transação e idempotentes) com backup automático `autosend.db.bak-<versão anterior>` antes de cada migração, mantendo os 3 backups mais recentes; se uma migração falhar, o banco permanece na versão anterior e o app avisa sem abrir.
+  - Botão "Abrir pasta de dados" na barra lateral (`POST /api/v1/system/open-data-dir`).
+- Janela de tolerância de agendamento (`SCHEDULE_MISFIRE_GRACE_MINUTES`, padrão: 30 minutos) e status `MISFIRED` (#1):
+  - Agendamentos vencidos dentro da janela disparam normalmente; acima da janela (no startup ou após suspensão do PC), vão para `MISFIRED` em vez de serem enviados fora de hora.
+  - O arquivo temporário de mídia é mantido enquanto o agendamento estiver `MISFIRED`, sendo apagado ao enviar ou descartar.
+  - Na interface, um banner não bloqueante avisa sobre agendamentos expirados e a fila exibe os itens `MISFIRED` no topo com o selo "Expirado" e as ações **Enviar agora** (`POST /api/v1/broadcasts/{broadcast_id}/dispatch-now`), **Reagendar** (`PATCH /api/v1/broadcasts/{broadcast_id}`) e **Descartar** (`DELETE /api/v1/broadcasts/{broadcast_id}/cancel`).
+- Verificação de permissão de administrador no cadastro e na edição de canal (#2):
+  - `POST /api/v1/profiles/{profile_id}/channels` e `PUT /api/v1/channels/{channel_id}` (quando o `chat_id` muda) consultam `getMe` + `getChatMember` no Telegram para confirmar que o bot do perfil é administrador com permissão de publicar (`can_post_messages`).
+  - Se o bot não estiver no canal ou não puder publicar, responde `400 {"detail": "Bot is not administrator in the channel"}`; se o Telegram estiver inacessível (rede, timeout, 429, 5xx ou circuito aberto), responde `503 {"detail": "Could not reach Telegram, try again"}` sem gravar o canal.
+- Prevenção de agendamentos órfãos ao excluir ou editar canais e perfis (#28):
+  - Novas rotas `GET /api/v1/channels/{channel_id}/affected-broadcasts` e `GET /api/v1/profiles/{profile_id}/affected-broadcasts` listam para os modais os agendamentos que serão cancelados e os que apenas perderão o destino (ou terão o destino atualizado).
+  - `DELETE /api/v1/channels/{channel_id}` remove o canal de `target_channel_ids` nos agendamentos pendentes e cancela (removendo o job e apagando a mídia) os que ficarem sem canal; `PUT /api/v1/channels/{channel_id}` atualiza o `chat_id` nos agendamentos pendentes; `DELETE /api/v1/profiles/{profile_id}` cancela os agendamentos pendentes e limpa os recursos antes de remover o perfil.
+  - Se houver envio `DISPATCHING` para o canal ou perfil, a exclusão ou troca de ID é recusada com `422`.
+- Resultado e motivo de falha por canal nos envios e no histórico (#31):
+  - `POST /api/v1/broadcasts` (envio imediato), `POST /api/v1/broadcasts/{broadcast_id}/dispatch-now` e `GET /api/v1/profiles/{profile_id}/broadcasts` passam a incluir `delivery_results` (`chat_id`, `delivered`, `failure_category`, `detail`).
+  - O gateway classifica as recusas do Telegram nas categorias do domínio (`BOT_NOT_IN_CHAT`, `NO_POST_PERMISSION`, `INVALID_TOKEN`, `RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `OTHER`) sem nunca expor o token do bot, e a tela mostra o resultado e o motivo em português por canal.
+  - Migração #4 adiciona a coluna `delivery_results` na tabela `broadcasts`.
+- Edição de agendamentos diretamente no compositor com trava de edição temporária (#15):
+  - Na fila de agendamentos, a ação "Carregar no Editor" adquire uma trava temporária de 90 segundos (`POST /api/v1/broadcasts/{id}/edit-lock`, renovada a cada 30 s), carrega texto, canais de destino, data e botões inline no compositor principal e exibe aviso de modo de edição com botão para sair (`DELETE /api/v1/broadcasts/{id}/edit-lock`).
+  - Ao clicar em "Agendar", salva no mesmo registro via `PATCH /api/v1/broadcasts/{id}` (com atualização de canais e liberação do lock) sem duplicar o agendamento na fila.
+  - O agendador e reconciliador suspendem o disparo enquanto a trava estiver ativa; se o horário agendado for ultrapassado durante a edição, o lock expirado cancela o agendamento de forma limpa.
+  - Migração #5 adiciona a coluna `edit_locked_until` na tabela `broadcasts`.
+- Mídia do agendamento no modo de edição do compositor (#18):
+  - Ao carregar um agendamento com mídia para edição, o preview exibe a foto ou o vídeo atual diretamente pela nova rota `GET /api/v1/broadcasts/{broadcast_id}/media` (streaming inline com validação contra path traversal e sem expor o caminho interno no servidor).
+  - O compositor exibe uma barra dedicada com o tipo e tamanho da mídia agendada e botão para remover (`DELETE /api/v1/broadcasts/{broadcast_id}/media`, apagando o arquivo físico do disco).
+  - O botão de anexo permite substituir a mídia existente ou adicionar mídia a um agendamento de texto (`PUT /api/v1/broadcasts/{broadcast_id}/media`, com remoção limpa do arquivo anterior se substituído).
+  - O DTO `BroadcastMediaResponse` deixa de expor o campo `file_path`.
+  - No domínio, `BroadcastMessage.replace_media()` e `BroadcastMessage.remove_media()` garantem a integridade do estado e tipos suportados em agendamentos pendentes.
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).
 - `POST /api/v1/profiles/{profile_id}/discover-chats` com webhook ativo no bot responde `400 "Bot webhook is active: automatic discovery is unavailable"`, sem abrir o circuit breaker; a tela explica em português e leva para a entrada manual. O app nunca apaga o webhook (#12).
 - O painel de busca de canais orienta a publicar uma mensagem no canal antes de buscar e, com a lista vazia, aponta o link de um post ou o ID (#12).
 - CI: a mutação do domínio, no PR, muta só os arquivos de domínio alterados (domínio inteiro quando um teste de domínio ou o `pyproject.toml` muda, no PR de release e na `main`), guarda o cache do mutmut entre execuções e publica os sobreviventes no resumo do job. O `verify.sh` aplica a mesma seleção e passa a considerar mudanças não commitadas (#26).
+- Todas as 17 rotas da API declaram `response_model` (Pydantic) e os códigos de erro possíveis no OpenAPI, espelhados em `frontend/src/types/index.ts` e validados por `response_schema_conformance` no Schemathesis, sem alterar os campos já devolvidos (#3).
+- Inicialização do pacote portátil e `/api/v1/health` (#29):
+  - `GET /api/v1/health` passa a devolver `{"status": "healthy", "app": "auto-send", "version": "<versão>"}`.
+  - O launcher abre o navegador em `http://127.0.0.1:<porta>` (em vez de `localhost`), confere portas livres em IPv4 (`127.0.0.1`) e IPv6 (`::1`) e grava o PID ativo em `%LOCALAPPDATA%\Auto-Send\autosend.pid` (removido ao fechar).
+  - Se o Auto-Send da mesma versão já estiver aberto na porta 8000, abre o navegador nele sem subir outra instância; se houver instância de outra versão ou travada, pergunta se deve encerrar apenas o PID da própria trava; se for outro programa, usa a próxima porta livre.
 
 ### Removed
 - Dependências `aiogram` e `aiofiles` do backend, declaradas sem nenhum uso: saem da imagem Docker e do pacote portátil junto com 9 dependências transitivas (`aiohttp` e afins). Um teste reprova dependência de runtime que o `src/` não usa (#4).
@@ -22,6 +58,13 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - A aba do navegador mostra "Auto-Send" em vez de "Create Next App", o título padrão do template do Next.js (#5).
 - Compositor: anexar um arquivo de nome muito longo não empurra mais o campo de mensagem e os botões Enviar/Agendar para fora da tela; o nome aparece truncado, com o nome completo no `title` (#17).
 - Acessibilidade: os campos dos formulários (perfil, canal, botão inline, link de texto, agendamento e edição) têm o rótulo visível associado (`<label htmlFor>`), e o campo de mensagem tem `aria-label`; leitores de tela anunciam o rótulo, não o placeholder (#6).
+- Mensagens de erro em português e separação entre webhook ativo e bot em uso por outro programa (#32):
+  - No `getUpdates` da busca de canais, o `409` por leitura concorrente (`"terminated by other getUpdates request"`) passa a levantar `BotInUseError("Bot is currently in use by another program")` em vez de `WebhookActiveError`, exibindo na tela que o bot está em uso em outro programa.
+  - Catálogo centralizado em `frontend/src/lib/apiError.ts` traduz todos os `detail` da API e listas `422` do Pydantic (`"Campo <campo> inválido"`) para português, remove eventuais tokens de bot e usa mensagem genérica em português com o original entre parênteses quando não houver tradução cadastrada.
+- Editor de mensagem com formatação visual (sem HTML cru) e sanitização de HTML do Telegram (#16):
+  - Novo componente `TelegramRichEditor` usado no compositor e no modal "Editar", exibindo o texto formatado (negrito, itálico, sublinhado, riscado, código, bloco de código, citação, spoiler e link `https://`) sem expor tags `<a href="...">`, com edição/remoção ao clicar em um link existente.
+  - O preview e os cards da fila renderizam todas as formatações do Telegram (incluindo spoiler borrado até clicar, citação com barra lateral e código monoespaçado).
+  - No domínio (`validate_and_escape_telegram_html`), caracteres `<`, `>` e `&` comuns são escapados antes do envio ao Telegram, e tags não suportadas ou links que não sejam `https://` com host público são recusados com `422`.
 
 ### Security
 - `docker-compose.yml`: a API (que não tem autenticação) e a tela passam a ser publicadas só em `127.0.0.1` (`127.0.0.1:8000`, `127.0.0.1:3000`), e o servidor local do Telegram deixa de ser publicado no host: só o backend o usa, pela rede do Compose. Antes, as três portas abriam em todas as interfaces, e numa rede compartilhada ou num VPS qualquer um podia usar a API. Para acessar de outra máquina, ponha um proxy reverso com autenticação na frente (#35).

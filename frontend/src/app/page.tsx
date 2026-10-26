@@ -1,11 +1,26 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Profile, Channel, DiscoveredChat, ScheduledBroadcast } from "@/types";
+import {
+  Profile,
+  Channel,
+  DiscoveredChat,
+  ScheduledBroadcast,
+  AffectedBroadcastItem,
+  AffectedBroadcastsResponse,
+  BroadcastHistoryItem,
+  ChannelDeliveryResult,
+  EditLockResponse,
+} from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
-import { ApiHttpError, extractApiError } from "@/lib/apiError";
+import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
 import ConfirmDialog, { ConfirmDialogProps } from "@/components/ConfirmDialog";
+import {
+  TelegramRichEditor,
+  TelegramRichEditorHandle,
+  renderTelegramHtmlPreview,
+} from "@/components/TelegramRichEditor";
 
 type PendingConfirm = Omit<ConfirmDialogProps, "onCancel">;
 
@@ -16,6 +31,7 @@ interface BroadcastResponse {
   dispatched_count?: number;
   total_targets?: number;
   errors?: string[];
+  delivery_results?: ChannelDeliveryResult[];
   detail?: string | Array<{ msg?: string }>;
 }
 
@@ -39,7 +55,6 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 import {
   Send,
   Paperclip,
-  Link as LinkIcon,
   CheckCheck,
   Plus,
   Users,
@@ -85,14 +100,28 @@ export default function Home() {
   const [tempButtonUrl, setTempButtonUrl] = useState("");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
+  // Mídia do agendamento sendo editado no compositor (#18)
+  const [existingEditingMedia, setExistingEditingMedia] = useState<{
+    mediaType: "PHOTO" | "VIDEO";
+    fileSize?: number | null;
+    url: string;
+  } | null>(null);
+  const [existingMediaRemoved, setExistingMediaRemoved] = useState(false);
 
   // Inserção de Link no Texto da Mensagem (Inline Hyperlink)
-  const [showTextLinkModal, setShowTextLinkModal] = useState(false);
-  const [textLinkWord, setTextLinkWord] = useState("");
-  const [textLinkUrl, setTextLinkUrl] = useState("");
-  const [textLinkSelection, setTextLinkSelection] = useState<{ start: number; end: number } | null>(null);
+  const composerEditorRef = useRef<TelegramRichEditorHandle | null>(null);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Modo edição de um agendamento carregado no compositor (#15)
+  const [composerEditing, setComposerEditing] = useState<{ id: string; scheduledAt: string | null } | null>(null);
+  useEffect(() => {
+    if (!composerEditing) return;
+    const renew = setInterval(() => {
+      void fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}/edit-lock`, { method: "POST" }).catch(
+        () => undefined,
+      );
+    }, 30_000);
+    return () => clearInterval(renew);
+  }, [composerEditing]);
   const [telegramProgress, setTelegramProgress] = useState<TelegramUploadProgress | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -113,6 +142,7 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [showQueueDrawer]);
   const [scheduledQueue, setScheduledQueue] = useState<ScheduledBroadcast[]>([]);
+  const [broadcastHistory, setBroadcastHistory] = useState<BroadcastHistoryItem[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [editingBroadcast, setEditingBroadcast] = useState<ScheduledBroadcast | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -150,6 +180,30 @@ export default function Home() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const dismissConfirm = useCallback(() => setPendingConfirm(null), []);
   const [isDeletingProfile, setIsDeletingProfile] = useState(false);
+  const [affectedBroadcasts, setAffectedBroadcasts] = useState<AffectedBroadcastsResponse | null>(null);
+
+  const renderAffectedItemsList = (items: AffectedBroadcastItem[]) => {
+    const visible = items.slice(0, 5);
+    const remaining = items.length - visible.length;
+    return (
+      <ul className="mt-1.5 space-y-1 text-[11px] text-gray-300">
+        {visible.map((item) => {
+          const dt = item.scheduled_at
+            ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(
+                new Date(item.scheduled_at)
+              )
+            : "Sem data";
+          return (
+            <li key={item.id} className="truncate">
+              • <span className="font-mono text-[#71aaeb]">{dt}</span> —{" "}
+              {item.text_preview || "Mensagem sem texto"}
+            </li>
+          );
+        })}
+        {remaining > 0 && <li className="text-gray-400 italic">e mais {remaining}</li>}
+      </ul>
+    );
+  };
 
   // Metadados de Vídeo (HTML5 Video Element)
   const [videoMetadata, setVideoMetadata] = useState<{
@@ -301,22 +355,54 @@ export default function Home() {
     };
   }, []);
 
+  const formatChannelDeliveryList = useCallback(
+    (results?: ChannelDeliveryResult[] | null): string => {
+      if (!results || results.length === 0) return "";
+      return results
+        .map((r) => {
+          const channelName = channels.find((c) => c.chat_id === r.chat_id)?.title || r.chat_id;
+          if (r.delivered) {
+            return `${channelName} ✓`;
+          }
+          return `${channelName} ✗ ${formatDeliveryFailureReason(r.failure_category, r.detail)}`;
+        })
+        .join(" · ");
+    },
+    [channels]
+  );
+
   // Carregar Fila de Agendamentos do Perfil Selecionado
   const fetchScheduledQueue = useCallback(async (profileId?: string) => {
     const targetProfileId = profileId || selectedProfile?.id;
     if (!targetProfileId) return;
     setIsLoadingQueue(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/scheduled-broadcasts`);
-      if (res.ok) {
+      const [res, histRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/scheduled-broadcasts`).catch(() => null),
+        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/broadcasts`).catch(() => null),
+      ]);
+      if (res && res.ok) {
         const data = await res.json();
         setScheduledQueue(data);
       } else {
         setScheduledQueue([]);
       }
+      if (histRes && histRes.ok) {
+        const histData: BroadcastHistoryItem[] = await histRes.json();
+        setBroadcastHistory(
+          Array.isArray(histData)
+            ? histData.filter((b) =>
+                ["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"].includes(b.status)
+              )
+            : []
+        );
+      } else {
+        setBroadcastHistory([]);
+      }
     } catch {
-      // Backend offline ou rota indisponível
+      // Backend offline ou erro inesperado
       setScheduledQueue([]);
+      setBroadcastHistory([]);
     } finally {
       setIsLoadingQueue(false);
     }
@@ -374,6 +460,7 @@ export default function Home() {
       if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
       setMediaFile(file);
       setMediaPreviewUrl(URL.createObjectURL(file));
+      setExistingMediaRemoved(false);
 
       const isVideo =
         file.type.toLowerCase().startsWith("video/") ||
@@ -460,6 +547,9 @@ export default function Home() {
     if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
     setMediaPreviewUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (existingEditingMedia) {
+      setExistingMediaRemoved(true);
+    }
   };
 
   const clearComposerIfUnmodified = (
@@ -509,61 +599,7 @@ export default function Home() {
 
   // Handlers do Recurso 2: Inserção de Link no Texto da Mensagem (Inline Hyperlink na Palavra)
   const handleOpenTextLinkModal = () => {
-    const textarea = textareaRef.current;
-    let selected = "";
-    let start = text.length;
-    let end = text.length;
-
-    if (textarea) {
-      start = textarea.selectionStart;
-      end = textarea.selectionEnd;
-      selected = textarea.value.substring(start, end);
-    }
-
-    setTextLinkSelection({ start, end });
-    setTextLinkWord(selected);
-    setTextLinkUrl("");
-    setShowTextLinkModal(true);
-  };
-
-  const handleInsertTextLink = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const word = textLinkWord.trim();
-    let url = textLinkUrl.trim();
-
-    if (!word) {
-      showToast("Informe a palavra ou texto a ser exibido.", "error");
-      return;
-    }
-    if (!url) {
-      showToast("Informe a URL de destino.", "error");
-      return;
-    }
-
-    // Garante protocolo https:// ou http://
-    if (!/^https?:\/\//i.test(url)) {
-      url = `https://${url}`;
-    }
-
-    const linkHtml = `<a href="${url}">${word}</a>`;
-    const start = textLinkSelection ? textLinkSelection.start : text.length;
-    const end = textLinkSelection ? textLinkSelection.end : text.length;
-
-    const before = text.substring(0, start);
-    const after = text.substring(end);
-    const newText = before + linkHtml + after;
-
-    setText(newText);
-    setShowTextLinkModal(false);
-
-    // Devolve o foco ao textarea e ajusta o cursor após a tag inserida
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        const newCursor = start + linkHtml.length;
-        textareaRef.current.setSelectionRange(newCursor, newCursor);
-      }
-    }, 50);
+    composerEditorRef.current?.openLinkModal();
   };
 
   // Handlers do Recurso 1: Botão Físico Abaixo da Mensagem (Inline Keyboard)
@@ -597,49 +633,17 @@ export default function Home() {
   };
 
   // Renderizador impecável de Links HTML e texto para o Balão do Telegram (Live Preview)
-  const renderFormattedMessage = (rawText: string) => {
-    if (!rawText || !rawText.trim()) {
-      return <span className="text-gray-300 italic">Digite uma mensagem abaixo...</span>;
-    }
-
-    const linkRegex = /<a\b[^>]*?\bhref=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-    const elements: React.ReactNode[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = linkRegex.exec(rawText)) !== null) {
-      const matchIndex = match.index;
-      if (matchIndex > lastIndex) {
-        elements.push(rawText.substring(lastIndex, matchIndex));
-      }
-      const url = match[1];
-      const linkText = match[2];
-      elements.push(
-        <a
-          key={`link-${matchIndex}-${url}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#64b5f6] hover:text-[#90caf9] underline font-medium cursor-pointer"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {linkText}
-        </a>
-      );
-      lastIndex = matchIndex + match[0].length;
-    }
-
-    if (lastIndex < rawText.length) {
-      elements.push(rawText.substring(lastIndex));
-    }
-
-    return elements;
-  };
+  const renderFormattedMessage = (rawText: string) => renderTelegramHtmlPreview(rawText);
 
   // Envio ou Agendamento do Broadcast
   const handleSendBroadcast = async (scheduleDateIso?: string) => {
     // 1. Lock síncrono imediato contra duplo clique antes do re-render do React
     if (isSubmittingRef.current) {
+      return;
+    }
+
+    if (composerEditing) {
+      showToast("Você está editando um agendamento. Use Agendar para salvar ou saia do modo edição.", "info");
       return;
     }
 
@@ -838,13 +842,19 @@ export default function Home() {
       } else {
         const dispatchedCount = result?.dispatched_count ?? 0;
         const errorsList = Array.isArray(result?.errors) ? result.errors : [];
-        const hasErrors = errorsList.length > 0;
+        const deliverySummary = formatChannelDeliveryList(result?.delivery_results);
+        const hasFailedChannel = Array.isArray(result?.delivery_results)
+          ? result.delivery_results.some((r) => !r.delivered)
+          : false;
+        const hasErrors = errorsList.length > 0 || hasFailedChannel;
 
         if (dispatchedCount === 0 || hasErrors) {
           lastSubmitSignatureRef.current = null;
-          const errorDetails = hasErrors
-            ? errorsList.join(", ")
-            : "Nenhum canal recebeu a mensagem (0 disparos concluídos).";
+          const errorDetails =
+            deliverySummary ||
+            (errorsList.length > 0
+              ? errorsList.join(", ")
+              : "Nenhum canal recebeu a mensagem (0 disparos concluídos).");
           const sizeHint =
             currentMediaFile && currentMediaFile.size > TELEGRAM_MAX_STANDARD_SIZE_BYTES
               ? ` (Arquivo com ${formatFileSize(currentMediaFile.size)}: verifique estabilidade da rede).`
@@ -854,14 +864,16 @@ export default function Home() {
             type: "error",
             message:
               dispatchedCount > 0
-                ? `Envio parcial (${dispatchedCount} enviado(s)), mas houve falha: ${errorDetails}${sizeHint}`
+                ? `Envio parcial (${dispatchedCount} enviado(s)): ${errorDetails}${sizeHint}`
                 : `Falha no envio: ${errorDetails}${sizeHint}`,
           });
+          fetchScheduledQueue(currentProfileId);
         } else {
           setFeedback({
             type: "success",
             message: `Disparado com sucesso para ${dispatchedCount} canal(is)!`,
           });
+          fetchScheduledQueue(currentProfileId);
           clearComposerIfUnmodified(currentText, currentMediaFile, currentButtonText, currentButtonUrl);
           setShowScheduleModal(false);
           setScheduledAtInput("");
@@ -919,6 +931,10 @@ export default function Home() {
       setFeedback({ type: "error", message: "A data de agendamento deve ser no futuro." });
       return;
     }
+    if (composerEditing) {
+      void saveComposerEdit(selectedDate.toISOString());
+      return;
+    }
     handleSendBroadcast(selectedDate.toISOString());
   };
 
@@ -968,6 +984,57 @@ export default function Home() {
     }
   };
 
+  // Disparar Agora um Agendamento Expirado (MISFIRED)
+  const handleDispatchMisfiredNow = async (broadcastId: string) => {
+    setActionInProgressId(broadcastId);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${broadcastId}/dispatch-now`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const result: BroadcastResponse = await res.json();
+        const dispatchedCount = result?.dispatched_count ?? 0;
+        const errorsList = Array.isArray(result?.errors) ? result.errors : [];
+        const deliverySummary = formatChannelDeliveryList(result?.delivery_results);
+        const hasFailedChannel = Array.isArray(result?.delivery_results)
+          ? result.delivery_results.some((r) => !r.delivered)
+          : false;
+        if (dispatchedCount === 0 || errorsList.length > 0 || hasFailedChannel) {
+          const details =
+            deliverySummary || errorsList.join(", ") || "Nenhum canal recebeu a mensagem.";
+          setFeedback({
+            type: "error",
+            message:
+              dispatchedCount > 0
+                ? `Envio parcial (${dispatchedCount} enviado(s)): ${details}`
+                : `Falha no envio: ${details}`,
+          });
+        } else {
+          setFeedback({
+            type: "success",
+            message: `Disparado com sucesso para ${dispatchedCount} canal(is)!`,
+          });
+        }
+        if (selectedProfile) {
+          fetchScheduledQueue(selectedProfile.id);
+        }
+      } else {
+        const err = await res.json().catch(() => null);
+        setFeedback({
+          type: "error",
+          message: extractApiError(err, "Falha ao disparar agendamento"),
+        });
+      }
+    } catch {
+      setFeedback({
+        type: "error",
+        message: "Erro de conexão ao tentar disparar agendamento",
+      });
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
   // Abrir Modal de Edição de Agendamento
   const handleOpenEditScheduled = (item: ScheduledBroadcast) => {
     setEditingBroadcast(item);
@@ -977,11 +1044,10 @@ export default function Home() {
     // Formatar ISO para o input datetime-local e campos de data/hora no fuso local
     if (item.scheduled_at) {
       const d = new Date(item.scheduled_at);
-      if (!isNaN(d.getTime())) {
+      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) {
         applyScheduleDateTime(d, true);
       } else {
-        setEditScheduledAtInput("");
-        setEditScheduleConfirmedPreview(null);
+        applyScheduleDateTime(new Date(Date.now() + 15 * 60 * 1000), true);
       }
     } else {
       setEditScheduledAtInput("");
@@ -1001,26 +1067,168 @@ export default function Home() {
         cancelLabel: "Manter rascunho",
         onConfirm: () => {
           setPendingConfirm(null);
-          applyScheduledToComposer(item);
+          void applyScheduledToComposer(item);
         },
       });
       return;
     }
-    applyScheduledToComposer(item);
+    void applyScheduledToComposer(item);
   };
 
-  const applyScheduledToComposer = (item: ScheduledBroadcast) => {
+  const applyScheduledToComposer = async (item: ScheduledBroadcast) => {
+    // "Carregar no Editor" edita o próprio agendamento, com trava no backend (#15).
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${item.id}/edit-lock`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        showToast(extractApiError(err, "Não foi possível abrir o agendamento para edição"), "error");
+        return;
+      }
+    } catch {
+      showToast("Erro de conexão ao abrir o agendamento para edição", "error");
+      return;
+    }
     setText(item.text || "");
     setButtonText(item.button?.text || "");
     setButtonUrl(item.button?.url || "");
     if (item.target_channel_ids && item.target_channel_ids.length > 0) {
       setSelectedChannelIds(item.target_channel_ids);
     }
+    if (item.scheduled_at) {
+      const d = new Date(item.scheduled_at);
+      if (!isNaN(d.getTime())) applyScheduleDateTime(d, false);
+    }
+    // Mídia do agendamento (#18)
+    if (item.media) {
+      setExistingEditingMedia({
+        mediaType: item.media.media_type,
+        fileSize: item.media.file_size,
+        url: `${API_BASE_URL}/api/v1/broadcasts/${item.id}/media`,
+      });
+      setExistingMediaRemoved(false);
+      setMediaFile(null);
+      if (mediaPreviewUrl) {
+        URL.revokeObjectURL(mediaPreviewUrl);
+        setMediaPreviewUrl(null);
+      }
+    } else {
+      setExistingEditingMedia(null);
+      setExistingMediaRemoved(false);
+      setMediaFile(null);
+      if (mediaPreviewUrl) {
+        URL.revokeObjectURL(mediaPreviewUrl);
+        setMediaPreviewUrl(null);
+      }
+    }
+    setComposerEditing({ id: item.id, scheduledAt: item.scheduled_at });
     setShowQueueDrawer(false);
     setFeedback({
       type: "success",
-      message: "Dados da mensagem carregados no compositor!",
+      message: "Agendamento aberto no editor para edição.",
     });
+  };
+
+  const resetComposerAfterEdit = () => {
+    setComposerEditing(null);
+    setText("");
+    setButtonText("");
+    setButtonUrl("");
+    setScheduledAtInput("");
+    setScheduleConfirmedPreview(null);
+    setExistingEditingMedia(null);
+    setExistingMediaRemoved(false);
+    setMediaFile(null);
+    setVideoThumbnailBlob(null);
+    setVideoMetadata(null);
+    if (mediaPreviewUrl) {
+      URL.revokeObjectURL(mediaPreviewUrl);
+      setMediaPreviewUrl(null);
+    }
+  };
+
+  // Sair do modo edição sem salvar: libera a trava; se o horário já passou, o backend cancela (#15).
+  const handleExitComposerEdit = async () => {
+    if (!composerEditing) return;
+    const editingId = composerEditing.id;
+    resetComposerAfterEdit();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${editingId}/edit-lock`, { method: "DELETE" });
+      const data: EditLockResponse | null = await res.json().catch(() => null);
+      if (res.ok && data?.cancelled) {
+        showToast("O horário passou durante a edição: o agendamento foi cancelado.", "info");
+      }
+    } catch {
+      // Sem rede: a trava expira sozinha em ~90 s.
+    }
+    if (selectedProfile) fetchScheduledQueue(selectedProfile.id);
+  };
+
+  // Salvar o modo edição: PUT/DELETE na mídia (#18) e PATCH no mesmo agendamento (#15).
+  const saveComposerEdit = async (scheduleDateIso: string) => {
+    if (!composerEditing) return;
+    if (selectedChannelIds.length === 0) {
+      setFeedback({ type: "error", message: "Selecione pelo menos um canal de destino!" });
+      return;
+    }
+    if ((buttonText && !buttonUrl) || (!buttonText && buttonUrl)) {
+      showToast("Informe tanto o texto quanto a URL do botão, ou deixe ambos vazios.", "error");
+      return;
+    }
+    try {
+      if (mediaFile) {
+        const formData = new FormData();
+        formData.append("media_file", mediaFile);
+        if (videoThumbnailBlob) {
+          formData.append("thumbnail_file", videoThumbnailBlob, "thumb.jpg");
+        }
+        if (videoMetadata) {
+          if (videoMetadata.duration) formData.append("video_duration", String(Math.round(videoMetadata.duration)));
+          if (videoMetadata.width) formData.append("video_width", String(videoMetadata.width));
+          if (videoMetadata.height) formData.append("video_height", String(videoMetadata.height));
+        }
+        const mediaRes = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}/media`, {
+          method: "PUT",
+          body: formData,
+        });
+        if (!mediaRes.ok) {
+          const err = await mediaRes.json().catch(() => null);
+          setFeedback({ type: "error", message: extractApiError(err, "Erro ao atualizar mídia do agendamento") });
+          return;
+        }
+      } else if (existingMediaRemoved) {
+        const mediaRes = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}/media`, {
+          method: "DELETE",
+        });
+        if (!mediaRes.ok) {
+          const err = await mediaRes.json().catch(() => null);
+          setFeedback({ type: "error", message: extractApiError(err, "Erro ao remover mídia do agendamento") });
+          return;
+        }
+      }
+
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          scheduled_at: scheduleDateIso,
+          target_channel_ids: selectedChannelIds,
+          button_text: buttonText && buttonUrl ? buttonText : "",
+          button_url: buttonText && buttonUrl ? buttonUrl : "",
+        }),
+      });
+      if (res.ok) {
+        setShowScheduleModal(false);
+        resetComposerAfterEdit();
+        setFeedback({ type: "success", message: "Agendamento atualizado com sucesso!" });
+        if (selectedProfile) fetchScheduledQueue(selectedProfile.id);
+      } else {
+        const err = await res.json().catch(() => null);
+        setFeedback({ type: "error", message: extractApiError(err, "Erro ao atualizar agendamento") });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Falha de conexão com o servidor" });
+    }
   };
 
   // Salvar Edição do Agendamento
@@ -1180,7 +1388,14 @@ export default function Home() {
   // Abrir Modal de Exclusão de Perfil
   const handleOpenDeleteProfile = (profile: Profile) => {
     setDeletingProfile(profile);
+    setAffectedBroadcasts(null);
     setShowDeleteProfileModal(true);
+    fetch(`${API_BASE_URL}/api/v1/profiles/${profile.id}/affected-broadcasts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AffectedBroadcastsResponse | null) => {
+        if (data) setAffectedBroadcasts(data);
+      })
+      .catch(() => null);
   };
 
   // Confirmar Exclusão do Perfil
@@ -1286,7 +1501,14 @@ export default function Home() {
     setEditingChannel(channel);
     setEditChannelTitle(channel.title);
     setEditChannelChatId(channel.chat_id);
+    setAffectedBroadcasts(null);
     setShowEditChannelModal(true);
+    fetch(`${API_BASE_URL}/api/v1/channels/${channel.id}/affected-broadcasts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AffectedBroadcastsResponse | null) => {
+        if (data) setAffectedBroadcasts(data);
+      })
+      .catch(() => null);
   };
 
   // Salvar Edição do Canal
@@ -1335,6 +1557,9 @@ export default function Home() {
         setSelectedChannelIds((prev) =>
           prev.map((id) => (id === oldChatId ? newChatId : id))
         );
+        if (oldChatId !== newChatId) {
+          await fetchScheduledQueue(selectedProfile.id);
+        }
       } else {
         const err = await res.json().catch(() => null);
         setFeedback({
@@ -1355,7 +1580,14 @@ export default function Home() {
   // Abrir Modal de Exclusão de Canal
   const handleOpenDeleteChannel = (channel: Channel) => {
     setDeletingChannel(channel);
+    setAffectedBroadcasts(null);
     setShowDeleteChannelModal(true);
+    fetch(`${API_BASE_URL}/api/v1/channels/${channel.id}/affected-broadcasts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AffectedBroadcastsResponse | null) => {
+        if (data) setAffectedBroadcasts(data);
+      })
+      .catch(() => null);
   };
 
   // Confirmar Exclusão de Canal
@@ -1387,6 +1619,7 @@ export default function Home() {
           setChannels((prev) => prev.filter((c) => c.id !== deletedId));
         }
         setSelectedChannelIds((prev) => prev.filter((id) => id !== deletedChatId));
+        await fetchScheduledQueue(selectedProfile.id);
       } else {
         const err = await res.json().catch(() => null);
         setFeedback({
@@ -1401,6 +1634,23 @@ export default function Home() {
       });
     } finally {
       setIsDeletingChannel(false);
+    }
+  };
+
+  const handleOpenDataDir = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/system/open-data-dir`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Pasta de dados: ${data.path}`, "info");
+      } else {
+        const err = await res.json().catch(() => null);
+        showToast(extractApiError(err, "Erro ao abrir pasta de dados"), "error");
+      }
+    } catch {
+      showToast("Erro de conexão com o servidor", "error");
     }
   };
 
@@ -1565,6 +1815,16 @@ export default function Home() {
             })
           )}
         </div>
+        <div className="p-3 border-t border-[#242f3d]">
+          <button
+            type="button"
+            onClick={handleOpenDataDir}
+            className="w-full text-xs text-gray-300 hover:text-white bg-[#202b36] hover:bg-[#2b5278] px-3 py-2 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-[#5288c1]" />
+            <span>Abrir pasta de dados</span>
+          </button>
+        </div>
       </div>
 
       {/* CHAT CANVAS / ÁREA CENTRAL ESTILO TELEGRAM WEB */}
@@ -1685,6 +1945,38 @@ export default function Home() {
               </div>
             </div>
 
+            {/* BANNER NÃO BLOQUEANTE DE AGENDAMENTOS EXPIRADOS (MISFIRED) */}
+            {scheduledQueue.some((b) => b.status === "MISFIRED") && (() => {
+              const misfiredCount = scheduledQueue.filter((b) => b.status === "MISFIRED").length;
+              return (
+                <div
+                  role="status"
+                  data-testid="misfired-banner"
+                  className="bg-amber-950/80 border-b border-amber-600/60 px-6 py-2.5 flex items-center justify-between gap-3 text-xs text-amber-200"
+                >
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      {misfiredCount === 1
+                        ? "1 agendamento expirou enquanto o app estava fechado"
+                        : `${misfiredCount} agendamentos expiraram enquanto o app estava fechado`}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchScheduledQueue();
+                      setQueueNow(new Date());
+                      setShowQueueDrawer(true);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white font-semibold transition shrink-0"
+                  >
+                    Ver na fila
+                  </button>
+                </div>
+              );
+            })()}
+
             {/* FEED CENTRAL: PREVIEW AO VIVO DA MENSAGEM */}
             <div className="flex-1 overflow-y-auto p-6 flex flex-col justify-end items-center bg-[#0e1621] space-y-4">
               <div className="w-full max-w-xl flex flex-col items-end">
@@ -1695,7 +1987,7 @@ export default function Home() {
                 {/* Balão do Telegram com Scroll Suave Irrestrito para Mensagens Longas */}
                 <div className="bg-[#2b5278] text-white rounded-2xl rounded-tr-sm p-3.5 shadow-lg max-w-md w-full border border-[#3b6694]/40 max-h-[70vh] overflow-y-auto scroll-smooth pr-2">
                   {/* Prévia de Imagem ou Vídeo */}
-                  {mediaPreviewUrl && (
+                  {mediaPreviewUrl ? (
                     <div className="relative mb-2 rounded-xl overflow-hidden bg-black/40 flex items-center justify-center">
                       {isImageMedia(mediaFile) ? (
                         <img
@@ -1711,7 +2003,23 @@ export default function Home() {
                         />
                       )}
                     </div>
-                  )}
+                  ) : existingEditingMedia && !existingMediaRemoved ? (
+                    <div className="relative mb-2 rounded-xl overflow-hidden bg-black/40 flex items-center justify-center">
+                      {existingEditingMedia.mediaType === "PHOTO" ? (
+                        <img
+                          src={existingEditingMedia.url}
+                          alt="Prévia da imagem do agendamento"
+                          className="max-h-64 w-full object-cover rounded-xl"
+                        />
+                      ) : (
+                        <video
+                          src={existingEditingMedia.url}
+                          controls
+                          className="max-h-64 w-full object-cover rounded-xl"
+                        />
+                      )}
+                    </div>
+                  ) : null}
 
                   {/* Texto da Mensagem com Renderização de Links e Preservação de Espaçamento */}
                   <div className="text-sm whitespace-pre-wrap leading-relaxed break-words">
@@ -1820,6 +2128,28 @@ export default function Home() {
                   </div>
                 );
               })()}
+              {composerEditing && (
+                <div
+                  role="status"
+                  className="max-w-4xl mx-auto mb-3 bg-amber-900/40 border border-amber-600/60 rounded-xl px-3.5 py-2 flex items-center justify-between gap-3 text-xs text-amber-100"
+                >
+                  <span className="flex items-center gap-2">
+                    <Edit className="w-4 h-4 shrink-0 text-amber-300" />
+                    Editando agendamento
+                    {composerEditing.scheduledAt
+                      ? ` de ${new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(composerEditing.scheduledAt))}`
+                      : ""}
+                    . Use Agendar para salvar.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleExitComposerEdit()}
+                    className="px-2.5 py-1 bg-[#242f3d] hover:bg-[#2b5278] text-white rounded-lg font-medium transition shrink-0"
+                  >
+                    Sair do modo edição
+                  </button>
+                </div>
+              )}
               <div className="max-w-4xl mx-auto flex items-end gap-3">
                 {/* Input Invisível de Arquivo */}
                 <input
@@ -1835,9 +2165,17 @@ export default function Home() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className={`p-2.5 rounded-full hover:bg-[#242f3d] transition ${
-                    mediaFile ? "text-green-400 bg-[#242f3d]" : "text-gray-400"
+                    mediaFile || (existingEditingMedia && !existingMediaRemoved)
+                      ? "text-green-400 bg-[#242f3d]"
+                      : "text-gray-400"
                   }`}
-                  title={mediaFile ? `Anexado: ${mediaFile.name}` : "Anexar Vídeo / Imagem"}
+                  title={
+                    mediaFile
+                      ? `Anexado: ${mediaFile.name}`
+                      : existingEditingMedia && !existingMediaRemoved
+                      ? "Mídia agendada anexada (clique para trocar)"
+                      : "Anexar Vídeo / Imagem"
+                  }
                 >
                   <Paperclip className="w-5 h-5" />
                 </button>
@@ -1872,6 +2210,35 @@ export default function Home() {
 
                 {/* Área de Texto Expansível */}
                 <div className="flex-1 min-w-0 bg-[#242f3d] rounded-2xl px-4 py-2 flex flex-col">
+                  {!mediaFile && existingEditingMedia && !existingMediaRemoved && (
+                    <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
+                      <div className="flex items-center justify-between text-xs text-green-400">
+                        <span className="truncate min-w-0 flex items-center gap-1.5">
+                          {existingEditingMedia.mediaType === "PHOTO" ? (
+                            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <Video className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span className="truncate" title="Mídia do agendamento">
+                            Mídia do agendamento ({existingEditingMedia.mediaType === "PHOTO" ? "Foto" : "Vídeo"})
+                          </span>
+                          {existingEditingMedia.fileSize ? (
+                            <span className="text-[11px] text-gray-400 shrink-0">
+                              ({formatFileSize(existingEditingMedia.fileSize)})
+                            </span>
+                          ) : null}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isSending}
+                          onClick={removeMedia}
+                          className="text-red-400 hover:text-red-300 text-xs ml-2 disabled:opacity-50"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {mediaFile && (
                     <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
                       <div className="flex items-center justify-between text-xs text-green-400">
@@ -1915,14 +2282,13 @@ export default function Home() {
                       )}
                     </div>
                   )}
-                  <textarea
-                    ref={textareaRef}
-                    aria-label="Mensagem do canal"
+                  <TelegramRichEditor
+                    ariaLabel="Mensagem do canal"
                     value={text}
-                    onChange={(e) => setText(e.target.value)}
+                    onChange={setText}
                     placeholder="Escreva a mensagem do canal..."
-                    rows={2}
-                    className="w-full bg-transparent resize-none border-none outline-none text-sm text-gray-100 placeholder-gray-400"
+                    minRows={2}
+                    editorRefHandle={composerEditorRef}
                   />
                 </div>
 
@@ -2048,63 +2414,6 @@ export default function Home() {
                   Salvar
                 </button>
               </div>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* RECURSO 2: MODAL INSERIR LINK EM PALAVRA DO TEXTO (INLINE HYPERLINK) */}
-      {showTextLinkModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <form
-            onSubmit={handleInsertTextLink}
-            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-sm w-full p-5 shadow-2xl"
-          >
-            <h3 className="text-base font-semibold text-gray-100 mb-1 flex items-center gap-2">
-              <Link2 className="w-4 h-4 text-[#5288c1]" /> Inserir Link em Palavra do Texto
-            </h3>
-            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-              Insere um hyperlink direto em uma palavra ou frase no corpo da mensagem.
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label htmlFor="field-text-link-word" className="text-xs text-gray-400 block mb-1">Palavra / Texto exibido</label>
-                <input
-                  id="field-text-link-word"
-                  type="text"
-                  placeholder="Ex: CLIQUE AQUI!"
-                  value={textLinkWord}
-                  onChange={(e) => setTextLinkWord(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label htmlFor="field-text-link-url" className="text-xs text-gray-400 block mb-1">URL de destino</label>
-                <input
-                  id="field-text-link-url"
-                  type="text"
-                  placeholder="https://seulink.com"
-                  value={textLinkUrl}
-                  onChange={(e) => setTextLinkUrl(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                />
-              </div>
-            </div>
-            <div className="mt-5 flex items-center justify-end gap-2 pt-2 border-t border-gray-800">
-              <button
-                type="button"
-                onClick={() => setShowTextLinkModal(false)}
-                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition rounded-lg"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition shadow"
-              >
-                Inserir Link
-              </button>
             </div>
           </form>
         </div>
@@ -2363,9 +2672,22 @@ export default function Home() {
             <p className="text-sm text-gray-200 mb-2 leading-relaxed">
               Tem certeza que deseja excluir o perfil <strong>{deletingProfile.name}</strong> (@{deletingProfile.bot_username || "bot"}) e todos os seus canais/histórico?
             </p>
-            <p className="text-xs text-gray-400 mb-6 leading-relaxed">
+            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
               Esta ação removerá todos os canais vinculados e agendamentos deste bot permanentemente.
             </p>
+            {affectedBroadcasts && affectedBroadcasts.will_be_cancelled.length > 0 && (
+              <div
+                data-testid="profile-delete-affected-broadcasts"
+                className="mb-5 bg-red-950/50 border border-red-500/40 rounded-lg p-3 text-xs text-red-200"
+              >
+                <strong className="block font-semibold">
+                  {affectedBroadcasts.will_be_cancelled.length === 1
+                    ? "1 agendamento pendente será cancelado:"
+                    : `${affectedBroadcasts.will_be_cancelled.length} agendamentos pendentes serão cancelados:`}
+                </strong>
+                {renderAffectedItemsList(affectedBroadcasts.will_be_cancelled)}
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -2572,6 +2894,27 @@ export default function Home() {
                   O bot do perfil deve permanecer como Administrador neste canal.
                 </span>
               </div>
+              {editChannelChatId.trim() !== editingChannel.chat_id &&
+                affectedBroadcasts &&
+                affectedBroadcasts.will_be_cancelled.length + affectedBroadcasts.will_lose_target.length > 0 && (() => {
+                  const allAffected = [
+                    ...affectedBroadcasts.will_be_cancelled,
+                    ...affectedBroadcasts.will_lose_target,
+                  ];
+                  return (
+                    <div
+                      data-testid="channel-edit-affected-broadcasts"
+                      className="bg-amber-950/50 border border-amber-500/40 rounded-lg p-3 text-xs text-amber-200"
+                    >
+                      <strong className="block font-semibold">
+                        {allAffected.length === 1
+                          ? "1 agendamento pendente passará a usar o novo ID:"
+                          : `${allAffected.length} agendamentos pendentes passarão a usar o novo ID:`}
+                      </strong>
+                      {renderAffectedItemsList(allAffected)}
+                    </div>
+                  );
+                })()}
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button
@@ -2619,9 +2962,38 @@ export default function Home() {
             <p className="text-sm text-gray-200 mb-2 leading-relaxed">
               Deseja realmente remover o canal <strong>{deletingChannel.title}</strong> deste bot?
             </p>
-            <p className="text-xs text-gray-400 mb-6 leading-relaxed">
+            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
               O bot não enviará mais transmissões para este Chat ID ({deletingChannel.chat_id}).
             </p>
+            {affectedBroadcasts &&
+              (affectedBroadcasts.will_be_cancelled.length > 0 ||
+                affectedBroadcasts.will_lose_target.length > 0) && (
+                <div
+                  data-testid="channel-delete-affected-broadcasts"
+                  className="mb-5 space-y-3 bg-[#202b36] border border-red-500/30 rounded-lg p-3 text-xs"
+                >
+                  {affectedBroadcasts.will_be_cancelled.length > 0 && (
+                    <div className="text-red-200">
+                      <strong className="block font-semibold">
+                        {affectedBroadcasts.will_be_cancelled.length === 1
+                          ? "1 agendamento será cancelado (tinha só este canal):"
+                          : `${affectedBroadcasts.will_be_cancelled.length} agendamentos serão cancelados (tinham só este canal):`}
+                      </strong>
+                      {renderAffectedItemsList(affectedBroadcasts.will_be_cancelled)}
+                    </div>
+                  )}
+                  {affectedBroadcasts.will_lose_target.length > 0 && (
+                    <div className="text-amber-200">
+                      <strong className="block font-semibold">
+                        {affectedBroadcasts.will_lose_target.length === 1
+                          ? "1 agendamento perde este destino (continua nos demais canais):"
+                          : `${affectedBroadcasts.will_lose_target.length} agendamentos perdem este destino (continuam nos demais canais):`}
+                      </strong>
+                      {renderAffectedItemsList(affectedBroadcasts.will_lose_target)}
+                    </div>
+                  )}
+                </div>
+              )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -2706,7 +3078,10 @@ export default function Home() {
               ) : (
                 scheduledQueue.map((item) => {
                   const isProcessing = actionInProgressId === item.id;
-                  const scheduledAt = new Date(item.scheduled_at);
+                  const isMisfired = item.status === "MISFIRED";
+                  const scheduledAt = item.scheduled_at
+                    ? new Date(item.scheduled_at)
+                    : queueNow ?? new Date(0);
                   const formattedDate = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(scheduledAt);
                   const relativeDate = queueNow ? formatRelativeTime(scheduledAt, queueNow) : null;
                   const isPhoto = item.media?.media_type === "PHOTO";
@@ -2715,13 +3090,17 @@ export default function Home() {
                   return (
                     <div
                       key={item.id}
-                      className="bg-[#242f3d] rounded-xl p-4 border border-[#3b6694]/20 hover:border-[#3b6694]/50 transition flex flex-col space-y-3"
+                      className={`bg-[#242f3d] rounded-xl p-4 border transition flex flex-col space-y-3 ${
+                        isMisfired
+                          ? "border-amber-500/60 hover:border-amber-400"
+                          : "border-[#3b6694]/20 hover:border-[#3b6694]/50"
+                      }`}
                     >
                       {/* Topo do card: Data e Status */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-xs text-[#71aaeb] font-medium">
                           <Clock className="w-3.5 h-3.5 shrink-0" />
-                          <time dateTime={item.scheduled_at}>{formattedDate}</time>
+                          <time dateTime={item.scheduled_at || undefined}>{formattedDate}</time>
                           {relativeDate && (
                             <span
                               className="px-1.5 py-0.5 rounded bg-[#2b5278]/60 text-[10px] text-white"
@@ -2731,9 +3110,18 @@ export default function Home() {
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#2b5278] text-white">
-                          {item.status}
-                        </span>
+                        {isMisfired ? (
+                          <span
+                            data-testid="misfired-badge"
+                            className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-amber-600/80 text-white"
+                          >
+                            Expirado
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#2b5278] text-white">
+                            {item.status}
+                          </span>
+                        )}
                       </div>
 
                       {/* Conteúdo da mensagem com links formatados */}
@@ -2762,38 +3150,131 @@ export default function Home() {
 
                       {/* Ações do Card */}
                       <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-700/50">
-                        <button
-                          type="button"
-                          onClick={() => handleLoadIntoComposer(item)}
-                          className="text-xs px-2.5 py-1 text-gray-300 hover:text-white bg-[#17212b] hover:bg-[#202b36] rounded transition"
-                          title="Carregar mensagem de volta para o compositor principal"
-                        >
-                          Carregar no Editor
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditScheduled(item)}
-                          disabled={isProcessing}
-                          className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1"
-                          title="Editar mensagem e horário de agendamento"
-                        >
-                          <Edit className="w-3 h-3" />
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCancelScheduled(item.id)}
-                          disabled={isProcessing}
-                          className="text-xs px-2.5 py-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 rounded transition flex items-center gap-1 disabled:opacity-50"
-                          title="Cancelar agendamento e descartar mídias"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          Cancelar
-                        </button>
+                        {isMisfired ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleDispatchMisfiredNow(item.id)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-white bg-emerald-700 hover:bg-emerald-600 rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Enviar este agendamento expirado agora"
+                            >
+                              <Send className="w-3 h-3" />
+                              Enviar agora
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditScheduled(item)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Escolher novo horário para reagendar"
+                            >
+                              <Calendar className="w-3 h-3" />
+                              Reagendar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelScheduled(item.id)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Descartar agendamento expirado e remover mídia"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Descartar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleLoadIntoComposer(item)}
+                              className="text-xs px-2.5 py-1 text-gray-300 hover:text-white bg-[#17212b] hover:bg-[#202b36] rounded transition"
+                              title="Carregar mensagem de volta para o compositor principal"
+                            >
+                              Carregar no Editor
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditScheduled(item)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1"
+                              title="Editar mensagem e horário de agendamento"
+                            >
+                              <Edit className="w-3 h-3" />
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelScheduled(item.id)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Cancelar agendamento e descartar mídias"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Cancelar
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
                 })
+              )}
+
+              {/* Histórico Recente de Envios com resultado por canal (#31) */}
+              {broadcastHistory.length > 0 && (
+                <div
+                  data-testid="broadcast-history-section"
+                  className="pt-4 mt-4 border-t border-[#242f3d] space-y-2.5"
+                >
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                    Histórico Recente
+                  </h4>
+                  {broadcastHistory.slice(0, 10).map((hist) => {
+                    const summary = formatChannelDeliveryList(hist.delivery_results);
+                    const createdDt = new Intl.DateTimeFormat(undefined, {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    }).format(new Date(hist.created_at));
+                    return (
+                      <div
+                        key={hist.id}
+                        data-testid="broadcast-history-item"
+                        className="bg-[#1e2a38] rounded-xl p-3 border border-[#3b6694]/20 space-y-1.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-gray-400">{createdDt}</span>
+                          <span
+                            className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
+                              hist.status === "COMPLETED"
+                                ? "bg-emerald-800/70 text-emerald-200"
+                                : hist.status === "PARTIALLY_COMPLETED"
+                                ? "bg-amber-800/70 text-amber-200"
+                                : "bg-red-900/70 text-red-200"
+                            }`}
+                          >
+                            {hist.status}
+                          </span>
+                        </div>
+                        <div className="text-gray-200 line-clamp-2 whitespace-pre-wrap">
+                          {hist.text ? renderFormattedMessage(hist.text) : <span className="italic text-gray-400">Mensagem sem texto</span>}
+                        </div>
+                        {summary ? (
+                          <div
+                            data-testid="delivery-results-summary"
+                            className="text-[11px] text-gray-300 pt-1 border-t border-gray-700/40"
+                          >
+                            {summary}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-gray-500 pt-1 border-t border-gray-700/40">
+                            {hist.channels_count} canal(is)
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>
@@ -2817,14 +3298,16 @@ export default function Home() {
             <div className="space-y-4">
               <div>
                 <label htmlFor="field-edit-text" className="text-xs text-gray-400 block mb-1">Texto da Mensagem</label>
-                <textarea
-                  id="field-edit-text"
-                  rows={3}
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1] resize-none"
-                  placeholder="Escreva a mensagem..."
-                />
+                <div className="w-full bg-[#242f3d] rounded-lg px-3 py-2 border border-transparent focus-within:border-[#5288c1]">
+                  <TelegramRichEditor
+                    id="field-edit-text"
+                    ariaLabel="Texto da Mensagem"
+                    value={editText}
+                    onChange={setEditText}
+                    placeholder="Escreva a mensagem..."
+                    minRows={3}
+                  />
+                </div>
               </div>
 
               {/* Atalhos rápidos na Edição */}

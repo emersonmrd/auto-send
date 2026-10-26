@@ -46,6 +46,9 @@ test.describe("Fila de agendamentos", () => {
     await page.route("**/api/v1/profiles/*/channels", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
     );
+    await page.route("**/api/v1/profiles/*/broadcasts", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+    );
     await page.route("**/api/v1/profiles/*/scheduled-broadcasts", (route) =>
       route.fulfill({
         status: 200,

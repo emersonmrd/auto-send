@@ -177,11 +177,22 @@ test.describe.serial("aplicação real", () => {
     await expect(panel.getByRole("alert")).toContainText("Link de convite não serve");
 
     const calls = await telegramCalls(page);
-    expect(calls.map((c) => c.method)).toEqual(["getUpdates", "getChat", "getChat"]);
+    // A busca só lê (getUpdates, getChat); a vinculação de cada canal confere se o bot é admin (getMe + getChatMember, #2).
+    expect(calls.map((c) => c.method)).toEqual([
+      "getUpdates",
+      "getMe",
+      "getChatMember",
+      "getChat",
+      "getMe",
+      "getChatMember",
+      "getChat",
+      "getMe",
+      "getChatMember",
+    ]);
     // A busca só lê: sem offset nenhum update é confirmado, sem allowed_updates a configuração do bot fica igual.
     expect(calls[0].query).toEqual({ timeout: "0" });
-    expect(calls[1].query).toEqual({ chat_id: "@canalpublico" });
-    expect(calls[2].query).toEqual({ chat_id: "-1004444444444" });
+    expect(calls[3].query).toEqual({ chat_id: "@canalpublico" });
+    expect(calls[6].query).toEqual({ chat_id: "-1004444444444" });
 
     // Os dois canais vinculados pela busca aparecem na barra de canais do perfil.
     await page.goto("/");

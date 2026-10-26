@@ -7,6 +7,8 @@ from sqlalchemy.orm import declarative_base, relationship
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     BroadcastStatus,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     InlineButton,
     MediaAttachment,
     MediaType,
@@ -61,6 +63,8 @@ class BroadcastModel(Base):
     status = Column(String, default="PENDING")
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    delivery_results = Column(Text, nullable=True)  # JSON encoded (#31)
+    edit_locked_until = Column(DateTime(timezone=True), nullable=True)  # (#15)
 
 # Repositórios SQLAlchemy com aiosqlite
 class SqlAlchemyProfileRepository(IProfileRepository):
@@ -218,8 +222,24 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                 m_thumb = broadcast.media.thumbnail_path if broadcast.media else None
                 b_text = broadcast.button.text if broadcast.button else None
                 b_url = broadcast.button.url if broadcast.button else None
+                results_json = (
+                    json.dumps(
+                        [
+                            {
+                                "chat_id": r.chat_id,
+                                "delivered": r.delivered,
+                                "failure_category": r.failure_category.value if r.failure_category else None,
+                                "detail": r.detail,
+                            }
+                            for r in broadcast.delivery_results
+                        ]
+                    )
+                    if broadcast.delivery_results
+                    else None
+                )
 
                 if existing:
+                    existing.target_channel_ids = channels_json
                     existing.status = broadcast.status.value
                     existing.text = broadcast.text
                     existing.media_file_path = m_path
@@ -232,6 +252,8 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                     existing.scheduled_at = broadcast.scheduled_at
                     existing.button_text = b_text
                     existing.button_url = b_url
+                    existing.delivery_results = results_json
+                    existing.edit_locked_until = broadcast.edit_locked_until
                 else:
                     db_obj = BroadcastModel(
                         id=broadcast.id,
@@ -250,6 +272,8 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                         status=broadcast.status.value,
                         scheduled_at=broadcast.scheduled_at,
                         created_at=broadcast.created_at,
+                        delivery_results=results_json,
+                        edit_locked_until=broadcast.edit_locked_until,
                     )
                     session.add(db_obj)
 
@@ -278,12 +302,16 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             res = await session.execute(
                 select(BroadcastModel)
                 .where(BroadcastModel.profile_id == profile_id)
-                .where(BroadcastModel.status.in_(["PENDING", "SCHEDULED"]))
+                .where(BroadcastModel.status.in_(["PENDING", "SCHEDULED", "MISFIRED"]))
                 .where(BroadcastModel.scheduled_at.is_not(None))
                 .order_by(BroadcastModel.scheduled_at.asc())
             )
             objs = res.scalars().all()
-            return [self._to_entity(o) for o in objs]
+            items = [self._to_entity(o) for o in objs]
+            return sorted(
+                items,
+                key=lambda b: (0 if b.status == BroadcastStatus.MISFIRED else 1, b.scheduled_at),
+            )
 
     async def list_pending_scheduled(self) -> List[BroadcastMessage]:
         from sqlalchemy import select
@@ -321,6 +349,27 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
         if created_dt is not None and created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
 
+        locked_dt = getattr(obj, "edit_locked_until", None)
+        if locked_dt is not None and locked_dt.tzinfo is None:
+            locked_dt = locked_dt.replace(tzinfo=timezone.utc)
+
+        delivery_results: List[ChannelDeliveryResult] = []
+        raw_results = getattr(obj, "delivery_results", None)
+        if raw_results:
+            try:
+                for item in json.loads(raw_results):
+                    cat = item.get("failure_category")
+                    delivery_results.append(
+                        ChannelDeliveryResult(
+                            chat_id=item["chat_id"],
+                            delivered=bool(item["delivered"]),
+                            failure_category=DeliveryFailureCategory(cat) if cat else None,
+                            detail=item.get("detail"),
+                        )
+                    )
+            except Exception:
+                delivery_results = []
+
         return BroadcastMessage(
             id=obj.id,
             profile_id=obj.profile_id,
@@ -331,4 +380,6 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             status=BroadcastStatus(obj.status),
             scheduled_at=scheduled_dt,
             created_at=created_dt,
+            delivery_results=delivery_results,
+            edit_locked_until=locked_dt,
         )

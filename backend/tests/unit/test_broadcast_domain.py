@@ -3,10 +3,13 @@ import pytest
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     BroadcastStatus,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     DispatchStrategy,
     InlineButton,
     MediaAttachment,
     MediaType,
+    validate_and_escape_telegram_html,
 )
 
 def test_should_choose_single_message_strategy_when_text_le_1024_and_has_media():
@@ -205,6 +208,7 @@ async def test_in_memory_repository_get_scheduled_by_profile():
     d1 = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
     d2 = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
     d3 = datetime(2026, 10, 22, 15, 0, tzinfo=timezone.utc)
+    d4 = datetime(2026, 10, 21, 18, 0, tzinfo=timezone.utc)
 
     # b1: profile-1, SCHEDULED, d1
     b1 = BroadcastMessage(id="b1", profile_id="m1", target_channel_ids=["-1001"], status=BroadcastStatus.SCHEDULED, scheduled_at=d1)
@@ -218,15 +222,196 @@ async def test_in_memory_repository_get_scheduled_by_profile():
     b5 = BroadcastMessage(id="b5", profile_id="m2", target_channel_ids=["-1001"], status=BroadcastStatus.SCHEDULED, scheduled_at=d2)
     # b6: profile-1, SCHEDULED, scheduled_at is None (should be excluded)
     b6 = BroadcastMessage(id="b6", profile_id="m1", target_channel_ids=["-1001"], status=BroadcastStatus.SCHEDULED, scheduled_at=None)
+    # b7: profile-1, MISFIRED, d4 (deve aparecer primeiro na fila antes dos SCHEDULED/PENDING)
+    b7 = BroadcastMessage(id="b7", profile_id="m1", target_channel_ids=["-1001"], status=BroadcastStatus.MISFIRED, scheduled_at=d4)
 
-    for b in [b1, b2, b3, b4, b5, b6]:
+    for b in [b1, b2, b3, b4, b5, b6, b7]:
         await repo.save(b)
 
     scheduled_m1 = await repo.get_scheduled_by_profile("m1")
-    assert len(scheduled_m1) == 2
-    # Deve ser ordenado ascendentemente por scheduled_at: b2 (d2: 10:00) depois b1 (d1: 12:00)
-    assert scheduled_m1[0].id == "b2"
-    assert scheduled_m1[1].id == "b1"
+    assert [b.id for b in scheduled_m1] == ["b7", "b2", "b1"]
+
+
+def test_misfired_transitions_and_guards():
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    future = datetime(2026, 10, 24, 15, 0, tzinfo=timezone.utc)
+
+    for valid_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED):
+        msg = BroadcastMessage(
+            id="b-m",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Bom dia",
+            status=valid_status,
+            scheduled_at=now,
+        )
+        msg.mark_misfired()
+        assert msg.status is BroadcastStatus.MISFIRED
+
+    # De MISFIRED -> SCHEDULED via reschedule, podendo editar conteúdo antes
+    msg_resched = BroadcastMessage(
+        id="b-m-resched",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890"],
+        text="Bom dia",
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now,
+    )
+    msg_resched.update_content("Boa tarde", None)
+    msg_resched.reschedule(future)
+    assert msg_resched.status is BroadcastStatus.SCHEDULED
+    assert msg_resched.scheduled_at == future
+    assert msg_resched.text == "Boa tarde"
+
+    # De MISFIRED -> DISPATCHING via start_dispatch
+    for dispatchable in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg_disp = BroadcastMessage(
+            id="b-m-disp",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Envio imediato",
+            status=dispatchable,
+            scheduled_at=now,
+        )
+        msg_disp.start_dispatch()
+        assert msg_disp.status is BroadcastStatus.DISPATCHING
+
+    # De MISFIRED -> CANCELLED via cancel
+    msg_cancel = BroadcastMessage(
+        id="b-m-cancel",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890"],
+        text="Descartar",
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now,
+    )
+    msg_cancel.cancel()
+    assert msg_cancel.status is BroadcastStatus.CANCELLED
+
+    # Guardas de estados não permitidos para mark_misfired
+    for invalid_misfire_status in (
+        BroadcastStatus.MISFIRED,
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        invalid_msg = BroadcastMessage(
+            id="b-inv-m",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Inv",
+            status=invalid_misfire_status,
+        )
+        with pytest.raises(ValueError, match=r"^Only pending or scheduled broadcasts can become misfired$"):
+            invalid_msg.mark_misfired()
+
+    # Guardas de estados terminais/em voo para start_dispatch
+    for invalid_dispatch_status in (
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        invalid_msg = BroadcastMessage(
+            id="b-inv-d",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Inv",
+            status=invalid_dispatch_status,
+        )
+        with pytest.raises(ValueError, match=r"^Cannot dispatch an in-flight, completed, failed, or cancelled broadcast$"):
+            invalid_msg.start_dispatch()
+
+
+def test_remove_and_replace_target_channel_on_broadcast_message():
+    for active_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = BroadcastMessage(
+            id="b-rem",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111", "-1002222222222"],
+            text="Multi-channel",
+            status=active_status,
+        )
+        assert msg.is_pending_or_scheduled() is True
+        # Canal que não está na lista retorna False sem alterar nada
+        assert msg.remove_target_channel("-1009999999999") is False
+        assert msg.target_channel_ids == ["-1001111111111", "-1002222222222"]
+        assert msg.status is active_status
+
+        # Remover um canal quando há outro mantém o status e reduz a lista
+        assert msg.remove_target_channel("-1001111111111") is True
+        assert msg.target_channel_ids == ["-1002222222222"]
+        assert msg.status is active_status
+
+        # Remover o último canal cancela o agendamento
+        assert msg.remove_target_channel("-1002222222222") is True
+        assert msg.target_channel_ids == []
+        assert msg.status is BroadcastStatus.CANCELLED
+        assert msg.is_pending_or_scheduled() is False
+
+    # Substituir canal preserva ordem e desduplica se o novo já estiver presente
+    for active_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg_rep = BroadcastMessage(
+            id="b-rep",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111", "-1002222222222"],
+            text="Replace test",
+            status=active_status,
+        )
+        assert msg_rep.replace_target_channel("-1001111111111", "-1001111111111") is False
+        assert msg_rep.replace_target_channel("-1009999999999", "-1003333333333") is False
+        assert msg_rep.replace_target_channel("-1001111111111", "-1003333333333") is True
+        assert msg_rep.target_channel_ids == ["-1003333333333", "-1002222222222"]
+        # Se substituir pelo outro canal que já está na lista, não duplica
+        assert msg_rep.replace_target_channel("-1003333333333", "-1002222222222") is True
+        assert msg_rep.target_channel_ids == ["-1002222222222"]
+
+    # Bloqueio em DISPATCHING
+    msg_disp = BroadcastMessage(
+        id="b-disp",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    assert msg_disp.is_pending_or_scheduled() is False
+    with pytest.raises(
+        ValueError,
+        match=r"^There is a broadcast currently dispatching\. Wait for it to finish and try again\.$",
+    ):
+        msg_disp.remove_target_channel("-1001111111111")
+    with pytest.raises(
+        ValueError,
+        match=r"^There is a broadcast currently dispatching\. Wait for it to finish and try again\.$",
+    ):
+        msg_disp.replace_target_channel("-1001111111111", "-1002222222222")
+
+    # Bloqueio em estados terminais
+    for terminal_status in (
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        msg_term = BroadcastMessage(
+            id="b-term",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111"],
+            status=terminal_status,
+        )
+        assert msg_term.is_pending_or_scheduled() is False
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$",
+        ):
+            msg_term.remove_target_channel("-1001111111111")
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$",
+        ):
+            msg_term.replace_target_channel("-1001111111111", "-1002222222222")
 
 
 def _dispatching_broadcast(targets: int) -> BroadcastMessage:
@@ -260,3 +445,377 @@ def test_finish_dispatch_rejects_impossible_counts():
         _dispatching_broadcast(2).finish_dispatch(delivered=3, total=2)
     with pytest.raises(ValueError, match=r"^delivered must be between 0 and total$"):
         _dispatching_broadcast(2).finish_dispatch(delivered=-1, total=2)
+
+
+def test_channel_delivery_result_and_finish_dispatch_with_results():
+    ok = ChannelDeliveryResult.success("-1001111111111")
+    assert ok.chat_id == "-1001111111111"
+    assert ok.delivered is True
+    assert ok.failure_category is None
+    assert ok.detail is None
+
+    fail = ChannelDeliveryResult.failure(
+        "-1002222222222",
+        category=DeliveryFailureCategory.NO_POST_PERMISSION,
+        detail="not enough rights",
+    )
+    assert fail.chat_id == "-1002222222222"
+    assert fail.delivered is False
+    assert fail.failure_category is DeliveryFailureCategory.NO_POST_PERMISSION
+    assert fail.detail == "not enough rights"
+
+    fail_no_detail = ChannelDeliveryResult.failure(
+        "-1003333333333",
+        category=DeliveryFailureCategory.INVALID_TOKEN,
+    )
+    assert fail_no_detail.detail is None
+
+    for empty_id in ("", "   "):
+        with pytest.raises(ValueError, match=r"^chat_id cannot be empty$"):
+            ChannelDeliveryResult(chat_id=empty_id, delivered=True)
+
+    with pytest.raises(ValueError, match=r"^Delivered result cannot have a failure_category$"):
+        ChannelDeliveryResult(
+            chat_id="-1001111111111",
+            delivered=True,
+            failure_category=DeliveryFailureCategory.OTHER,
+        )
+
+    with pytest.raises(ValueError, match=r"^Failed delivery result requires a failure_category$"):
+        ChannelDeliveryResult(chat_id="-1001111111111", delivered=False)
+
+    # Cálculo de status por finish_dispatch_with_results
+    msg_partial = BroadcastMessage(
+        id="b-res-partial",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111", "-1002222222222"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    msg_partial.finish_dispatch_with_results([ok, fail])
+    assert msg_partial.status is BroadcastStatus.PARTIALLY_COMPLETED
+    assert msg_partial.delivery_results == [ok, fail]
+
+    msg_all_ok = BroadcastMessage(
+        id="b-res-ok",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    msg_all_ok.finish_dispatch_with_results([ok])
+    assert msg_all_ok.status is BroadcastStatus.COMPLETED
+    assert msg_all_ok.delivery_results == [ok]
+
+    msg_fail_all = BroadcastMessage(
+        id="b-res-fail",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111", "-1002222222222"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    msg_fail_all.fail_all_channels(
+        DeliveryFailureCategory.INVALID_TOKEN,
+        detail="Unauthorized",
+    )
+    assert msg_fail_all.status is BroadcastStatus.FAILED
+    assert len(msg_fail_all.delivery_results) == 2
+    assert all(
+        r.delivered is False
+        and r.failure_category is DeliveryFailureCategory.INVALID_TOKEN
+        and r.detail == "Unauthorized"
+        for r in msg_fail_all.delivery_results
+    )
+    assert [r.chat_id for r in msg_fail_all.delivery_results] == [
+        "-1001111111111",
+        "-1002222222222",
+    ]
+
+
+def test_validate_and_escape_telegram_html_allows_telegram_tags_and_escapes_plain_symbols():
+    assert validate_and_escape_telegram_html("") == ""
+
+    # Caracteres <, > e & fora de tags válidas são escapados sem quebrar
+    assert (
+        validate_and_escape_telegram_html("2 < 3 & Tom & Jerry > 1")
+        == "2 &lt; 3 &amp; Tom &amp; Jerry &gt; 1"
+    )
+    # Idempotente se já estiver escapado
+    assert (
+        validate_and_escape_telegram_html("2 &lt; 3 &amp; Tom &quot;ok&quot; &#39;x&#39; &gt; 1")
+        == "2 &lt; 3 &amp; Tom &quot;ok&quot; &#39;x&#39; &gt; 1"
+    )
+
+    # Todas as tags suportadas pelo Telegram
+    for tag in (
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "ins",
+        "s",
+        "strike",
+        "del",
+        "code",
+        "pre",
+        "blockquote",
+        "tg-spoiler",
+    ):
+        formatted = f"<{tag.upper()}>Texto &amp; 2 < 3</{tag.upper()}>"
+        assert (
+            validate_and_escape_telegram_html(formatted)
+            == f"<{tag}>Texto &amp; 2 &lt; 3</{tag}>"
+        )
+
+    assert (
+        validate_and_escape_telegram_html("<span class='tg-spoiler'>segredo</span>")
+        == '<span class="tg-spoiler">segredo</span>'
+    )
+    assert (
+        validate_and_escape_telegram_html('<SPAN class="tg-spoiler">segredo</SPAN>')
+        == '<span class="tg-spoiler">segredo</span>'
+    )
+
+    # Links https:// válidos (aspas duplas ou simples, com query string escapada)
+    assert (
+        validate_and_escape_telegram_html(
+            "Visite <a href='https://example.com/p?a=1&b=2'>Tom & Jerry</a>!"
+        )
+        == 'Visite <a href="https://example.com/p?a=1&amp;b=2">Tom &amp; Jerry</a>!'
+    )
+    assert (
+        validate_and_escape_telegram_html(
+            'Visite <A HREF="https://example.com/p?a=1&amp;b=2">Link</A>'
+        )
+        == 'Visite <a href="https://example.com/p?a=1&amp;b=2">Link</a>'
+    )
+    assert (
+        validate_and_escape_telegram_html(
+            'Visite <a href=\'https://example.com/p?q="teste"\'>Busca</a>'
+        )
+        == 'Visite <a href="https://example.com/p?q=&quot;teste&quot;">Busca</a>'
+    )
+
+    # BroadcastMessage aplica na criação e no update_content
+    msg = BroadcastMessage(
+        id="b-html",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        text='<b>Oferta</b> 2 < 3 & <a href="https://example.com">link</a>',
+    )
+    assert msg.text == '<b>Oferta</b> 2 &lt; 3 &amp; <a href="https://example.com">link</a>'
+    msg.update_content("Tom & Jerry < 5")
+    assert msg.text == "Tom &amp; Jerry &lt; 5"
+
+
+@pytest.mark.parametrize(
+    "invalid_html, expected_msg",
+    [
+        ("<script>alert(1)</script>", r"^Unsupported HTML tag in message$"),
+        ("<div>bloco</div>", r"^Unsupported HTML tag in message$"),
+        ("<img src=\"https://example.com/a.png\">", r"^Unsupported HTML tag in message$"),
+        ("</script>", r"^Unsupported HTML tag in message$"),
+        ("<span class=\"other\">x</span>", r"^Unsupported HTML tag in message$"),
+        ("<a href=\"https://example.com\" onclick=\"x\">x</a>", r"^Unsupported HTML tag in message$"),
+        ("<a>sem href</a>", r"^Unsupported HTML tag in message$"),
+        ("<b class=\"x\">bold</b>", r"^Unsupported HTML tag in message$"),
+        ("<b>sem fechar", r"^Invalid HTML formatting in message$"),
+        ("</b>", r"^Invalid HTML formatting in message$"),
+        ("<b><i>ordem errada</b></i>", r"^Invalid HTML formatting in message$"),
+        ("Texto com <b sem fechar o sinal", r"^Invalid HTML formatting in message$"),
+        ('<a href="http://example.com">inseguro</a>', r"^Insecure or invalid URL scheme\. Only https:// allowed\.$"),
+        ('<a href="https://localhost/admin">local</a>', r"^Insecure or invalid URL scheme: Private network prohibited\.$"),
+        ('<a href="https://192.168.1.1/admin">privado</a>', r"^Insecure or invalid URL scheme: Private IP prohibited\.$"),
+    ],
+)
+def test_validate_and_escape_telegram_html_rejects_unsupported_tags_broken_markup_and_unsafe_links(
+    invalid_html, expected_msg
+):
+    with pytest.raises(ValueError, match=expected_msg):
+        validate_and_escape_telegram_html(invalid_html)
+    with pytest.raises(ValueError, match=expected_msg):
+        BroadcastMessage(
+            id="b-bad",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111"],
+            text=invalid_html,
+        )
+
+
+
+def _locked_candidate(status=BroadcastStatus.SCHEDULED, scheduled_at=None):
+    from datetime import timedelta as _td
+    return BroadcastMessage(
+        id="b-lock",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        text="Lock",
+        status=status,
+        scheduled_at=scheduled_at or datetime(2026, 10, 26, 15, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_edit_lock_acquire_renew_expire_and_release_before_schedule_keeps_broadcast():
+    from datetime import timedelta
+    from src.domain.broadcast.broadcast_message import DEFAULT_EDIT_LOCK_SECONDS
+
+    assert DEFAULT_EDIT_LOCK_SECONDS == 90
+    now = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)
+    for status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = _locked_candidate(status=status)
+        assert msg.edit_locked_until is None
+        assert msg.is_edit_locked(now) is False
+
+        msg.acquire_edit_lock(now)
+        assert msg.edit_locked_until == now + timedelta(seconds=90)
+        assert msg.is_edit_locked(now) is True
+        assert msg.is_edit_locked(now + timedelta(seconds=89)) is True
+        assert msg.is_edit_locked(now + timedelta(seconds=90)) is False
+
+        # Renovação estende a trava
+        msg.acquire_edit_lock(now + timedelta(seconds=30), ttl=timedelta(seconds=60))
+        assert msg.edit_locked_until == now + timedelta(seconds=90)
+
+        # Antes de expirar, expire_overdue_edit_lock não faz nada
+        assert msg.expire_overdue_edit_lock(now + timedelta(seconds=89)) is False
+        assert msg.edit_locked_until is not None
+
+        # Saiu sem salvar antes do horário: nada muda
+        assert msg.release_edit_lock(now) is False
+        assert msg.edit_locked_until is None
+        assert msg.status is status
+
+    # Sem trava, expire_overdue_edit_lock não faz nada
+    msg = _locked_candidate()
+    assert msg.expire_overdue_edit_lock(now) is False
+    assert msg.status is BroadcastStatus.SCHEDULED
+
+
+def test_edit_lock_release_or_expiry_after_schedule_cancels_and_reschedule_clears_lock():
+    from datetime import timedelta
+
+    sched = datetime(2026, 10, 26, 15, 0, tzinfo=timezone.utc)
+
+    msg = _locked_candidate(scheduled_at=sched)
+    msg.acquire_edit_lock(sched - timedelta(seconds=10))
+    assert msg.release_edit_lock(sched) is True
+    assert msg.status is BroadcastStatus.CANCELLED
+    assert msg.edit_locked_until is None
+
+    msg = _locked_candidate(scheduled_at=sched)
+    msg.acquire_edit_lock(sched - timedelta(seconds=10), ttl=timedelta(seconds=30))
+    assert msg.expire_overdue_edit_lock(sched + timedelta(seconds=20)) is True
+    assert msg.status is BroadcastStatus.CANCELLED
+
+    # Sem scheduled_at, liberar nunca cancela
+    msg = BroadcastMessage(id="b", profile_id="p", target_channel_ids=["-1001111111111"], status=BroadcastStatus.PENDING)
+    msg.acquire_edit_lock(sched)
+    assert msg.release_edit_lock(sched + timedelta(days=1)) is False
+    assert msg.status is BroadcastStatus.PENDING
+
+    # Reagendar (salvar com horário novo) libera a trava
+    msg = _locked_candidate(scheduled_at=sched)
+    msg.acquire_edit_lock(sched - timedelta(seconds=10))
+    msg.reschedule(sched + timedelta(hours=1))
+    assert msg.edit_locked_until is None
+    assert msg.scheduled_at == sched + timedelta(hours=1)
+
+
+def test_edit_lock_rejects_terminal_states_and_non_positive_ttl():
+    from datetime import timedelta
+
+    now = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)
+    for status in (
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        msg = _locked_candidate(status=status)
+        with pytest.raises(ValueError, match=r"^Cannot lock an in-flight, completed, failed, or cancelled broadcast$"):
+            msg.acquire_edit_lock(now)
+        with pytest.raises(ValueError, match=r"^Cannot lock an in-flight, completed, failed, or cancelled broadcast$"):
+            msg.release_edit_lock(now)
+
+    msg = _locked_candidate()
+    for bad_ttl in (timedelta(0), timedelta(seconds=-1)):
+        with pytest.raises(ValueError, match=r"^ttl must be positive$"):
+            msg.acquire_edit_lock(now, ttl=bad_ttl)
+    assert msg.edit_locked_until is None
+    msg.acquire_edit_lock(now, ttl=timedelta(microseconds=1))
+    assert msg.edit_locked_until == now + timedelta(microseconds=1)
+
+
+def test_update_target_channels_only_for_active_broadcasts_and_non_empty():
+    for status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = _locked_candidate(status=status)
+        new_ids = ["-1002222222222", "-1003333333333"]
+        msg.update_target_channels(new_ids)
+        assert msg.target_channel_ids == new_ids
+        assert msg.target_channel_ids is not new_ids
+        with pytest.raises(ValueError, match=r"^target_channel_ids must be a non-empty list$"):
+            msg.update_target_channels([])
+        assert msg.target_channel_ids == new_ids
+
+    for status in (BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED, BroadcastStatus.FAILED, BroadcastStatus.CANCELLED):
+        msg = _locked_candidate(status=status)
+        with pytest.raises(ValueError, match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$"):
+            msg.update_target_channels(["-1002222222222"])
+
+
+def test_replace_media_and_remove_media_lifecycle():
+    photo = MediaAttachment(file_path="/tmp/photo.jpg", media_type=MediaType.PHOTO, file_size=100)
+    video = MediaAttachment(file_path="/tmp/video.mp4", media_type=MediaType.VIDEO, file_size=500)
+
+    for active_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = _locked_candidate(status=active_status)
+        assert msg.media is None
+        assert msg.get_dispatch_strategy() == DispatchStrategy.TEXT_ONLY
+
+        # Adicionar foto a um broadcast sem mídia
+        msg.replace_media(photo)
+        assert msg.media == photo
+        assert msg.get_dispatch_strategy() == DispatchStrategy.SINGLE_MEDIA_WITH_CAPTION
+
+        # Trocar foto por vídeo
+        msg.replace_media(video)
+        assert msg.media == video
+        assert msg.get_dispatch_strategy() == DispatchStrategy.SINGLE_MEDIA_WITH_CAPTION
+
+        # Remover mídia
+        msg.remove_media()
+        assert msg.media is None
+        assert msg.get_dispatch_strategy() == DispatchStrategy.TEXT_ONLY
+
+        # Remover novamente quando já é None não quebra
+        msg.remove_media()
+        assert msg.media is None
+
+
+def test_replace_media_rejects_invalid_type_and_terminal_states():
+    photo = MediaAttachment(file_path="/tmp/photo.jpg", media_type=MediaType.PHOTO, file_size=100)
+    msg = _locked_candidate(status=BroadcastStatus.SCHEDULED)
+
+    with pytest.raises(ValueError, match=r"^media must be a MediaAttachment instance$"):
+        msg.replace_media("not-a-media-attachment")  # type: ignore
+
+    with pytest.raises(ValueError, match=r"^media must be a MediaAttachment instance$"):
+        msg.replace_media(None)  # type: ignore
+
+    for term_status in (
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        msg = _locked_candidate(status=term_status)
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify media of an in-flight, completed, failed, or cancelled broadcast$",
+        ):
+            msg.replace_media(photo)
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify media of an in-flight, completed, failed, or cancelled broadcast$",
+        ):
+            msg.remove_media()
