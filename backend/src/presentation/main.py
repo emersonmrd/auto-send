@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional, Union
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -214,19 +214,57 @@ app.add_middleware(
 )
 
 # Schemas de Request/Response
+class ErrorResponse(BaseModel):
+    detail: Union[str, List[Any]]
+
+class HealthResponse(BaseModel):
+    status: str
+
 class ProfileCreateRequest(BaseModel):
     name: str
     bot_token: str
     avatar_url: Optional[str] = None
+
+class ProfileResponse(BaseModel):
+    id: str
+    name: str
+    bot_username: str
+    avatar_url: Optional[str] = None
+    is_active: bool
+
+class ProfileListItemResponse(ProfileResponse):
+    created_at: str
+
+class DeleteResourceResponse(BaseModel):
+    message: str
+    id: str
 
 class ChannelCreateRequest(BaseModel):
     title: str
     chat_id: str
     invite_link: Optional[str] = ""
 
+class ChannelCreateResponse(BaseModel):
+    id: str
+    profile_id: str
+    title: str
+    chat_id: str
+    invite_link: str
+
+class ChannelListItemResponse(ChannelCreateResponse):
+    is_active: bool
+
 class ChannelUpdateRequest(BaseModel):
     name: str
     telegram_channel_id: str
+
+class ChannelUpdateResponse(BaseModel):
+    id: str
+    profile_id: str
+    name: str
+    title: str
+    telegram_channel_id: str
+    chat_id: str
 
 class BroadcastPatchRequest(BaseModel):
     text: Optional[str] = None
@@ -234,11 +272,74 @@ class BroadcastPatchRequest(BaseModel):
     button_url: Optional[str] = None
     scheduled_at: Optional[str] = None
 
-@app.get("/api/v1/health")
+class BroadcastHistoryItemResponse(BaseModel):
+    id: str
+    profile_id: str
+    text: str
+    status: str
+    channels_count: int
+    scheduled_at: Optional[str] = None
+    created_at: str
+
+class BroadcastProgressResponse(BaseModel):
+    tracking_id: str
+    stage: str
+    percent: int
+    sent_bytes: int
+    total_bytes: int
+    status: str
+    created_at: float
+    updated_at: float
+
+class ScheduledBroadcastCreateResponse(BaseModel):
+    broadcast_id: str
+    status: str
+    scheduled_at: str
+    channels_count: int
+    dispatched_count: int
+
+class ImmediateBroadcastCreateResponse(BaseModel):
+    broadcast_id: str
+    status: str
+    dispatched_count: int
+    total_targets: int
+    errors: List[str]
+
+class BroadcastMediaResponse(BaseModel):
+    file_path: str
+    media_type: str
+    file_size: Optional[int] = None
+
+class BroadcastButtonResponse(BaseModel):
+    text: str
+    url: str
+
+class ScheduledBroadcastResponse(BaseModel):
+    id: str
+    profile_id: str
+    target_channel_ids: List[str]
+    text: str
+    media: Optional[BroadcastMediaResponse] = None
+    button: Optional[BroadcastButtonResponse] = None
+    status: str
+    scheduled_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+class CancelBroadcastResponse(BaseModel):
+    id: str
+    status: str
+    message: str
+
+_ERR_400 = {400: {"model": ErrorResponse, "description": "External rule or Telegram validation failed"}}
+_ERR_404 = {404: {"model": ErrorResponse, "description": "Resource not found"}}
+_ERR_413 = {413: {"model": ErrorResponse, "description": "Media file exceeds upload limit"}}
+_ERR_422 = {422: {"model": ErrorResponse, "description": "Invalid payload or forbidden state transition"}}
+
+@app.get("/api/v1/health", response_model=HealthResponse)
 async def health_check():
     return {"status": "healthy"}
 
-@app.get("/api/v1/profiles")
+@app.get("/api/v1/profiles", response_model=List[ProfileListItemResponse])
 async def list_profiles():
     profiles = await profile_repo.list_all()
     return [
@@ -253,7 +354,12 @@ async def list_profiles():
         for m in profiles
     ]
 
-@app.post("/api/v1/profiles", status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/api/v1/profiles",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ProfileResponse,
+    responses={**_ERR_400, **_ERR_422},
+)
 async def create_profile(req: ProfileCreateRequest):
     try:
         # Validação do Bot no Telegram
@@ -280,7 +386,11 @@ async def create_profile(req: ProfileCreateRequest):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-@app.put("/api/v1/profiles/{profile_id}")
+@app.put(
+    "/api/v1/profiles/{profile_id}",
+    response_model=ProfileResponse,
+    responses={**_ERR_400, **_ERR_404, **_ERR_422},
+)
 async def update_profile(profile_id: str, req: ProfileCreateRequest):
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
@@ -311,7 +421,11 @@ async def update_profile(profile_id: str, req: ProfileCreateRequest):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
-@app.delete("/api/v1/profiles/{profile_id}")
+@app.delete(
+    "/api/v1/profiles/{profile_id}",
+    response_model=DeleteResourceResponse,
+    responses=_ERR_404,
+)
 async def delete_profile(profile_id: str):
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
@@ -320,7 +434,7 @@ async def delete_profile(profile_id: str):
     await profile_repo.delete(profile_id)
     return {"message": "Profile deleted successfully", "id": profile_id}
 
-@app.get("/api/v1/profiles/{profile_id}/channels")
+@app.get("/api/v1/profiles/{profile_id}/channels", response_model=List[ChannelListItemResponse])
 async def list_channels(profile_id: str):
     channels = await channel_repo.list_by_profile(profile_id)
     return [
@@ -335,7 +449,12 @@ async def list_channels(profile_id: str):
         for c in channels
     ]
 
-@app.post("/api/v1/profiles/{profile_id}/channels", status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/api/v1/profiles/{profile_id}/channels",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ChannelCreateResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
 async def create_channel(profile_id: str, req: ChannelCreateRequest):
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
@@ -360,7 +479,11 @@ async def create_channel(profile_id: str, req: ChannelCreateRequest):
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-@app.put("/api/v1/channels/{channel_id}")
+@app.put(
+    "/api/v1/channels/{channel_id}",
+    response_model=ChannelUpdateResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
 async def update_channel(channel_id: str, req: ChannelUpdateRequest):
     channel = await channel_repo.get_by_id(channel_id)
     if not channel:
@@ -386,7 +509,11 @@ async def update_channel(channel_id: str, req: ChannelUpdateRequest):
         "chat_id": channel.chat_id,
     }
 
-@app.delete("/api/v1/channels/{channel_id}")
+@app.delete(
+    "/api/v1/channels/{channel_id}",
+    response_model=DeleteResourceResponse,
+    responses=_ERR_404,
+)
 async def delete_channel(channel_id: str):
     channel = await channel_repo.get_by_id(channel_id)
     if not channel:
@@ -412,8 +539,8 @@ class ResolveChatRequest(BaseModel):
     identifier: str
 
 _CHAT_DISCOVERY_ERRORS = {
-    400: {"description": "Telegram refused the request (bot without access, active webhook, rate limit or network)"},
-    404: {"description": "Profile not found"},
+    400: {"model": ErrorResponse, "description": "Telegram refused the request (bot without access, active webhook, rate limit or network)"},
+    404: {"model": ErrorResponse, "description": "Profile not found"},
 }
 
 def get_chat_discovery_gateway() -> IChatDiscoveryGateway:
@@ -431,7 +558,7 @@ def _chat_response(chat: DiscoveredChat) -> dict:
 @app.post(
     "/api/v1/profiles/{profile_id}/discover-chats",
     response_model=DiscoverChatsResponse,
-    responses=_CHAT_DISCOVERY_ERRORS,
+    responses={**_CHAT_DISCOVERY_ERRORS, **_ERR_422},
 )
 async def discover_chats(profile_id: str, gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway)):
     try:
@@ -445,7 +572,7 @@ async def discover_chats(profile_id: str, gateway: IChatDiscoveryGateway = Depen
 @app.post(
     "/api/v1/profiles/{profile_id}/resolve-chat",
     response_model=DiscoveredChatResponse,
-    responses={**_CHAT_DISCOVERY_ERRORS, 422: {"description": "Invalid chat identifier or invite link"}},
+    responses={**_CHAT_DISCOVERY_ERRORS, 422: {"model": ErrorResponse, "description": "Invalid chat identifier or invite link"}},
 )
 async def resolve_chat(
     profile_id: str,
@@ -462,7 +589,10 @@ async def resolve_chat(
         raise HTTPException(status_code=400, detail=str(e))
     return _chat_response(chat)
 
-@app.get("/api/v1/profiles/{profile_id}/broadcasts")
+@app.get(
+    "/api/v1/profiles/{profile_id}/broadcasts",
+    response_model=List[BroadcastHistoryItemResponse],
+)
 async def list_profile_broadcasts(profile_id: str):
     broadcasts = await broadcast_repo.list_by_profile(profile_id)
     return [
@@ -510,7 +640,11 @@ def update_progress(
         "updated_at": now,
     }
 
-@app.get("/api/v1/broadcasts/progress/{tracking_id}")
+@app.get(
+    "/api/v1/broadcasts/progress/{tracking_id}",
+    response_model=BroadcastProgressResponse,
+    responses=_ERR_404,
+)
 async def get_broadcast_progress(tracking_id: str):
     if tracking_id not in upload_progress_tracker:
         raise HTTPException(
@@ -586,7 +720,12 @@ def normalize_video_dimensions(
     return width, height
 
 
-@app.post("/api/v1/broadcasts", status_code=status.HTTP_201_CREATED)
+@app.post(
+    "/api/v1/broadcasts",
+    status_code=status.HTTP_201_CREATED,
+    response_model=Union[ScheduledBroadcastCreateResponse, ImmediateBroadcastCreateResponse],
+    responses={**_ERR_404, **_ERR_413, **_ERR_422},
+)
 async def create_broadcast(
     profile_id: str = Form(...),
     target_channel_ids: str = Form(...), # JSON string lista de chat_ids
@@ -846,7 +985,11 @@ def _format_datetime_utc(dt: Optional[datetime]) -> Optional[str]:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-@app.get("/api/v1/profiles/{profile_id}/scheduled-broadcasts")
+@app.get(
+    "/api/v1/profiles/{profile_id}/scheduled-broadcasts",
+    response_model=List[ScheduledBroadcastResponse],
+    responses=_ERR_404,
+)
 async def list_profile_scheduled_broadcasts(profile_id: str):
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
@@ -875,7 +1018,11 @@ async def list_profile_scheduled_broadcasts(profile_id: str):
         for b in broadcasts
     ]
 
-@app.delete("/api/v1/broadcasts/{broadcast_id}/cancel")
+@app.delete(
+    "/api/v1/broadcasts/{broadcast_id}/cancel",
+    response_model=CancelBroadcastResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
 async def cancel_broadcast(broadcast_id: str):
     broadcast = await broadcast_repo.get_by_id(broadcast_id)
     if not broadcast:
@@ -905,7 +1052,11 @@ async def cancel_broadcast(broadcast_id: str):
         "message": "Broadcast successfully cancelled and resources released",
     }
 
-@app.patch("/api/v1/broadcasts/{broadcast_id}")
+@app.patch(
+    "/api/v1/broadcasts/{broadcast_id}",
+    response_model=ScheduledBroadcastResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
 async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
     broadcast = await broadcast_repo.get_by_id(broadcast_id)
     if not broadcast:
