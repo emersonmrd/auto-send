@@ -16,6 +16,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
+from urllib.parse import unquote
 
 MAX_BACKUPS = 3
 
@@ -45,7 +46,17 @@ def _table_columns(cursor: sqlite3.Cursor, table_name: str) -> set[str]:
     return {row[1] for row in cursor.fetchall()}
 
 
+def _table_exists(cursor: sqlite3.Cursor, table_name: str) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+        (table_name,),
+    )
+    return cursor.fetchone() is not None
+
+
 def _add_column_if_missing(cursor: sqlite3.Cursor, table_name: str, col_name: str, col_def: str) -> None:
+    if not _table_exists(cursor, table_name):
+        return
     if col_name not in _table_columns(cursor, table_name):
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
 
@@ -56,24 +67,33 @@ def _migration_001_broadcast_video_metadata(cursor: sqlite3.Cursor) -> None:
         ("media_width", "INTEGER"),
         ("media_height", "INTEGER"),
         ("media_thumbnail_path", "VARCHAR"),
+        ("created_at", "DATETIME"),
     ):
         _add_column_if_missing(cursor, "broadcasts", col_name, col_def)
+    if _table_exists(cursor, "broadcasts"):
+        cursor.execute("UPDATE broadcasts SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
 
 
 def _migration_002_channel_invite_link_and_active(cursor: sqlite3.Cursor) -> None:
     for col_name, col_def in (
         ("invite_link", "VARCHAR DEFAULT ''"),
         ("is_active", "BOOLEAN DEFAULT 1"),
+        ("created_at", "DATETIME"),
     ):
         _add_column_if_missing(cursor, "channels", col_name, col_def)
+    if _table_exists(cursor, "channels"):
+        cursor.execute("UPDATE channels SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
 
 
 def _migration_003_profile_avatar_and_active(cursor: sqlite3.Cursor) -> None:
     for col_name, col_def in (
         ("avatar_url", "VARCHAR"),
         ("is_active", "BOOLEAN DEFAULT 1"),
+        ("created_at", "DATETIME"),
     ):
         _add_column_if_missing(cursor, "profiles", col_name, col_def)
+    if _table_exists(cursor, "profiles"):
+        cursor.execute("UPDATE profiles SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL")
 
 
 def _migration_004_broadcast_delivery_results(cursor: sqlite3.Cursor) -> None:
@@ -126,6 +146,7 @@ def sqlite_file_from_url(database_url: str) -> Path | None:
         raw = database_url[len(alt_prefix) :]
     if not raw or raw == ":memory:" or raw.startswith("file::memory:"):
         return None
+    raw = unquote(raw)
     return Path(raw).resolve()
 
 

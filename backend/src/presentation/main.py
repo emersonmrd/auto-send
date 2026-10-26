@@ -195,7 +195,22 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning(f"Erro ao finalizar Telegram Bot API local: {exc}")
 
-app = FastAPI(title="Auto-Send Multi-Bot API", version="0.4.0", lifespan=lifespan)
+def _resolve_app_version() -> str:
+    try:
+        import tomllib
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        if pyproject.is_file():
+            return tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version
+        return version("auto-send-backend")
+    except Exception:
+        pass
+    return "0.5.0"
+
+app = FastAPI(title="Auto-Send Multi-Bot API", version=_resolve_app_version(), lifespan=lifespan)
 
 def allowed_hosts(extra: str) -> set[str]:
     """Nomes pelos quais a API aceita ser chamada: loopback, mais os de ALLOWED_HOSTS (proxy reverso, VPS)."""
