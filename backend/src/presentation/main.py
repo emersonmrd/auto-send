@@ -53,6 +53,13 @@ from src.infrastructure.portable_data import (
     open_data_directory,
     resolve_data_dir,
 )
+from src.infrastructure.instance_lock import (
+    APP_IDENTIFIER,
+    remove_lock_pid,
+    resolve_startup_instance,
+    write_lock_pid,
+)
+import atexit
 import sys
 import threading
 import webbrowser
@@ -213,6 +220,8 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    app: str
+    version: str
 
 class OpenDataDirResponse(BaseModel):
     path: str
@@ -335,7 +344,7 @@ _ERR_422 = {422: {"model": ErrorResponse, "description": "Invalid payload or for
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "app": APP_IDENTIFIER, "version": app.version}
 
 @app.post("/api/v1/system/open-data-dir", response_model=OpenDataDirResponse)
 async def open_system_data_dir():
@@ -1152,6 +1161,22 @@ def run_app():
     data_dir = resolve_data_dir(default_db_url=DB_PATH)
     import_legacy_data_if_needed(data_dir, Path.cwd())
 
+    decision = resolve_startup_instance(
+        data_dir,
+        app.version,
+        find_port_fn=lambda start, attempts: find_available_port(start, max_attempts=attempts, host="127.0.0.1"),
+    )
+    if decision.action == "reuse_existing":
+        if decision.url:
+            webbrowser.open(decision.url)
+        return
+    if decision.action == "abort" or decision.port is None:
+        print(
+            "[ERRO] Nenhuma porta livre encontrada entre 8000 e 8020 (ou inicialização cancelada).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     try:
         asyncio.run(init_db())
     except DatabaseMigrationError as exc:
@@ -1162,20 +1187,21 @@ def run_app():
         )
         sys.exit(1)
 
-    backend_port = find_available_port(8000, max_attempts=20, host="127.0.0.1")
-    if backend_port is None:
-        print(
-            "[ERRO] Nenhuma porta livre encontrada entre 8000 e 8020. Feche alguns programas e tente novamente.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    backend_port = decision.port
+    browser_url = f"http://127.0.0.1:{backend_port}"
+    current_pid = os.getpid()
+    write_lock_pid(data_dir, current_pid)
+    atexit.register(remove_lock_pid, data_dir, current_pid)
 
     def _open_browser():
         time.sleep(1.5)
-        webbrowser.open(f"http://localhost:{backend_port}")
+        webbrowser.open(browser_url)
 
     threading.Thread(target=_open_browser, daemon=True).start()
-    uvicorn.run(app, host="127.0.0.1", port=backend_port, log_level="info")
+    try:
+        uvicorn.run(app, host="127.0.0.1", port=backend_port, log_level="info")
+    finally:
+        remove_lock_pid(data_dir, current_pid)
 
 
 if __name__ == "__main__":

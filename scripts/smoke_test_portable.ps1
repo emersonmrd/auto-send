@@ -186,7 +186,11 @@ while ((Get-Date) -lt $deadline -and -not $launcher.HasExited) {
     foreach ($port in 8001..8020) {
         try {
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/health" -TimeoutSec 2
-            if ($health.status -eq 'healthy') { $base = "http://127.0.0.1:$port"; $healthy = $true; break }
+            if ($health.status -eq 'healthy' -and $health.app -eq 'auto-send' -and $health.version) {
+                $base = "http://127.0.0.1:$port"
+                $healthy = $true
+                break
+            }
         } catch { }
     }
     if ($healthy) { break }
@@ -245,6 +249,37 @@ $blocker.Stop()
 
 # O launcher pode ja ter terminado (ex.: sem Python); um taskkill sem alvo nao e falha do teste.
 if (-not $launcher.HasExited) { cmd.exe /c "taskkill /PID $($launcher.Id) /T /F >NUL 2>&1" }
+
+# Issue #29: segunda inicializacao com o Auto-Send ja aberto na porta 8000 nao sobe outra instancia.
+$logPrimary = Join-Path $WorkDir 'launcher-primary.log'
+$primary = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+    -ArgumentList '/c', "Iniciar-AutoSend.bat < NUL > `"$logPrimary`" 2>&1"
+try {
+    $primaryReady = $false
+    $deadline2 = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline2 -and -not $primary.HasExited) {
+        try {
+            $h = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/v1/health' -TimeoutSec 2
+            if ($h.status -eq 'healthy' -and $h.app -eq 'auto-send') { $primaryReady = $true; break }
+        } catch { }
+        Start-Sleep -Seconds 1
+    }
+    Check 'segunda inicializacao com o app ja aberto na 8000 nao sobe outra instancia' {
+        if (-not $primaryReady) { throw 'primeira instancia nao subiu na porta 8000' }
+        $logSecond = Join-Path $WorkDir 'launcher-second.log'
+        $second = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+            -ArgumentList '/c', "Iniciar-AutoSend.bat < NUL > `"$logSecond`" 2>&1"
+        if (-not $second.WaitForExit(30000)) {
+            cmd.exe /c "taskkill /PID $($second.Id) /T /F >NUL 2>&1"
+            throw 'segunda instancia ficou presa em vez de reutilizar a aberta'
+        }
+        $outSecond = Get-Content $logSecond -Raw
+        if ($outSecond -notmatch '127\.0\.0\.1:8000') { throw "saida inesperada:`n$outSecond" }
+        '(reutilizou http://127.0.0.1:8000)'
+    }
+} finally {
+    if (-not $primary.HasExited) { cmd.exe /c "taskkill /PID $($primary.Id) /T /F >NUL 2>&1" }
+}
 
 if ($failures.Count -gt 0) {
     Write-Host "`n===== launcher.log ====="

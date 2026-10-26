@@ -19,6 +19,10 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - O painel de busca de canais orienta a publicar uma mensagem no canal antes de buscar e, com a lista vazia, aponta o link de um post ou o ID (#12).
 - CI: a mutação do domínio, no PR, muta só os arquivos de domínio alterados (domínio inteiro quando um teste de domínio ou o `pyproject.toml` muda, no PR de release e na `main`), guarda o cache do mutmut entre execuções e publica os sobreviventes no resumo do job. O `verify.sh` aplica a mesma seleção e passa a considerar mudanças não commitadas (#26).
 - Todas as 17 rotas da API declaram `response_model` (Pydantic) e os códigos de erro possíveis no OpenAPI, espelhados em `frontend/src/types/index.ts` e validados por `response_schema_conformance` no Schemathesis, sem alterar os campos já devolvidos (#3).
+- Inicialização do pacote portátil e `/api/v1/health` (#29):
+  - `GET /api/v1/health` passa a devolver `{"status": "healthy", "app": "auto-send", "version": "<versão>"}`.
+  - O launcher abre o navegador em `http://127.0.0.1:<porta>` (em vez de `localhost`), confere portas livres em IPv4 (`127.0.0.1`) e IPv6 (`::1`) e grava o PID ativo em `%LOCALAPPDATA%\Auto-Send\autosend.pid` (removido ao fechar).
+  - Se o Auto-Send da mesma versão já estiver aberto na porta 8000, abre o navegador nele sem subir outra instância; se houver instância de outra versão ou travada, pergunta se deve encerrar apenas o PID da própria trava; se for outro programa, usa a próxima porta livre.
 
 ### Removed
 - Dependências `aiogram` e `aiofiles` do backend, declaradas sem nenhum uso: saem da imagem Docker e do pacote portátil junto com 9 dependências transitivas (`aiohttp` e afins). Um teste reprova dependência de runtime que o `src/` não usa (#4).

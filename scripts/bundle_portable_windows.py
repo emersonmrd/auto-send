@@ -119,7 +119,7 @@ O que vai acontecer:
 2. O servidor local do Auto-Send sera iniciado em segundo plano na porta 8000
    (se ela estiver ocupada, na proxima porta livre, ate a 8020).
 3. Seu navegador de internet abrira automaticamente na tela do sistema,
-   normalmente em http://localhost:8000
+   normalmente em http://127.0.0.1:8000
 4. Uma janela preta (prompt de comando) ficara aberta informando que o
    sistema esta ativo.
 
