@@ -304,7 +304,22 @@ jobs:
           cd frontend
           npm audit --omit=dev --audit-level=high
 
-      - name: Scan git history for secrets (gitleaks)
+      # No PR a action varre só os commits do PR. No push ela verifica 0 commits (#41), por isso o passo abaixo.
+      - name: Scan pull request commits for secrets (gitleaks)
+        if: github.event_name == 'pull_request'
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Mesma versão e checksum do scripts/dev/verify.sh (um teste confere que os dois batem).
+      - name: Scan the whole git history for secrets (gitleaks)
+        if: github.event_name != 'pull_request'
+        env:
+          GITLEAKS_VERSION: "8.24.3"
+          GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
+        run: |
+          tgz="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -fsSL -o "$tgz" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $tgz" | sha256sum -c -
+          tar -xzf "$tgz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --exit-code 1 .
