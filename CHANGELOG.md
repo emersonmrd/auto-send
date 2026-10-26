@@ -16,6 +16,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
   - Agendamentos vencidos dentro da janela disparam normalmente; acima da janela (no startup ou após suspensão do PC), vão para `MISFIRED` em vez de serem enviados fora de hora.
   - O arquivo temporário de mídia é mantido enquanto o agendamento estiver `MISFIRED`, sendo apagado ao enviar ou descartar.
   - Na interface, um banner não bloqueante avisa sobre agendamentos expirados e a fila exibe os itens `MISFIRED` no topo com o selo "Expirado" e as ações **Enviar agora** (`POST /api/v1/broadcasts/{broadcast_id}/dispatch-now`), **Reagendar** (`PATCH /api/v1/broadcasts/{broadcast_id}`) e **Descartar** (`DELETE /api/v1/broadcasts/{broadcast_id}/cancel`).
+- Verificação de permissão de administrador no cadastro e na edição de canal (#2):
+  - `POST /api/v1/profiles/{profile_id}/channels` e `PUT /api/v1/channels/{channel_id}` (quando o `chat_id` muda) consultam `getMe` + `getChatMember` no Telegram para confirmar que o bot do perfil é administrador com permissão de publicar (`can_post_messages`).
+  - Se o bot não estiver no canal ou não puder publicar, responde `400 {"detail": "Bot is not administrator in the channel"}`; se o Telegram estiver inacessível (rede, timeout, 429, 5xx ou circuito aberto), responde `503 {"detail": "Could not reach Telegram, try again"}` sem gravar o canal.
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).

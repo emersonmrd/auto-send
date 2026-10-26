@@ -19,7 +19,11 @@ def future_at(day: int, time: str) -> str:
     return f"{(_FUTURE_BASE + _timedelta(days=day)).isoformat()}T{time}Z"
 
 @pytest_asyncio.fixture(autouse=True)
-async def setup_db():
+async def setup_db(monkeypatch):
+    async def _default_can_post(bot_token: str, chat_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(telegram_gateway, "ensure_bot_can_post", _default_can_post)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield

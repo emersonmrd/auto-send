@@ -4,7 +4,13 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 import httpx
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
-from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway, WebhookActiveError
+from src.domain.ports.chat_discovery_gateway import (
+    BotNotChannelAdminError,
+    ChatDiscoveryError,
+    IChatDiscoveryGateway,
+    TelegramUnavailableError,
+    WebhookActiveError,
+)
 from src.domain.ports.telegram_gateway import ITelegramGateway
 from src.domain.broadcast.broadcast_message import BroadcastMessage, DispatchStrategy, MediaType
 from src.infrastructure.progress_reader import ProgressFileReader
@@ -332,6 +338,46 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         if discovered is None:
             raise ChatDiscoveryError(f"{identifier.as_chat_id()} is not a channel or group")
         return discovered
+
+    async def ensure_bot_can_post(self, bot_token: str, chat_id: str) -> None:
+        me = await self._call_member_api(bot_token, "getMe", {})
+        bot_id = me.get("id") if isinstance(me, dict) else None
+        if not bot_id:
+            raise TelegramUnavailableError("Could not reach Telegram, try again")
+        member = await self._call_member_api(
+            bot_token,
+            "getChatMember",
+            {"chat_id": chat_id, "user_id": str(bot_id)},
+        )
+        status = member.get("status") if isinstance(member, dict) else None
+        if status == "creator":
+            return
+        if status == "administrator" and member.get("can_post_messages", True) is not False:
+            return
+        raise BotNotChannelAdminError("Bot is not administrator in the channel")
+
+    async def _call_member_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
+        try:
+            await self.circuit_breaker.can_execute()
+        except CircuitBreakerOpenException:
+            raise TelegramUnavailableError("Could not reach Telegram, try again") from None
+        effective_url = await self.resolve_effective_base_url()
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{effective_url}/bot{bot_token}/{method}", params=params)
+        except httpx.RequestError as exc:
+            # A mensagem do httpx pode trazer a URL com o token: nunca vaza para logs nem exceções (§9).
+            await self.circuit_breaker.record_failure()
+            logger.error("Network error calling Telegram %s: %s", method, type(exc).__name__)
+            raise TelegramUnavailableError("Could not reach Telegram, try again") from None
+        data = await self._handle_response(resp)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise TelegramUnavailableError("Could not reach Telegram, try again")
+        if resp.is_success and not data.get("ok"):
+            raise TelegramUnavailableError("Could not reach Telegram, try again")
+        if not data.get("ok"):
+            raise BotNotChannelAdminError("Bot is not administrator in the channel")
+        return data.get("result")
 
     async def _call_chat_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
         await self.circuit_breaker.can_execute()

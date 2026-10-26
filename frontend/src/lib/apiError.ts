@@ -1,11 +1,19 @@
 // Corpo de erro da API (AGENTS.md §12): `detail` é string, ou a lista de um 422 de validação do Pydantic.
 type ValidationIssue = { msg?: unknown };
 
+const CHANNEL_REGISTRATION_ERRORS: Record<string, string> = {
+  "Bot is not administrator in the channel":
+    "O bot não é administrador deste canal. Adicione-o como administrador com permissão de publicar e tente de novo.",
+  "Could not reach Telegram, try again":
+    "Não foi possível falar com o Telegram agora. Tente de novo em instantes.",
+};
+
 export function extractApiError(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null | undefined)?.detail;
 
   if (typeof detail === "string" && detail.trim()) {
-    return detail;
+    const trimmed = detail.trim();
+    return CHANNEL_REGISTRATION_ERRORS[trimmed] ?? trimmed;
   }
   if (Array.isArray(detail)) {
     const messages = detail

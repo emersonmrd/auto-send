@@ -1,7 +1,12 @@
 import pytest
 import httpx
 from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
-from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, WebhookActiveError
+from src.domain.ports.chat_discovery_gateway import (
+    BotNotChannelAdminError,
+    ChatDiscoveryError,
+    TelegramUnavailableError,
+    WebhookActiveError,
+)
 from src.infrastructure.resilience import CircuitBreaker, CircuitBreakerOpenException, CircuitState
 from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
 from tests.unit.test_resilience import FakeClock
@@ -213,4 +218,106 @@ async def test_invalid_json_becomes_chat_discovery_error(monkeypatch):
 
     with pytest.raises(ChatDiscoveryError, match="Invalid JSON response"):
         await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+
+# Issue #2: Verificação de administrador com permissão de postar (getMe + getChatMember)
+@pytest.mark.parametrize(
+    "member_payload",
+    [
+        {"status": "creator"},
+        {"status": "administrator", "can_post_messages": True},
+        {"status": "administrator"},
+    ],
+)
+async def test_ensure_bot_can_post_calls_get_me_and_get_chat_member_and_succeeds_for_admin_or_creator(
+    monkeypatch, member_payload
+):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 123456789, "is_bot": True, "username": "acme_bot"}})
+        if req.url.path.endswith("/getChatMember"):
+            return httpx.Response(200, json={"ok": True, "result": member_payload})
+        return httpx.Response(404)
+
+    requests = use_transport(monkeypatch, handler)
+    await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+
+    assert [r.url.path for r in requests] == [f"/bot{TOKEN}/getMe", f"/bot{TOKEN}/getChatMember"]
+    assert requests[1].url.params["chat_id"] == "-1001234567890"
+    assert requests[1].url.params["user_id"] == "123456789"
+
+
+@pytest.mark.parametrize(
+    "member_payload",
+    [
+        {"status": "administrator", "can_post_messages": False},
+        {"status": "member"},
+        {"status": "restricted"},
+        {"status": "left"},
+        {"status": "kicked"},
+    ],
+)
+async def test_ensure_bot_can_post_rejects_non_admin_or_admin_without_post_permission(monkeypatch, member_payload):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 123456789}})
+        return httpx.Response(200, json={"ok": True, "result": member_payload})
+
+    use_transport(monkeypatch, handler)
+    with pytest.raises(BotNotChannelAdminError, match=r"^Bot is not administrator in the channel$") as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert TOKEN not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "status, description",
+    [
+        (400, "Bad Request: chat not found"),
+        (401, "Unauthorized"),
+        (403, "Forbidden: bot is not a member of the channel chat"),
+    ],
+)
+async def test_ensure_bot_can_post_maps_400_401_403_to_bot_not_channel_admin_without_token(
+    monkeypatch, status, description
+):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 123456789}})
+        return httpx.Response(status, json={"ok": False, "error_code": status, "description": description})
+
+    use_transport(monkeypatch, handler)
+    with pytest.raises(BotNotChannelAdminError, match=r"^Bot is not administrator in the channel$") as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert TOKEN not in str(exc.value)
+
+
+@pytest.mark.parametrize("status", [429, 500, 502])
+async def test_ensure_bot_can_post_maps_429_and_5xx_to_telegram_unavailable_and_updates_circuit(monkeypatch, status):
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0, time_func=FakeClock().time)
+    use_transport(
+        monkeypatch,
+        lambda r: httpx.Response(status, json={"ok": False, "error_code": status, "description": "Telegram Down"}),
+    )
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org", circuit_breaker=cb)
+
+    with pytest.raises(TelegramUnavailableError, match=r"^Could not reach Telegram, try again$") as exc:
+        await gateway.ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert TOKEN not in str(exc.value)
+    assert cb.state == CircuitState.OPEN
+
+
+async def test_ensure_bot_can_post_maps_timeout_to_telegram_unavailable_without_token(monkeypatch):
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0, time_func=FakeClock().time)
+
+    def raise_timeout(request: httpx.Request):
+        raise httpx.ConnectTimeout(f"Timed out calling {request.url}")
+
+    use_transport(monkeypatch, raise_timeout)
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org", circuit_breaker=cb)
+
+    with pytest.raises(TelegramUnavailableError, match=r"^Could not reach Telegram, try again$") as exc:
+        await gateway.ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert TOKEN not in str(exc.value)
+    assert "SecretToken" not in str(exc.value)
+    assert cb.state == CircuitState.OPEN
 

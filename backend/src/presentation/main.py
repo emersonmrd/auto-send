@@ -27,7 +27,12 @@ from src.application.errors import ProfileNotFoundError
 from src.application.resolve_chat_use_case import ResolveChatUseCase
 from src.domain.channels.channel import Channel
 from src.domain.channels.chat_discovery import DiscoveredChat
-from src.domain.ports.chat_discovery_gateway import ChatDiscoveryError, IChatDiscoveryGateway
+from src.domain.ports.chat_discovery_gateway import (
+    BotNotChannelAdminError,
+    ChatDiscoveryError,
+    IChatDiscoveryGateway,
+    TelegramUnavailableError,
+)
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.profiles.profile import Profile
 from src.infrastructure.in_memory_repositories import (
@@ -341,6 +346,10 @@ _ERR_400 = {400: {"model": ErrorResponse, "description": "External rule or Teleg
 _ERR_404 = {404: {"model": ErrorResponse, "description": "Resource not found"}}
 _ERR_413 = {413: {"model": ErrorResponse, "description": "Media file exceeds upload limit"}}
 _ERR_422 = {422: {"model": ErrorResponse, "description": "Invalid payload or forbidden state transition"}}
+_ERR_503 = {503: {"model": ErrorResponse, "description": "Could not reach Telegram, try again"}}
+
+def get_chat_discovery_gateway() -> IChatDiscoveryGateway:
+    return telegram_gateway
 
 @app.get("/api/v1/health", response_model=HealthResponse)
 async def health_check():
@@ -466,13 +475,17 @@ async def list_channels(profile_id: str):
     "/api/v1/profiles/{profile_id}/channels",
     status_code=status.HTTP_201_CREATED,
     response_model=ChannelCreateResponse,
-    responses={**_ERR_404, **_ERR_422},
+    responses={**_ERR_400, **_ERR_404, **_ERR_422, **_ERR_503},
 )
-async def create_channel(profile_id: str, req: ChannelCreateRequest):
+async def create_channel(
+    profile_id: str,
+    req: ChannelCreateRequest,
+    gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway),
+):
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
     try:
         channel = Channel(
             id=str(uuid.uuid4()),
@@ -481,23 +494,36 @@ async def create_channel(profile_id: str, req: ChannelCreateRequest):
             chat_id=req.chat_id,
             invite_link=req.invite_link or "",
         )
-        await channel_repo.save(channel)
-        return {
-            "id": channel.id,
-            "profile_id": channel.profile_id,
-            "title": channel.title,
-            "chat_id": channel.chat_id,
-            "invite_link": channel.invite_link,
-        }
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        await gateway.ensure_bot_can_post(profile.credentials.token, channel.chat_id)
+    except BotNotChannelAdminError:
+        raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
+    except (TelegramUnavailableError, CircuitBreakerOpenException):
+        raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
+
+    await channel_repo.save(channel)
+    return {
+        "id": channel.id,
+        "profile_id": channel.profile_id,
+        "title": channel.title,
+        "chat_id": channel.chat_id,
+        "invite_link": channel.invite_link,
+    }
+
 
 @app.put(
     "/api/v1/channels/{channel_id}",
     response_model=ChannelUpdateResponse,
-    responses={**_ERR_404, **_ERR_422},
+    responses={**_ERR_400, **_ERR_404, **_ERR_422, **_ERR_503},
 )
-async def update_channel(channel_id: str, req: ChannelUpdateRequest):
+async def update_channel(
+    channel_id: str,
+    req: ChannelUpdateRequest,
+    gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway),
+):
     channel = await channel_repo.get_by_id(channel_id)
     if not channel:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
@@ -509,6 +535,17 @@ async def update_channel(channel_id: str, req: ChannelUpdateRequest):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Invalid Telegram Channel Chat ID format (must start with -100 followed by digits)",
         )
+
+    if req.telegram_channel_id != channel.chat_id:
+        profile = await profile_repo.get_by_id(channel.profile_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        try:
+            await gateway.ensure_bot_can_post(profile.credentials.token, req.telegram_channel_id)
+        except BotNotChannelAdminError:
+            raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
+        except (TelegramUnavailableError, CircuitBreakerOpenException):
+            raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
 
     channel.title = req.name
     channel.chat_id = req.telegram_channel_id
@@ -555,9 +592,6 @@ _CHAT_DISCOVERY_ERRORS = {
     400: {"model": ErrorResponse, "description": "Telegram refused the request (bot without access, active webhook, rate limit or network)"},
     404: {"model": ErrorResponse, "description": "Profile not found"},
 }
-
-def get_chat_discovery_gateway() -> IChatDiscoveryGateway:
-    return telegram_gateway
 
 def _chat_response(chat: DiscoveredChat) -> dict:
     return {

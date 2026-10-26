@@ -98,6 +98,23 @@ const server = http.createServer(async (req, res) => {
     if (CHATS_BY_ID[chatId]) return send(res, 200, { ok: true, result: CHATS_BY_ID[chatId] });
     return send(res, 400, { ok: false, error_code: 400, description: "Bad Request: chat not found" });
   }
+  if (method === "getChatMember") {
+    const chatId = url.searchParams.get("chat_id");
+    if (chatId === "-1009999999999") {
+      return send(res, 200, {
+        ok: true,
+        result: { status: "member", user: { id: Number(token.split(":")[0]), is_bot: true, first_name: "Bot de Teste" } },
+      });
+    }
+    return send(res, 200, {
+      ok: true,
+      result: {
+        status: "administrator",
+        can_post_messages: true,
+        user: { id: Number(token.split(":")[0]), is_bot: true, first_name: "Bot de Teste" },
+      },
+    });
+  }
   if (["sendMessage", "sendPhoto", "sendVideo"].includes(method)) {
     return send(res, 200, { ok: true, result: { message_id: nextMessageId++, chat: { id: Number(fields.chat_id) }, date: Math.floor(Date.now() / 1000) } });
   }
