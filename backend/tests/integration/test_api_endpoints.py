@@ -1572,3 +1572,132 @@ async def test_misfired_broadcast_appears_first_in_queue_and_supports_dispatch_n
     assert cancel_resp.json()["status"] == "CANCELLED"
     assert not media_2.exists()
     assert not thumb_2.exists()
+
+
+# Issue #28: Exclusões e edições de canal/perfil não deixam agendamentos órfãos
+@pytest.mark.asyncio
+async def test_channel_delete_and_edit_update_pending_broadcasts_and_block_on_dispatching(
+    client, monkeypatch, tmp_path
+):
+    from datetime import datetime, timedelta, timezone
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+    from src.presentation.main import scheduler_service
+
+    await _profile_for_upload(monkeypatch, "p-orphan-28")
+    now = datetime.now(timezone.utc)
+
+    chan_a = Channel(id="chan-a", profile_id="p-orphan-28", title="Canal A", chat_id="-1001111111111")
+    chan_b = Channel(id="chan-b", profile_id="p-orphan-28", title="Canal B", chat_id="-1002222222222")
+    await channel_repo.save(chan_a)
+    await channel_repo.save(chan_b)
+
+    media_only_a = tmp_path / "only_a.mp4"
+    media_only_a.write_bytes(b"video-a")
+
+    # b1: só Canal A -> será cancelado ao excluir Canal A
+    b_only_a = BroadcastMessage(
+        id="b-only-a",
+        profile_id="p-orphan-28",
+        target_channel_ids=["-1001111111111"],
+        text="Só para o Canal A",
+        media=MediaAttachment(file_path=str(media_only_a), media_type=MediaType.VIDEO, file_size=7),
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=now + timedelta(hours=1),
+    )
+    # b2: Canal A e Canal B -> perde o Canal A e continua só com o Canal B
+    b_a_and_b = BroadcastMessage(
+        id="b-a-and-b",
+        profile_id="p-orphan-28",
+        target_channel_ids=["-1001111111111", "-1002222222222"],
+        text="Para A e B",
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=now + timedelta(hours=2),
+    )
+    # b3: histórico COMPLETED -> não muda
+    b_history = BroadcastMessage(
+        id="b-history",
+        profile_id="p-orphan-28",
+        target_channel_ids=["-1001111111111"],
+        text="Já enviado",
+        status=BroadcastStatus.COMPLETED,
+    )
+    for b in (b_only_a, b_a_and_b, b_history):
+        await broadcast_repo.save(b)
+
+    scheduler_service.start()
+    try:
+        scheduler_service.schedule_broadcast("b-only-a", b_only_a.scheduled_at)
+        assert scheduler_service.scheduler.get_job("broadcast_b-only-a") is not None
+
+        # 1. Consulta agendamentos afetados para o modal de exclusão do Canal A
+        aff_resp = await client.get("/api/v1/channels/chan-a/affected-broadcasts")
+        assert aff_resp.status_code == 200
+        aff_data = aff_resp.json()
+        assert [i["id"] for i in aff_data["will_be_cancelled"]] == ["b-only-a"]
+        assert [i["id"] for i in aff_data["will_lose_target"]] == ["b-a-and-b"]
+
+        # 2. Se houver envio DISPATCHING para o Canal A, excluir ou trocar ID é bloqueado com 422
+        b_disp = BroadcastMessage(
+            id="b-disp-a",
+            profile_id="p-orphan-28",
+            target_channel_ids=["-1001111111111"],
+            text="Enviando agora",
+            status=BroadcastStatus.DISPATCHING,
+        )
+        await broadcast_repo.save(b_disp)
+
+        del_blocked = await client.delete("/api/v1/channels/chan-a")
+        assert del_blocked.status_code == 422
+        assert del_blocked.json() == {
+            "detail": "There is a broadcast currently dispatching. Wait for it to finish and try again."
+        }
+        put_blocked = await client.put(
+            "/api/v1/channels/chan-a",
+            json={"name": "Canal A", "telegram_channel_id": "-1003333333333"},
+        )
+        assert put_blocked.status_code == 422
+        prof_blocked = await client.delete("/api/v1/profiles/p-orphan-28")
+        assert prof_blocked.status_code == 422
+
+        # Finaliza o envio em andamento
+        b_disp.finish_dispatch(delivered=1, total=1)
+        await broadcast_repo.save(b_disp)
+
+        # 3. Confirma exclusão do Canal A: b-only-a é cancelado (job removido, mídia apagada) e b-a-and-b fica só com B
+        del_ok = await client.delete("/api/v1/channels/chan-a")
+        assert del_ok.status_code == 200
+        assert (await broadcast_repo.get_by_id("b-only-a")).status is BroadcastStatus.CANCELLED
+        assert scheduler_service.scheduler.get_job("broadcast_b-only-a") is None
+        assert not media_only_a.exists()
+
+        updated_ab = await broadcast_repo.get_by_id("b-a-and-b")
+        assert updated_ab.status is BroadcastStatus.SCHEDULED
+        assert updated_ab.target_channel_ids == ["-1002222222222"]
+
+        # Histórico continua intacto
+        assert (await broadcast_repo.get_by_id("b-history")).target_channel_ids == ["-1001111111111"]
+
+        # 4. Trocar o ID do Canal B atualiza os agendamentos pendentes para o ID novo
+        put_b = await client.put(
+            "/api/v1/channels/chan-b",
+            json={"name": "Canal B Novo", "telegram_channel_id": "-1005555555555"},
+        )
+        assert put_b.status_code == 200
+        assert (await broadcast_repo.get_by_id("b-a-and-b")).target_channel_ids == ["-1005555555555"]
+
+        # 5. Excluir o perfil cancela os agendamentos pendentes restantes e remove jobs/mídia
+        scheduler_service.schedule_broadcast("b-a-and-b", b_a_and_b.scheduled_at)
+        prof_aff = await client.get("/api/v1/profiles/p-orphan-28/affected-broadcasts")
+        assert prof_aff.status_code == 200
+        assert [i["id"] for i in prof_aff.json()["will_be_cancelled"]] == ["b-a-and-b"]
+
+        del_prof = await client.delete("/api/v1/profiles/p-orphan-28")
+        assert del_prof.status_code == 200
+        assert scheduler_service.scheduler.get_job("broadcast_b-a-and-b") is None
+    finally:
+        scheduler_service.shutdown(wait=False)

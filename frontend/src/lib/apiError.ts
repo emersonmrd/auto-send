@@ -6,6 +6,8 @@ const CHANNEL_REGISTRATION_ERRORS: Record<string, string> = {
     "O bot não é administrador deste canal. Adicione-o como administrador com permissão de publicar e tente de novo.",
   "Could not reach Telegram, try again":
     "Não foi possível falar com o Telegram agora. Tente de novo em instantes.",
+  "There is a broadcast currently dispatching. Wait for it to finish and try again.":
+    "Há um envio em andamento. Aguarde terminar e tente de novo.",
 };
 
 export function extractApiError(body: unknown, fallback: string): string {

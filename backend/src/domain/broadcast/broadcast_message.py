@@ -153,3 +153,45 @@ class BroadcastMessage:
             raise ValueError("Cannot update content of an in-flight, completed, or cancelled broadcast")
         self.text = text
         self.button = button
+
+    def is_pending_or_scheduled(self) -> bool:
+        return self.status in [
+            BroadcastStatus.PENDING,
+            BroadcastStatus.SCHEDULED,
+            BroadcastStatus.MISFIRED,
+        ]
+
+    def remove_target_channel(self, chat_id: str) -> bool:
+        if self.status == BroadcastStatus.DISPATCHING:
+            raise ValueError(
+                "There is a broadcast currently dispatching. Wait for it to finish and try again."
+            )
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot modify target channels of a completed, failed, or cancelled broadcast"
+            )
+        if chat_id not in self.target_channel_ids:
+            return False
+        self.target_channel_ids = [cid for cid in self.target_channel_ids if cid != chat_id]
+        if not self.target_channel_ids:
+            self.status = BroadcastStatus.CANCELLED
+        return True
+
+    def replace_target_channel(self, old_chat_id: str, new_chat_id: str) -> bool:
+        if self.status == BroadcastStatus.DISPATCHING:
+            raise ValueError(
+                "There is a broadcast currently dispatching. Wait for it to finish and try again."
+            )
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot modify target channels of a completed, failed, or cancelled broadcast"
+            )
+        if old_chat_id == new_chat_id or old_chat_id not in self.target_channel_ids:
+            return False
+        updated: List[str] = []
+        for cid in self.target_channel_ids:
+            replacement = new_chat_id if cid == old_chat_id else cid
+            if replacement not in updated:
+                updated.append(replacement)
+        self.target_channel_ids = updated
+        return True

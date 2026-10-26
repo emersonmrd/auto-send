@@ -121,6 +121,20 @@ export interface CancelBroadcastResponse {
   message: string;
 }
 
+export interface AffectedBroadcastItem {
+  id: string;
+  text_preview: string;
+  scheduled_at?: string | null;
+  status: string;
+  target_channel_ids: string[];
+}
+
+export interface AffectedBroadcastsResponse {
+  will_be_cancelled: AffectedBroadcastItem[];
+  will_lose_target: AffectedBroadcastItem[];
+  in_flight_count: number;
+}
+
 // POST /api/v1/profiles/{profile_id}/resolve-chat
 export interface DiscoveredChat {
   chat_id: string;

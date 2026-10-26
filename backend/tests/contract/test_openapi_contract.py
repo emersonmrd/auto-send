@@ -14,6 +14,8 @@ import schemathesis  # noqa: E402
 from schemathesis.checks import not_a_server_error, response_schema_conformance  # noqa: E402
 
 from src.presentation.main import (  # noqa: E402
+    AffectedBroadcastItemResponse,
+    AffectedBroadcastsResponse,
     BroadcastButtonResponse,
     BroadcastHistoryItemResponse,
     BroadcastMediaResponse,
@@ -64,6 +66,8 @@ _MODEL_TO_FRONTEND_INTERFACE = {
     BroadcastButtonResponse: "BroadcastButton",
     ScheduledBroadcastResponse: "ScheduledBroadcast",
     CancelBroadcastResponse: "CancelBroadcastResponse",
+    AffectedBroadcastItemResponse: "AffectedBroadcastItem",
+    AffectedBroadcastsResponse: "AffectedBroadcastsResponse",
 }
 
 

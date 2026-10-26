@@ -1,7 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { Profile, Channel, DiscoveredChat, ScheduledBroadcast } from "@/types";
+import {
+  Profile,
+  Channel,
+  DiscoveredChat,
+  ScheduledBroadcast,
+  AffectedBroadcastItem,
+  AffectedBroadcastsResponse,
+} from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
@@ -150,6 +157,30 @@ export default function Home() {
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
   const dismissConfirm = useCallback(() => setPendingConfirm(null), []);
   const [isDeletingProfile, setIsDeletingProfile] = useState(false);
+  const [affectedBroadcasts, setAffectedBroadcasts] = useState<AffectedBroadcastsResponse | null>(null);
+
+  const renderAffectedItemsList = (items: AffectedBroadcastItem[]) => {
+    const visible = items.slice(0, 5);
+    const remaining = items.length - visible.length;
+    return (
+      <ul className="mt-1.5 space-y-1 text-[11px] text-gray-300">
+        {visible.map((item) => {
+          const dt = item.scheduled_at
+            ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(
+                new Date(item.scheduled_at)
+              )
+            : "Sem data";
+          return (
+            <li key={item.id} className="truncate">
+              • <span className="font-mono text-[#71aaeb]">{dt}</span> —{" "}
+              {item.text_preview || "Mensagem sem texto"}
+            </li>
+          );
+        })}
+        {remaining > 0 && <li className="text-gray-400 italic">e mais {remaining}</li>}
+      </ul>
+    );
+  };
 
   // Metadados de Vídeo (HTML5 Video Element)
   const [videoMetadata, setVideoMetadata] = useState<{
@@ -1224,7 +1255,14 @@ export default function Home() {
   // Abrir Modal de Exclusão de Perfil
   const handleOpenDeleteProfile = (profile: Profile) => {
     setDeletingProfile(profile);
+    setAffectedBroadcasts(null);
     setShowDeleteProfileModal(true);
+    fetch(`${API_BASE_URL}/api/v1/profiles/${profile.id}/affected-broadcasts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AffectedBroadcastsResponse | null) => {
+        if (data) setAffectedBroadcasts(data);
+      })
+      .catch(() => null);
   };
 
   // Confirmar Exclusão do Perfil
@@ -1330,7 +1368,14 @@ export default function Home() {
     setEditingChannel(channel);
     setEditChannelTitle(channel.title);
     setEditChannelChatId(channel.chat_id);
+    setAffectedBroadcasts(null);
     setShowEditChannelModal(true);
+    fetch(`${API_BASE_URL}/api/v1/channels/${channel.id}/affected-broadcasts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AffectedBroadcastsResponse | null) => {
+        if (data) setAffectedBroadcasts(data);
+      })
+      .catch(() => null);
   };
 
   // Salvar Edição do Canal
@@ -1379,6 +1424,9 @@ export default function Home() {
         setSelectedChannelIds((prev) =>
           prev.map((id) => (id === oldChatId ? newChatId : id))
         );
+        if (oldChatId !== newChatId) {
+          await fetchScheduledQueue(selectedProfile.id);
+        }
       } else {
         const err = await res.json().catch(() => null);
         setFeedback({
@@ -1399,7 +1447,14 @@ export default function Home() {
   // Abrir Modal de Exclusão de Canal
   const handleOpenDeleteChannel = (channel: Channel) => {
     setDeletingChannel(channel);
+    setAffectedBroadcasts(null);
     setShowDeleteChannelModal(true);
+    fetch(`${API_BASE_URL}/api/v1/channels/${channel.id}/affected-broadcasts`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: AffectedBroadcastsResponse | null) => {
+        if (data) setAffectedBroadcasts(data);
+      })
+      .catch(() => null);
   };
 
   // Confirmar Exclusão de Canal
@@ -1431,6 +1486,7 @@ export default function Home() {
           setChannels((prev) => prev.filter((c) => c.id !== deletedId));
         }
         setSelectedChannelIds((prev) => prev.filter((id) => id !== deletedChatId));
+        await fetchScheduledQueue(selectedProfile.id);
       } else {
         const err = await res.json().catch(() => null);
         setFeedback({
@@ -2466,9 +2522,22 @@ export default function Home() {
             <p className="text-sm text-gray-200 mb-2 leading-relaxed">
               Tem certeza que deseja excluir o perfil <strong>{deletingProfile.name}</strong> (@{deletingProfile.bot_username || "bot"}) e todos os seus canais/histórico?
             </p>
-            <p className="text-xs text-gray-400 mb-6 leading-relaxed">
+            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
               Esta ação removerá todos os canais vinculados e agendamentos deste bot permanentemente.
             </p>
+            {affectedBroadcasts && affectedBroadcasts.will_be_cancelled.length > 0 && (
+              <div
+                data-testid="profile-delete-affected-broadcasts"
+                className="mb-5 bg-red-950/50 border border-red-500/40 rounded-lg p-3 text-xs text-red-200"
+              >
+                <strong className="block font-semibold">
+                  {affectedBroadcasts.will_be_cancelled.length === 1
+                    ? "1 agendamento pendente será cancelado:"
+                    : `${affectedBroadcasts.will_be_cancelled.length} agendamentos pendentes serão cancelados:`}
+                </strong>
+                {renderAffectedItemsList(affectedBroadcasts.will_be_cancelled)}
+              </div>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"
@@ -2675,6 +2744,27 @@ export default function Home() {
                   O bot do perfil deve permanecer como Administrador neste canal.
                 </span>
               </div>
+              {editChannelChatId.trim() !== editingChannel.chat_id &&
+                affectedBroadcasts &&
+                affectedBroadcasts.will_be_cancelled.length + affectedBroadcasts.will_lose_target.length > 0 && (() => {
+                  const allAffected = [
+                    ...affectedBroadcasts.will_be_cancelled,
+                    ...affectedBroadcasts.will_lose_target,
+                  ];
+                  return (
+                    <div
+                      data-testid="channel-edit-affected-broadcasts"
+                      className="bg-amber-950/50 border border-amber-500/40 rounded-lg p-3 text-xs text-amber-200"
+                    >
+                      <strong className="block font-semibold">
+                        {allAffected.length === 1
+                          ? "1 agendamento pendente passará a usar o novo ID:"
+                          : `${allAffected.length} agendamentos pendentes passarão a usar o novo ID:`}
+                      </strong>
+                      {renderAffectedItemsList(allAffected)}
+                    </div>
+                  );
+                })()}
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button
@@ -2722,9 +2812,38 @@ export default function Home() {
             <p className="text-sm text-gray-200 mb-2 leading-relaxed">
               Deseja realmente remover o canal <strong>{deletingChannel.title}</strong> deste bot?
             </p>
-            <p className="text-xs text-gray-400 mb-6 leading-relaxed">
+            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
               O bot não enviará mais transmissões para este Chat ID ({deletingChannel.chat_id}).
             </p>
+            {affectedBroadcasts &&
+              (affectedBroadcasts.will_be_cancelled.length > 0 ||
+                affectedBroadcasts.will_lose_target.length > 0) && (
+                <div
+                  data-testid="channel-delete-affected-broadcasts"
+                  className="mb-5 space-y-3 bg-[#202b36] border border-red-500/30 rounded-lg p-3 text-xs"
+                >
+                  {affectedBroadcasts.will_be_cancelled.length > 0 && (
+                    <div className="text-red-200">
+                      <strong className="block font-semibold">
+                        {affectedBroadcasts.will_be_cancelled.length === 1
+                          ? "1 agendamento será cancelado (tinha só este canal):"
+                          : `${affectedBroadcasts.will_be_cancelled.length} agendamentos serão cancelados (tinham só este canal):`}
+                      </strong>
+                      {renderAffectedItemsList(affectedBroadcasts.will_be_cancelled)}
+                    </div>
+                  )}
+                  {affectedBroadcasts.will_lose_target.length > 0 && (
+                    <div className="text-amber-200">
+                      <strong className="block font-semibold">
+                        {affectedBroadcasts.will_lose_target.length === 1
+                          ? "1 agendamento perde este destino (continua nos demais canais):"
+                          : `${affectedBroadcasts.will_lose_target.length} agendamentos perdem este destino (continuam nos demais canais):`}
+                      </strong>
+                      {renderAffectedItemsList(affectedBroadcasts.will_lose_target)}
+                    </div>
+                  )}
+                </div>
+              )}
             <div className="flex justify-end gap-2">
               <button
                 type="button"

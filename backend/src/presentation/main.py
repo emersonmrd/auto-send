@@ -342,6 +342,43 @@ class CancelBroadcastResponse(BaseModel):
     status: str
     message: str
 
+
+class AffectedBroadcastItemResponse(BaseModel):
+    id: str
+    text_preview: str
+    scheduled_at: Optional[str] = None
+    status: str
+    target_channel_ids: List[str]
+
+
+class AffectedBroadcastsResponse(BaseModel):
+    will_be_cancelled: List[AffectedBroadcastItemResponse]
+    will_lose_target: List[AffectedBroadcastItemResponse]
+    in_flight_count: int
+
+
+def _cleanup_broadcast_media(broadcast: BroadcastMessage) -> None:
+    if broadcast.media:
+        for path in (broadcast.media.file_path, broadcast.media.thumbnail_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
+def _to_affected_item(b: BroadcastMessage) -> dict:
+    preview = (b.text or "").strip().replace("\n", " ")
+    if len(preview) > 60:
+        preview = preview[:60] + "…"
+    return {
+        "id": b.id,
+        "text_preview": preview,
+        "scheduled_at": _format_datetime_utc(b.scheduled_at),
+        "status": b.status.value,
+        "target_channel_ids": list(b.target_channel_ids),
+    }
+
 _ERR_400 = {400: {"model": ErrorResponse, "description": "External rule or Telegram validation failed"}}
 _ERR_404 = {404: {"model": ErrorResponse, "description": "Resource not found"}}
 _ERR_413 = {413: {"model": ErrorResponse, "description": "Media file exceeds upload limit"}}
@@ -443,16 +480,51 @@ async def update_profile(profile_id: str, req: ProfileCreateRequest):
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
+@app.get(
+    "/api/v1/profiles/{profile_id}/affected-broadcasts",
+    response_model=AffectedBroadcastsResponse,
+    responses=_ERR_404,
+)
+async def get_profile_affected_broadcasts(profile_id: str):
+    profile = await profile_repo.get_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+
+    all_broadcasts = await broadcast_repo.list_by_profile(profile_id)
+    in_flight_count = sum(1 for b in all_broadcasts if b.status == BroadcastStatus.DISPATCHING)
+    pending = [b for b in all_broadcasts if b.is_pending_or_scheduled()]
+    pending.sort(key=lambda b: (b.scheduled_at or b.created_at))
+    return {
+        "will_be_cancelled": [_to_affected_item(b) for b in pending],
+        "will_lose_target": [],
+        "in_flight_count": in_flight_count,
+    }
+
+
 @app.delete(
     "/api/v1/profiles/{profile_id}",
     response_model=DeleteResourceResponse,
-    responses=_ERR_404,
+    responses={**_ERR_404, **_ERR_422},
 )
 async def delete_profile(profile_id: str):
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
-    
+
+    all_broadcasts = await broadcast_repo.list_by_profile(profile_id)
+    if any(b.status == BroadcastStatus.DISPATCHING for b in all_broadcasts):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="There is a broadcast currently dispatching. Wait for it to finish and try again.",
+        )
+
+    for b in all_broadcasts:
+        if b.is_pending_or_scheduled():
+            b.cancel()
+            scheduler_service.cancel_scheduled_broadcast(b.id)
+            _cleanup_broadcast_media(b)
+            await broadcast_repo.save(b)
+
     await profile_repo.delete(profile_id)
     return {"message": "Profile deleted successfully", "id": profile_id}
 
@@ -514,6 +586,43 @@ async def create_channel(
     }
 
 
+@app.get(
+    "/api/v1/channels/{channel_id}/affected-broadcasts",
+    response_model=AffectedBroadcastsResponse,
+    responses=_ERR_404,
+)
+async def get_channel_affected_broadcasts(channel_id: str):
+    channel = await channel_repo.get_by_id(channel_id)
+    if not channel:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+
+    all_broadcasts = await broadcast_repo.list_by_profile(channel.profile_id)
+    in_flight_count = sum(
+        1
+        for b in all_broadcasts
+        if b.status == BroadcastStatus.DISPATCHING and channel.chat_id in b.target_channel_ids
+    )
+    will_be_cancelled = []
+    will_lose_target = []
+    pending = [
+        b
+        for b in all_broadcasts
+        if b.is_pending_or_scheduled() and channel.chat_id in b.target_channel_ids
+    ]
+    pending.sort(key=lambda b: (b.scheduled_at or b.created_at))
+    for b in pending:
+        remaining = [cid for cid in b.target_channel_ids if cid != channel.chat_id]
+        if not remaining:
+            will_be_cancelled.append(_to_affected_item(b))
+        else:
+            will_lose_target.append(_to_affected_item(b))
+    return {
+        "will_be_cancelled": will_be_cancelled,
+        "will_lose_target": will_lose_target,
+        "in_flight_count": in_flight_count,
+    }
+
+
 @app.put(
     "/api/v1/channels/{channel_id}",
     response_model=ChannelUpdateResponse,
@@ -536,7 +645,18 @@ async def update_channel(
             detail="Invalid Telegram Channel Chat ID format (must start with -100 followed by digits)",
         )
 
-    if req.telegram_channel_id != channel.chat_id:
+    old_chat_id = channel.chat_id
+    if req.telegram_channel_id != old_chat_id:
+        all_broadcasts = await broadcast_repo.list_by_profile(channel.profile_id)
+        if any(
+            b.status == BroadcastStatus.DISPATCHING and old_chat_id in b.target_channel_ids
+            for b in all_broadcasts
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="There is a broadcast currently dispatching. Wait for it to finish and try again.",
+            )
+
         profile = await profile_repo.get_by_id(channel.profile_id)
         if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
@@ -546,6 +666,10 @@ async def update_channel(
             raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
         except (TelegramUnavailableError, CircuitBreakerOpenException):
             raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
+
+        for b in all_broadcasts:
+            if b.is_pending_or_scheduled() and b.replace_target_channel(old_chat_id, req.telegram_channel_id):
+                await broadcast_repo.save(b)
 
     channel.title = req.name
     channel.chat_id = req.telegram_channel_id
@@ -562,12 +686,30 @@ async def update_channel(
 @app.delete(
     "/api/v1/channels/{channel_id}",
     response_model=DeleteResourceResponse,
-    responses=_ERR_404,
+    responses={**_ERR_404, **_ERR_422},
 )
 async def delete_channel(channel_id: str):
     channel = await channel_repo.get_by_id(channel_id)
     if not channel:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+
+    all_broadcasts = await broadcast_repo.list_by_profile(channel.profile_id)
+    if any(
+        b.status == BroadcastStatus.DISPATCHING and channel.chat_id in b.target_channel_ids
+        for b in all_broadcasts
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="There is a broadcast currently dispatching. Wait for it to finish and try again.",
+        )
+
+    for b in all_broadcasts:
+        if b.is_pending_or_scheduled() and b.remove_target_channel(channel.chat_id):
+            if b.status == BroadcastStatus.CANCELLED:
+                scheduler_service.cancel_scheduled_broadcast(b.id)
+                _cleanup_broadcast_media(b)
+            await broadcast_repo.save(b)
+
     await channel_repo.delete(channel_id)
     return {"message": "Channel deleted successfully", "id": channel_id}
 

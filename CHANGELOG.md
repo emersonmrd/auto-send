@@ -19,6 +19,10 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Verificação de permissão de administrador no cadastro e na edição de canal (#2):
   - `POST /api/v1/profiles/{profile_id}/channels` e `PUT /api/v1/channels/{channel_id}` (quando o `chat_id` muda) consultam `getMe` + `getChatMember` no Telegram para confirmar que o bot do perfil é administrador com permissão de publicar (`can_post_messages`).
   - Se o bot não estiver no canal ou não puder publicar, responde `400 {"detail": "Bot is not administrator in the channel"}`; se o Telegram estiver inacessível (rede, timeout, 429, 5xx ou circuito aberto), responde `503 {"detail": "Could not reach Telegram, try again"}` sem gravar o canal.
+- Prevenção de agendamentos órfãos ao excluir ou editar canais e perfis (#28):
+  - Novas rotas `GET /api/v1/channels/{channel_id}/affected-broadcasts` e `GET /api/v1/profiles/{profile_id}/affected-broadcasts` listam para os modais os agendamentos que serão cancelados e os que apenas perderão o destino (ou terão o destino atualizado).
+  - `DELETE /api/v1/channels/{channel_id}` remove o canal de `target_channel_ids` nos agendamentos pendentes e cancela (removendo o job e apagando a mídia) os que ficarem sem canal; `PUT /api/v1/channels/{channel_id}` atualiza o `chat_id` nos agendamentos pendentes; `DELETE /api/v1/profiles/{profile_id}` cancela os agendamentos pendentes e limpa os recursos antes de remover o perfil.
+  - Se houver envio `DISPATCHING` para o canal ou perfil, a exclusão ou troca de ID é recusada com `422`.
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).

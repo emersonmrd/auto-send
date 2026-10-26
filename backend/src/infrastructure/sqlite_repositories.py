@@ -220,6 +220,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                 b_url = broadcast.button.url if broadcast.button else None
 
                 if existing:
+                    existing.target_channel_ids = channels_json
                     existing.status = broadcast.status.value
                     existing.text = broadcast.text
                     existing.media_file_path = m_path

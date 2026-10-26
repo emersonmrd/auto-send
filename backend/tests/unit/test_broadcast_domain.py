@@ -323,6 +323,94 @@ def test_misfired_transitions_and_guards():
             invalid_msg.start_dispatch()
 
 
+def test_remove_and_replace_target_channel_on_broadcast_message():
+    for active_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = BroadcastMessage(
+            id="b-rem",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111", "-1002222222222"],
+            text="Multi-channel",
+            status=active_status,
+        )
+        assert msg.is_pending_or_scheduled() is True
+        # Canal que não está na lista retorna False sem alterar nada
+        assert msg.remove_target_channel("-1009999999999") is False
+        assert msg.target_channel_ids == ["-1001111111111", "-1002222222222"]
+        assert msg.status is active_status
+
+        # Remover um canal quando há outro mantém o status e reduz a lista
+        assert msg.remove_target_channel("-1001111111111") is True
+        assert msg.target_channel_ids == ["-1002222222222"]
+        assert msg.status is active_status
+
+        # Remover o último canal cancela o agendamento
+        assert msg.remove_target_channel("-1002222222222") is True
+        assert msg.target_channel_ids == []
+        assert msg.status is BroadcastStatus.CANCELLED
+        assert msg.is_pending_or_scheduled() is False
+
+    # Substituir canal preserva ordem e desduplica se o novo já estiver presente
+    for active_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg_rep = BroadcastMessage(
+            id="b-rep",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111", "-1002222222222"],
+            text="Replace test",
+            status=active_status,
+        )
+        assert msg_rep.replace_target_channel("-1001111111111", "-1001111111111") is False
+        assert msg_rep.replace_target_channel("-1009999999999", "-1003333333333") is False
+        assert msg_rep.replace_target_channel("-1001111111111", "-1003333333333") is True
+        assert msg_rep.target_channel_ids == ["-1003333333333", "-1002222222222"]
+        # Se substituir pelo outro canal que já está na lista, não duplica
+        assert msg_rep.replace_target_channel("-1003333333333", "-1002222222222") is True
+        assert msg_rep.target_channel_ids == ["-1002222222222"]
+
+    # Bloqueio em DISPATCHING
+    msg_disp = BroadcastMessage(
+        id="b-disp",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    assert msg_disp.is_pending_or_scheduled() is False
+    with pytest.raises(
+        ValueError,
+        match=r"^There is a broadcast currently dispatching\. Wait for it to finish and try again\.$",
+    ):
+        msg_disp.remove_target_channel("-1001111111111")
+    with pytest.raises(
+        ValueError,
+        match=r"^There is a broadcast currently dispatching\. Wait for it to finish and try again\.$",
+    ):
+        msg_disp.replace_target_channel("-1001111111111", "-1002222222222")
+
+    # Bloqueio em estados terminais
+    for terminal_status in (
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        msg_term = BroadcastMessage(
+            id="b-term",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111"],
+            status=terminal_status,
+        )
+        assert msg_term.is_pending_or_scheduled() is False
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$",
+        ):
+            msg_term.remove_target_channel("-1001111111111")
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$",
+        ):
+            msg_term.replace_target_channel("-1001111111111", "-1002222222222")
+
+
 def _dispatching_broadcast(targets: int) -> BroadcastMessage:
     ids = [f"-100123456789{i}" for i in range(targets)]
     return BroadcastMessage(id="b", profile_id="p", target_channel_ids=ids, status=BroadcastStatus.DISPATCHING)
