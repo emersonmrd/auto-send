@@ -29,6 +29,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Pacote portátil: o servidor local do Telegram (`telegram-bot-api.exe`) sobe com `--http-ip-address=127.0.0.1` e passa a aceitar conexões só da própria máquina. Antes ele escutava em todas as interfaces, e qualquer computador da rede podia usá-lo, embora só o backend precise dele. O smoke do Windows confere que a porta abre em `127.0.0.1` e fica fechada no IP da rede (#37).
 - O log de início do servidor local do Telegram mostra `--api-id=***` e `--api-hash=***` em vez das credenciais do my.telegram.org. Antes, com o logging em `INFO`, o `api_hash` ia em texto puro para o log (#40).
 - O rastreador de progresso de upload (`GET /api/v1/broadcasts/progress/{tracking_id}`) passa a ter limite: uma entrada sem uso por 30 minutos sai na próxima escrita, e acima de 1.000 entradas saem as usadas há mais tempo. Antes, cada `tracking_id` enviado pelo cliente ficava na memória para sempre. O prazo conta do último acesso, então um upload longo não perde o progresso no meio (#38).
+- CI: no push para a `main`, o job `Dependency, Code & Secret Scan` varre o histórico inteiro com o gitleaks 8.24.3 (mesma versão e checksum do `verify.sh`) e falha se achar segredo. Antes, o `gitleaks-action` verificava 0 commits no push, e o histórico nunca passava pelo scanner; nos PRs, a action continua varrendo só os commits do PR (#41).
 
 ## [0.4.0] - 2026-10-23
 
