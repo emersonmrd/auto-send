@@ -197,7 +197,7 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
 
 ## 9. Checklist de Segurança do Domínio
 Usado pela skill `security-audit` e na revisão de PRs. Ela é obrigatória em dois momentos (kaizen de 2026-10-24: nenhuma skill do fluxo a chamava, e a v0.4.0 saiu sem ela):
-- **Release:** antes de criar a tag, sobre o intervalo desde a última tag (`<última tag>..HEAD`). Achado crítico ou alto bloqueia a tag.
+- **Release:** antes de criar a tag, sobre o intervalo desde a última tag (`<última tag>..HEAD`). Depois dela, rode a skill `appsec-dynamic` com o app real de pé (backend e tela, banco e mídia temporários, como no `exploratory.sh`), para atacar as rotas e confirmar quais achados são exploráveis. Achado crítico ou alto de qualquer uma das duas bloqueia a tag (pedido do usuário em 2026-10-25).
 - **PR arriscado:** quando o `pr-audit` vê o PR mexer em gateway do Telegram, upload ou mídia, autenticação, `.github/workflows/`, Dockerfile ou `docker-compose.yml`, `scripts/` do pacote portátil, ou adicionar dependência.
 
 O checklist:
@@ -339,11 +339,12 @@ Toda afirmação no PR ("N testes passando", "0 mutantes") precisa vir dessas sa
 
 ## 4. Release
 - Só quando o usuário pedir, pela skill `release`. Mudanças entram na seção `[Unreleased]` do `CHANGELOG.md` no mesmo PR que as introduz.
+- Antes da tag, rode a `security-audit` e a `appsec-dynamic` (§9). Sem as duas, ou com achado crítico ou alto em aberto, não há tag.
 - Fontes de versão (devem ser iguais): `backend/pyproject.toml`, `frontend/package.json` e o `version=` do `FastAPI(...)` em `backend/src/presentation/main.py`.
 - A tag `vX.Y.Z` dispara `.github/workflows/release.yml`, que exige CI verde no commit, gera o pacote portátil no Windows e publica a GitHub Release.
 
 ## 5. Skills úteis
-As skills citadas neste arquivo ficam no ambiente do mantenedor, fora deste repositório. Use conforme a tarefa, não como fases obrigatórias: `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `clean-architecture`, `api-design-principles`, `domain-modeling`, `pr-audit`, `iss-audit`, `github-resolution`, `pr-post-audit`, `security-audit`, `pr-bump`, `release`, `kaizen`. Sem elas, as regras deste arquivo bastam.
+As skills citadas neste arquivo ficam no ambiente do mantenedor, fora deste repositório. Use conforme a tarefa, não como fases obrigatórias: `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `clean-architecture`, `api-design-principles`, `domain-modeling`, `pr-audit`, `iss-audit`, `github-resolution`, `pr-post-audit`, `security-audit`, `appsec-dynamic`, `pr-bump`, `release`, `kaizen`. Sem elas, as regras deste arquivo bastam.
 
 ## 6. ai-memory
 Chamadas ao ai-memory neste projeto passam sempre `workspace: "default"` e `project: "auto-send"`.
