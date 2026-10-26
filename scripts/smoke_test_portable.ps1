@@ -166,6 +166,14 @@ Check 'frontend exportado nao fixa a porta 8000' {
 $blocker = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 8000)
 $blocker.Start()
 
+# Issue #24: simula um banco da v0.4.0 em data\autosend.db e confere que o launcher o importa para
+# %LOCALAPPDATA%\Auto-Send\autosend.db sem apagar o original.
+$localAppData = Join-Path $WorkDir 'localappdata'
+New-Item -ItemType Directory -Path $localAppData -Force | Out-Null
+$env:LOCALAPPDATA = $localAppData
+$legacyDb = Join-Path $root 'data\autosend.db'
+& $pythonExe -c "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute('CREATE TABLE profiles (id VARCHAR PRIMARY KEY, name VARCHAR NOT NULL, bot_token VARCHAR NOT NULL, bot_username VARCHAR NOT NULL)'); c.execute('INSERT INTO profiles VALUES (\x27p-v040\x27, \x27Acme\x27, \x27123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef\x27, \x27acme_bot\x27)'); c.commit(); c.close()" $legacyDb
+
 # O launcher termina com "pause": a entrada vem de NUL para ele nao ficar esperando tecla.
 $log = Join-Path $WorkDir 'launcher.log'
 $launcher = Start-Process -FilePath 'cmd.exe' -WorkingDirectory $root -PassThru -WindowStyle Hidden `
@@ -220,7 +228,16 @@ if ($healthy) {
     }
     Check 'API lista perfis num banco novo' {
         $profiles = Invoke-RestMethod -Uri "$base/api/v1/profiles" -TimeoutSec 10
-        "($(@($profiles).Count) perfis)"
+        if (@($profiles).Count -lt 1 -or $profiles[0].name -ne 'Acme') {
+            throw "perfil da v0.4.0 nao foi importado: $($profiles | ConvertTo-Json -Compress)"
+        }
+        if (-not (Test-Path (Join-Path $localAppData 'Auto-Send\autosend.db'))) {
+            throw 'autosend.db nao foi criado em LOCALAPPDATA\Auto-Send'
+        }
+        if (-not (Test-Path $legacyDb)) {
+            throw 'data\autosend.db original foi apagado'
+        }
+        "($(@($profiles).Count) perfis; importado para LOCALAPPDATA\Auto-Send)"
     }
 }
 

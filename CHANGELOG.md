@@ -7,6 +7,11 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ### Added
 - Cadastro de canal pelo link de um post ou pelo ID: o campo da busca de canais aceita, além de `@username`/`t.me/username`, o link copiado de um post (`https://t.me/c/<id>/<post>`, convertido para `-100<id>`), o link de post de canal público (`t.me/<username>/<post>`) e o ID `-100…`. Serve para canal privado em que ninguém postou nas últimas 24 h e para bot ligado a outro sistema por webhook (#12).
+- Persistência do banco de dados entre atualizações e migrações numeradas com backup (#24):
+  - No pacote portátil para Windows, os dados (`autosend.db`, `media_temp/` e `telegram_bot_api/`) ficam em `%LOCALAPPDATA%\Auto-Send\`, preservando perfis, canais e agendamentos quando o usuário extrai uma versão nova em outra pasta.
+  - Na primeira inicialização sem banco em `%LOCALAPPDATA%\Auto-Send\`, o app procura `data\autosend.db` da `v0.4.0` na própria pasta da release, na pasta pai e em Downloads, Área de Trabalho e Documentos, oferecendo importar sem apagar o arquivo original.
+  - Migrações numeradas em `PRAGMA user_version` (em transação e idempotentes) com backup automático `autosend.db.bak-<versão anterior>` antes de cada migração, mantendo os 3 backups mais recentes; se uma migração falhar, o banco permanece na versão anterior e o app avisa sem abrir.
+  - Botão "Abrir pasta de dados" na barra lateral (`POST /api/v1/system/open-data-dir`).
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).

@@ -57,11 +57,22 @@ echo.
 if not exist "data\media_temp" mkdir "data\media_temp"
 if not exist "data" mkdir "data"
 
+if not defined AUTOSEND_DATA_DIR (
+    if defined LOCALAPPDATA (
+        set "AUTOSEND_DATA_DIR=%LOCALAPPDATA%\Auto-Send"
+    ) else (
+        set "AUTOSEND_DATA_DIR=%CD%\data"
+    )
+)
+if not exist "%AUTOSEND_DATA_DIR%\media_temp" mkdir "%AUTOSEND_DATA_DIR%\media_temp"
+if not exist "%AUTOSEND_DATA_DIR%\telegram_bot_api" mkdir "%AUTOSEND_DATA_DIR%\telegram_bot_api"
+
 set "TELEGRAM_BOT_API_BIN=%CD%\bin\telegram-bot-api.exe"
+set "TELEGRAM_BOT_API_DIR=%AUTOSEND_DATA_DIR%\telegram_bot_api"
 set "STATIC_DIR=%CD%\app\static"
-set "TEMP_MEDIA_DIR=%CD%\data\media_temp"
-set "DB_PATH=%CD%\data\autosend.db"
-set "DATABASE_URL=sqlite+aiosqlite:///./data/autosend.db"
+set "TEMP_MEDIA_DIR=%AUTOSEND_DATA_DIR%\media_temp"
+set "DB_PATH=%AUTOSEND_DATA_DIR%\autosend.db"
+set "DATABASE_URL=sqlite+aiosqlite:///%DB_PATH:\=/%"
 set "CORS_ORIGINS=http://localhost:8000,http://127.0.0.1:8000"
 set "PATH=%CD%\bin;%CD%\python;%CD%\python\Scripts;%PATH%"
 set "PYTHONPATH=%CD%\app\backend;%PYTHONPATH%"
@@ -89,7 +100,7 @@ echo [!] Servidor finalizado.
 pause
 """
 
-COMO_USAR_TXT = """========================================================================
+COMO_USAR_TXT = r"""========================================================================
                   AUTO-SEND PORTABLE - GUIA DE USO
 ========================================================================
 
@@ -116,16 +127,26 @@ O que vai acontecer:
 2. ONDE FICAM SALVOS SEUS DADOS E PERFIS
 ------------------------------------------------------------------------
 Todos os canais cadastrados, perfis, configuracoes de bots e
-mensagens agendadas ficam salvos com total seguranca dentro da pasta:
-    data/
+mensagens agendadas ficam salvos com total seguranca fora da pasta do
+pacote, em:
+    %LOCALAPPDATA%\Auto-Send\
 
-- O arquivo do banco de dados e: data/autosend.db
-- Midias temporarias ficam em: data/media_temp/
+- O arquivo do banco de dados e: %LOCALAPPDATA%\Auto-Send\autosend.db
+- Backups automaticos antes de atualizacoes: autosend.db.bak-<versao>
+- Midias temporarias ficam em: %LOCALAPPDATA%\Auto-Send\media_temp\
 
-DICA DE BACKUP:
-Para fazer backup de todas as suas informacoes, basta copiar a pasta "data"
-para outro local seguro (pendrive ou nuvem). Ao colar de volta, todos os
-seus dados continuarao exatamente como estavam!
+VANTAGEM NAS ATUALIZACOES:
+Quando sair uma versao nova do Auto-Send, voce pode extrair o novo .zip em
+qualquer pasta: seus perfis, canais e agendamentos continuam la automaticamente!
+Na tela do sistema, o botao "Abrir pasta de dados" abre essa pasta direto no
+Explorador de Arquivos.
+
+ATUALIZANDO DA VERSAO v0.4.0 (OU ANTERIOR):
+No primeiro inicio, se ainda nao houver banco em %LOCALAPPDATA%\Auto-Send\,
+o sistema procura a pasta "data" da versao antiga (na mesma pasta, em Downloads,
+Area de Trabalho ou Documentos) e pergunta se deseja importar.
+Se preferir copiar manualmente de outra pasta, basta copiar o arquivo
+"data\autosend.db" da versao antiga para dentro de "%LOCALAPPDATA%\Auto-Send\".
 
 ------------------------------------------------------------------------
 3. SUPORTE A VIDEOS GRANDES E MIDIAS PESADAS (ATE 2.000 MB)

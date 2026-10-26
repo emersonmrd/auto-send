@@ -187,8 +187,9 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
 5. **Proibição de Diálogos Bloqueantes na UI (`alert`, `confirm`, `prompt`):**
    - O uso de `window.alert()`, `confirm()` ou `prompt()` síncronos é terminantemente proibido.
    - Feedbacks ao usuário devem ser exibidos via componentes visuais não bloqueantes (toasts, banners ou modais acessíveis).
-6. **Concorrência e Integridade do Banco de Dados (SQLite WAL Mode):**
+6. **Concorrência e Integridade do Banco de Dados (SQLite WAL Mode e Migrações):**
    - Ambientes assíncronos com SQLite devem configurar obrigatoriamente `PRAGMA journal_mode=WAL;` e `PRAGMA busy_timeout=5000;` para evitar bloqueios de concorrência (`database is locked`).
+   - Nenhuma release pode perder ou corromper o banco de quem atualiza. Toda mudança de esquema vem com migração numerada e passa no teste de atualização.
 7. **Prevenção de Memory Leaks em Estruturas de Estado:**
    - Dicionários em memória utilizados para rastreamento de progresso ou cache devem ter rotinas ativas de expiração (TTL) ou limite máximo de itens (LRU).
 8. **Segurança de CORS:**

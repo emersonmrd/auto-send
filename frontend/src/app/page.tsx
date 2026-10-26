@@ -1404,6 +1404,23 @@ export default function Home() {
     }
   };
 
+  const handleOpenDataDir = async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/system/open-data-dir`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Pasta de dados: ${data.path}`, "info");
+      } else {
+        const err = await res.json().catch(() => null);
+        showToast(extractApiError(err, "Erro ao abrir pasta de dados"), "error");
+      }
+    } catch {
+      showToast("Erro de conexão com o servidor", "error");
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#0e1621] text-white overflow-hidden font-sans">
       {/* TOAST FLUTUANTE NÃO BLOQUEANTE */}
@@ -1564,6 +1581,16 @@ export default function Home() {
               );
             })
           )}
+        </div>
+        <div className="p-3 border-t border-[#242f3d]">
+          <button
+            type="button"
+            onClick={handleOpenDataDir}
+            className="w-full text-xs text-gray-300 hover:text-white bg-[#202b36] hover:bg-[#2b5278] px-3 py-2 rounded-lg transition flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-[#5288c1]" />
+            <span>Abrir pasta de dados</span>
+          </button>
         </div>
       </div>
 

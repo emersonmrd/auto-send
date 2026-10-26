@@ -28,6 +28,7 @@ from src.presentation.main import (  # noqa: E402
     DiscoveredChatResponse,
     HealthResponse,
     ImmediateBroadcastCreateResponse,
+    OpenDataDirResponse,
     ProfileListItemResponse,
     ProfileResponse,
     ScheduledBroadcastCreateResponse,
@@ -45,6 +46,7 @@ schema = schemathesis.openapi.from_asgi("/openapi.json", app)
 
 _MODEL_TO_FRONTEND_INTERFACE = {
     HealthResponse: "HealthResponse",
+    OpenDataDirResponse: "OpenDataDirResponse",
     ProfileResponse: "Profile",
     ProfileListItemResponse: "ProfileListItem",
     DeleteResourceResponse: "DeleteResourceResponse",

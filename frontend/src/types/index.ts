@@ -2,6 +2,11 @@ export interface HealthResponse {
   status: string;
 }
 
+export interface OpenDataDirResponse {
+  path: string;
+  opened: boolean;
+}
+
 export interface Profile {
   id: string;
   name: string;

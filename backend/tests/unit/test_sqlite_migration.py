@@ -7,7 +7,15 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 import src.presentation.main as main_module
 from src.infrastructure.sqlite_repositories import (
     SqlAlchemyBroadcastRepository,
+    SqlAlchemyChannelRepository,
     SqlAlchemyProfileRepository,
+)
+from src.infrastructure.sqlite_migrations import (
+    CURRENT_SCHEMA_VERSION,
+    DatabaseMigrationError,
+    MIGRATIONS,
+    MigrationStep,
+    get_user_version,
 )
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
@@ -239,4 +247,213 @@ async def test_init_db_idempotency_does_not_fail_on_already_migrated_db(tmp_path
 
     finally:
         await test_engine.dispose()
+
+
+def create_v040_sqlite_db(sqlite_db_path: str) -> None:
+    """Cria um banco no formato da v0.4.0 (PRAGMA user_version = 0) com perfil, canal e agendamento fictícios."""
+    conn = sqlite3.connect(sqlite_db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE profiles (
+            id VARCHAR PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            bot_token VARCHAR NOT NULL,
+            bot_username VARCHAR NOT NULL,
+            avatar_url VARCHAR,
+            is_active BOOLEAN DEFAULT 1,
+            created_at DATETIME
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE channels (
+            id VARCHAR PRIMARY KEY,
+            profile_id VARCHAR NOT NULL,
+            title VARCHAR NOT NULL,
+            chat_id VARCHAR NOT NULL,
+            invite_link VARCHAR DEFAULT '',
+            is_active BOOLEAN DEFAULT 1,
+            created_at DATETIME,
+            FOREIGN KEY(profile_id) REFERENCES profiles (id)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE broadcasts (
+            id VARCHAR PRIMARY KEY,
+            profile_id VARCHAR NOT NULL,
+            target_channel_ids TEXT NOT NULL,
+            text TEXT,
+            media_file_path VARCHAR,
+            media_type VARCHAR,
+            media_file_size INTEGER,
+            media_duration INTEGER,
+            media_width INTEGER,
+            media_height INTEGER,
+            media_thumbnail_path VARCHAR,
+            button_text VARCHAR,
+            button_url VARCHAR,
+            status VARCHAR DEFAULT 'PENDING',
+            scheduled_at DATETIME,
+            created_at DATETIME,
+            FOREIGN KEY(profile_id) REFERENCES profiles (id)
+        )
+    """)
+    cursor.execute("""
+        INSERT INTO profiles (id, name, bot_token, bot_username, avatar_url, is_active, created_at)
+        VALUES ('prof-acme', 'Acme', '123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef', 'acme_bot', NULL, 1, '2026-10-23 10:00:00')
+    """)
+    cursor.execute("""
+        INSERT INTO channels (id, profile_id, title, chat_id, invite_link, is_active, created_at)
+        VALUES ('ch-novidades', 'prof-acme', 'Canal de Novidades', '-1001234567890', '', 1, '2026-10-23 10:05:00')
+    """)
+    cursor.execute("""
+        INSERT INTO broadcasts (
+            id, profile_id, target_channel_ids, text, status, scheduled_at, created_at
+        ) VALUES (
+            'bc-v040', 'prof-acme', '["-1001234567890"]', 'Comunicado da v0.4.0',
+            'SCHEDULED', '2026-12-01 15:00:00', '2026-10-23 10:10:00'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.asyncio
+async def test_upgrade_from_v040_preserves_data_sets_schema_version_and_creates_backup(tmp_path, monkeypatch):
+    """Dado um banco da v0.4.0 com perfis, canais e agendamentos fictícios, quando a versão nova inicia,
+    os dados continuam lá, o esquema fica na versão atual e existe o backup."""
+    db_path = tmp_path / "autosend.db"
+    create_v040_sqlite_db(str(db_path))
+    assert get_user_version(db_path) == 0
+
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db()
+
+        assert get_user_version(db_path) == CURRENT_SCHEMA_VERSION
+        assert (tmp_path / "autosend.db.bak-0").is_file()
+
+        profiles = await SqlAlchemyProfileRepository(session_factory).list_all()
+        channels = await SqlAlchemyChannelRepository(session_factory).list_by_profile("prof-acme")
+        broadcasts = await SqlAlchemyBroadcastRepository(session_factory).list_by_profile("prof-acme")
+
+        assert [p.name for p in profiles] == ["Acme"]
+        assert [c.title for c in channels] == ["Canal de Novidades"]
+        assert [b.text for b in broadcasts] == ["Comunicado da v0.4.0"]
+    finally:
+        await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_already_migrated_db_does_not_rerun_migrations_on_restart(tmp_path, monkeypatch):
+    """Dado um banco já migrado, quando o app reinicia, nenhuma migração roda de novo."""
+    db_path = tmp_path / "autosend.db"
+    create_v040_sqlite_db(str(db_path))
+
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    calls: list[int] = []
+    tracked_steps = tuple(
+        MigrationStep(
+            version=step.version,
+            description=step.description,
+            apply=lambda cur, s=step: (calls.append(s.version), s.apply(cur))[1],
+        )
+        for step in MIGRATIONS
+    )
+
+    try:
+        await main_module.init_db(migration_steps=tracked_steps)
+        assert calls == [s.version for s in MIGRATIONS]
+
+        calls.clear()
+        await main_module.init_db(migration_steps=tracked_steps)
+        assert calls == []
+    finally:
+        await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_four_consecutive_migrations_keep_only_the_three_most_recent_backups(tmp_path, monkeypatch):
+    """Dado quatro migrações seguidas, quando a quarta termina, restam os 3 backups mais recentes."""
+    db_path = tmp_path / "autosend.db"
+    create_legacy_sqlite_db(str(db_path))
+
+    four_steps = (
+        *MIGRATIONS,
+        MigrationStep(
+            version=4,
+            description="Passo extra para testar poda de backups",
+            apply=lambda cur: cur.execute("SELECT 1"),
+        ),
+    )
+
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db(migration_steps=four_steps)
+
+        backups = sorted(p.name for p in tmp_path.glob("autosend.db.bak-*"))
+        assert backups == ["autosend.db.bak-1", "autosend.db.bak-2", "autosend.db.bak-3"]
+        assert get_user_version(db_path) == 4
+    finally:
+        await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_failed_migration_rolls_back_and_keeps_previous_version(tmp_path, monkeypatch):
+    """Dado uma migração que falha no meio, o banco continua na versão anterior."""
+    db_path = tmp_path / "autosend.db"
+    create_legacy_sqlite_db(str(db_path))
+
+    def _broken_step(cur: sqlite3.Cursor) -> None:
+        cur.execute("ALTER TABLE profiles ADD COLUMN temp_broken_col VARCHAR")
+        raise sqlite3.OperationalError("falha simulada no meio da migração")
+
+    steps_with_failure = (
+        MIGRATIONS[0],
+        MigrationStep(version=2, description="Migração quebrada", apply=_broken_step),
+    )
+
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        with pytest.raises(DatabaseMigrationError) as exc_info:
+            await main_module.init_db(migration_steps=steps_with_failure)
+
+        assert exc_info.value.previous_version == 1
+        assert exc_info.value.target_version == 2
+        assert get_user_version(db_path) == 1
+        assert "temp_broken_col" not in get_table_columns(str(db_path), "profiles")
+        assert (tmp_path / "autosend.db.bak-0").is_file()
+        assert (tmp_path / "autosend.db.bak-1").is_file()
+    finally:
+        await test_engine.dispose()
+
+
+def test_run_app_aborts_startup_without_opening_browser_when_migration_fails(tmp_path, monkeypatch, capsys):
+    """Quando uma migração falha no início do app, o app avisa e sai sem abrir o navegador."""
+    opened_urls: list[str] = []
+    monkeypatch.setattr(main_module.webbrowser, "open", lambda url: opened_urls.append(url))
+    monkeypatch.setattr(main_module.uvicorn, "run", lambda *a, **kw: opened_urls.append("uvicorn"))
+
+    async def _failing_init_db():
+        raise DatabaseMigrationError(2, 1, RuntimeError("erro simulado"))
+
+    monkeypatch.setattr(main_module, "init_db", _failing_init_db)
+    monkeypatch.setenv("AUTOSEND_DATA_DIR", str(tmp_path))
+
+    with pytest.raises(SystemExit) as sys_exit:
+        main_module.run_app()
+
+    assert sys_exit.value.code == 1
+    assert opened_urls == []
+    err = capsys.readouterr().err
+    assert "versão 1" in err
+
 

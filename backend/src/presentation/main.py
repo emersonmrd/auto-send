@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -39,6 +40,19 @@ from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
 from src.infrastructure.upload_progress_store import UploadProgressStore
 from src.infrastructure.temp_media_storage import MediaTooLarge, save_upload
 from src.infrastructure.telegram_gateway_http import PUBLIC_API_MAX_BYTES
+from src.infrastructure.sqlite_migrations import (
+    DatabaseMigrationError,
+    MIGRATIONS,
+    MigrationStep,
+    has_user_tables,
+    run_pending_migrations,
+    sqlite_file_from_url,
+)
+from src.infrastructure.portable_data import (
+    import_legacy_data_if_needed,
+    open_data_directory,
+    resolve_data_dir,
+)
 import sys
 import threading
 import webbrowser
@@ -57,7 +71,7 @@ from src.infrastructure.sqlite_repositories import (
     SqlAlchemyChannelRepository,
     SqlAlchemyBroadcastRepository,
 )
-from sqlalchemy import event, text
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 from pathlib import Path
@@ -124,41 +138,21 @@ scheduler_service = AutomationSchedulerService(
     telegram_gateway=telegram_gateway,
 )
 
-async def init_db(target_engine=None) -> None:
-    """Garante a criação de todas as tabelas no banco de dados SQLite e auto-migração de colunas."""
+async def init_db(target_engine=None, migration_steps: tuple[MigrationStep, ...] = MIGRATIONS) -> None:
+    """Garante a criação de todas as tabelas no SQLite e aplica migrações numeradas com backup (#24)."""
     eng = target_engine or engine
+    db_file = sqlite_file_from_url(str(eng.url))
+    had_existing_tables = has_user_tables(db_file) if db_file is not None else False
+
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-        if conn.dialect.name == "sqlite":
-            tables_migrations = {
-                "broadcasts": [
-                    ("media_duration", "INTEGER"),
-                    ("media_width", "INTEGER"),
-                    ("media_height", "INTEGER"),
-                    ("media_thumbnail_path", "VARCHAR"),
-                ],
-                "channels": [
-                    ("invite_link", "VARCHAR DEFAULT ''"),
-                    ("is_active", "BOOLEAN DEFAULT 1"),
-                ],
-                "profiles": [
-                    ("avatar_url", "VARCHAR"),
-                    ("is_active", "BOOLEAN DEFAULT 1"),
-                ],
-            }
-
-            for table_name, columns in tables_migrations.items():
-                res = await conn.execute(text(f"PRAGMA table_info({table_name})"))
-                existing_cols = {row[1] for row in res.fetchall()}
-                for col_name, col_def in columns:
-                    if col_name not in existing_cols:
-                        try:
-                            await conn.execute(
-                                text(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
-                            )
-                        except Exception:
-                            pass
+    if db_file is not None:
+        run_pending_migrations(
+            db_file,
+            steps=migration_steps,
+            had_existing_tables=had_existing_tables,
+        )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -219,6 +213,10 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+
+class OpenDataDirResponse(BaseModel):
+    path: str
+    opened: bool
 
 class ProfileCreateRequest(BaseModel):
     name: str
@@ -338,6 +336,12 @@ _ERR_422 = {422: {"model": ErrorResponse, "description": "Invalid payload or for
 @app.get("/api/v1/health", response_model=HealthResponse)
 async def health_check():
     return {"status": "healthy"}
+
+@app.post("/api/v1/system/open-data-dir", response_model=OpenDataDirResponse)
+async def open_system_data_dir():
+    data_dir = resolve_data_dir(default_db_url=DB_PATH)
+    opened = open_data_directory(data_dir)
+    return {"path": str(data_dir), "opened": opened}
 
 @app.get("/api/v1/profiles", response_model=List[ProfileListItemResponse])
 async def list_profiles():
@@ -1145,6 +1149,19 @@ if os.path.exists(STATIC_DIR) and os.path.isdir(STATIC_DIR):
 
 
 def run_app():
+    data_dir = resolve_data_dir(default_db_url=DB_PATH)
+    import_legacy_data_if_needed(data_dir, Path.cwd())
+
+    try:
+        asyncio.run(init_db())
+    except DatabaseMigrationError as exc:
+        print(
+            f"[ERRO] Não foi possível atualizar o banco de dados: {exc}. "
+            f"O banco permaneceu na versão {exc.previous_version} e o backup foi preservado em {data_dir}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     backend_port = find_available_port(8000, max_attempts=20, host="127.0.0.1")
     if backend_port is None:
         print(
