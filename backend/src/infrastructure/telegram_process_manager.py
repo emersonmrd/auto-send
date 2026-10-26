@@ -34,6 +34,17 @@ def find_available_port(
     return None
 
 
+_SECRET_FLAGS = ("--api-id=", "--api-hash=")
+
+
+def _mask_credentials(cmd: List[str]) -> List[str]:
+    """Troca o valor das credenciais do my.telegram.org por *** para o comando poder ir ao log."""
+    return [
+        next((flag + "***" for flag in _SECRET_FLAGS if arg.startswith(flag)), arg)
+        for arg in cmd
+    ]
+
+
 def _assign_to_windows_job_object(process: subprocess.Popen) -> Optional[Any]:
     """
     Associa o processo a um Windows Job Object configurado com JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000).
@@ -241,7 +252,7 @@ class TelegramProcessManager:
             creationflags = 0x08000000
 
         try:
-            logger.info("Iniciando Telegram Bot API local: %s", " ".join(cmd))
+            logger.info("Iniciando Telegram Bot API local: %s", " ".join(_mask_credentials(cmd)))
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,

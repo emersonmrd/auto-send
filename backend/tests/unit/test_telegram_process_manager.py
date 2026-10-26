@@ -111,6 +111,25 @@ def test_start_and_stop_success(tmp_path: Path):
                 assert not mgr.is_running()
 
 
+def test_start_log_masks_api_credentials(tmp_path: Path, caplog: pytest.LogCaptureFixture):
+    # O comando logado não pode levar o api_hash nem o api_id do my.telegram.org (#40).
+    fake_bin = tmp_path / "fake-telegram-bot-api"
+    fake_bin.touch()
+
+    with patch("src.infrastructure.telegram_process_manager._is_port_in_use", return_value=False):
+        with patch("subprocess.Popen", return_value=MagicMock(pid=1)) as mock_popen:
+            with patch("src.infrastructure.telegram_process_manager._assign_to_windows_job_object"):
+                with caplog.at_level("INFO", logger="src.infrastructure.telegram_process_manager"):
+                    assert TelegramProcessManager(bin_path=fake_bin, data_dir=tmp_path).start() is True
+
+    cmd = mock_popen.call_args[0][0]
+    assert "--api-id=123456" in cmd
+    assert "--api-hash=fake-api-hash" in cmd
+    assert "fake-api-hash" not in caplog.text
+    assert "123456" not in caplog.text
+    assert "--api-id=*** --api-hash=***" in caplog.text
+
+
 def test_stop_force_kill_on_timeout(tmp_path: Path):
     fake_bin = tmp_path / "fake-telegram-bot-api"
     fake_bin.touch()
