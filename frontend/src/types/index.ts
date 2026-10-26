@@ -70,8 +70,8 @@ export interface BroadcastProgressResponse {
   sent_bytes: number;
   total_bytes: number;
   status: string;
-  created_at: number;
-  updated_at: number;
+  created_at?: number | null;
+  updated_at?: number | null;
 }
 
 export interface ScheduledBroadcastCreateResponse {
@@ -110,7 +110,7 @@ export interface ScheduledBroadcast {
   text: string;
   media?: BroadcastMedia | null;
   button?: BroadcastButton | null;
-  status: "PENDING" | "SCHEDULED" | "DISPATCHING" | "COMPLETED" | "PARTIALLY_COMPLETED" | "FAILED" | "CANCELLED";
+  status: "PENDING" | "SCHEDULED" | "MISFIRED" | "DISPATCHING" | "COMPLETED" | "PARTIALLY_COMPLETED" | "FAILED" | "CANCELLED";
   scheduled_at: string | null;
   created_at?: string | null;
 }

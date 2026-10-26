@@ -1251,10 +1251,12 @@ def test_cors_configuration_does_not_mix_wildcard_with_credentials():
 
 
 async def test_health_check_endpoint(client):
-    """Verifica se o endpoint de health check /api/v1/health retorna status 200 e json saudável."""
+    """Verifica se o endpoint de health check /api/v1/health retorna status 200 e json saudável com app e version (#29)."""
+    from src.presentation.main import app
+
     resp = await client.get("/api/v1/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "healthy"}
+    assert resp.json() == {"status": "healthy", "app": "auto-send", "version": app.version}
 
 
 async def test_static_files_serving_and_api_route_precedence(tmp_path):
@@ -1285,7 +1287,7 @@ async def test_static_files_serving_and_api_route_precedence(tmp_path):
             # 2. GET /api/v1/health deve manter precedência e retornar JSON
             health_resp = await ac.get("/api/v1/health")
             assert health_resp.status_code == 200
-            assert health_resp.json() == {"status": "healthy"}
+            assert health_resp.json() == {"status": "healthy", "app": "auto-send", "version": app.version}
 
             # 3. GET /api/v1/profiles deve manter precedência
             profiles_resp = await ac.get("/api/v1/profiles")
@@ -1455,3 +1457,114 @@ def test_invalid_media_upload_limit_env_falls_back_to_the_default(monkeypatch, v
     monkeypatch.setenv("MAX_MEDIA_UPLOAD_MB", value)
 
     assert media_upload_limit_bytes() == 50 * 1024 * 1024
+
+
+# Issue #1: Agendamentos MISFIRED (Enviar agora, Reagendar via PATCH, Descartar via cancel)
+@pytest.mark.asyncio
+async def test_misfired_broadcast_appears_first_in_queue_and_supports_dispatch_now_reschedule_and_discard(
+    client, monkeypatch, tmp_path
+):
+    from datetime import datetime, timedelta, timezone
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    sent = await _profile_for_upload(monkeypatch, "profile-misfire-actions")
+    now = datetime.now(timezone.utc)
+
+    media_1 = tmp_path / "misfired_dispatch.mp4"
+    media_1.write_bytes(b"video-1")
+    thumb_1 = tmp_path / "misfired_dispatch_thumb.jpg"
+    thumb_1.write_bytes(b"thumb-1")
+
+    media_2 = tmp_path / "misfired_discard.mp4"
+    media_2.write_bytes(b"video-2")
+    thumb_2 = tmp_path / "misfired_discard_thumb.jpg"
+    thumb_2.write_bytes(b"thumb-2")
+
+    b_scheduled = BroadcastMessage(
+        id="b-sched-future",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Futuro normal",
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=now + timedelta(hours=1),
+    )
+    b_misfired_send = BroadcastMessage(
+        id="b-misfired-send",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Expirado enviar agora",
+        media=MediaAttachment(
+            file_path=str(media_1),
+            media_type=MediaType.VIDEO,
+            file_size=7,
+            thumbnail_path=str(thumb_1),
+        ),
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now - timedelta(hours=2),
+    )
+    b_misfired_resched = BroadcastMessage(
+        id="b-misfired-resched",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Expirado reagendar",
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now - timedelta(hours=1),
+    )
+    b_misfired_discard = BroadcastMessage(
+        id="b-misfired-discard",
+        profile_id="profile-misfire-actions",
+        target_channel_ids=["-1001234567890"],
+        text="Expirado descartar",
+        media=MediaAttachment(
+            file_path=str(media_2),
+            media_type=MediaType.VIDEO,
+            file_size=7,
+            thumbnail_path=str(thumb_2),
+        ),
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now - timedelta(minutes=45),
+    )
+
+    for b in (b_scheduled, b_misfired_send, b_misfired_resched, b_misfired_discard):
+        await broadcast_repo.save(b)
+
+    # 1. Na listagem da fila, os MISFIRED vêm antes dos SCHEDULED
+    queue_resp = await client.get("/api/v1/profiles/profile-misfire-actions/scheduled-broadcasts")
+    assert queue_resp.status_code == 200
+    ids = [item["id"] for item in queue_resp.json()]
+    assert ids == ["b-misfired-send", "b-misfired-resched", "b-misfired-discard", "b-sched-future"]
+
+    # 2. Enviar agora (dispatch-now): envia para o canal, muda para COMPLETED e apaga mídia + capa
+    dispatch_resp = await client.post("/api/v1/broadcasts/b-misfired-send/dispatch-now")
+    assert dispatch_resp.status_code == 200
+    assert dispatch_resp.json()["status"] == "COMPLETED"
+    assert dispatch_resp.json()["dispatched_count"] == 1
+    assert len(sent) == 1
+    assert not media_1.exists()
+    assert not thumb_1.exists()
+
+    # Tentar dispatch-now de novo em um broadcast já COMPLETED deve retornar 422
+    dup_resp = await client.post("/api/v1/broadcasts/b-misfired-send/dispatch-now")
+    assert dup_resp.status_code == 422
+
+    # 3. Reagendar via PATCH: aceita MISFIRED e volta para SCHEDULED
+    new_future = (now + timedelta(hours=3)).isoformat()
+    patch_resp = await client.patch(
+        "/api/v1/broadcasts/b-misfired-resched",
+        json={"text": "Expirado reagendado", "scheduled_at": new_future},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["status"] == "SCHEDULED"
+    assert patch_resp.json()["text"] == "Expirado reagendado"
+
+    # 4. Descartar via DELETE /cancel: muda para CANCELLED e apaga mídia + capa
+    cancel_resp = await client.delete("/api/v1/broadcasts/b-misfired-discard/cancel")
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "CANCELLED"
+    assert not media_2.exists()
+    assert not thumb_2.exists()

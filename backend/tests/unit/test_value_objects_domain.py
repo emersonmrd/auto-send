@@ -41,6 +41,7 @@ def test_enum_values_are_the_persisted_strings():
     assert {m.name: m.value for m in BroadcastStatus} == {
         "PENDING": "PENDING",
         "SCHEDULED": "SCHEDULED",
+        "MISFIRED": "MISFIRED",
         "DISPATCHING": "DISPATCHING",
         "COMPLETED": "COMPLETED",
         "PARTIALLY_COMPLETED": "PARTIALLY_COMPLETED",

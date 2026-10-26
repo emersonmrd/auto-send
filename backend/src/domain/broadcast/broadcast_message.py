@@ -7,6 +7,13 @@ from urllib.parse import urlparse
 
 # Margem para o datetime-local do navegador (sem segundos) e relógios levemente atrasados; vale para POST e PATCH.
 SCHEDULE_CLOCK_TOLERANCE = timedelta(seconds=60)
+DEFAULT_MISFIRE_GRACE_MINUTES = 30
+
+
+class DueScheduleAction(str, Enum):
+    WAIT = "WAIT"
+    DISPATCH = "DISPATCH"
+    MISFIRE = "MISFIRE"
 
 
 def ensure_schedulable(run_at: datetime, now: datetime) -> None:
@@ -14,6 +21,20 @@ def ensure_schedulable(run_at: datetime, now: datetime) -> None:
         raise ValueError("scheduled_at must include a timezone")
     if run_at < now - SCHEDULE_CLOCK_TOLERANCE:
         raise ValueError("scheduled_at cannot be in the past")
+
+
+def evaluate_due_schedule(
+    scheduled_at: datetime, now: datetime, grace_window: timedelta
+) -> DueScheduleAction:
+    if scheduled_at.tzinfo is None:
+        raise ValueError("scheduled_at must include a timezone")
+    if grace_window < timedelta(0):
+        raise ValueError("grace_window cannot be negative")
+    if now < scheduled_at:
+        return DueScheduleAction.WAIT
+    if now - scheduled_at <= grace_window:
+        return DueScheduleAction.DISPATCH
+    return DueScheduleAction.MISFIRE
 
 
 class MediaType(str, Enum):
@@ -28,6 +49,7 @@ class DispatchStrategy(str, Enum):
 class BroadcastStatus(str, Enum):
     PENDING = "PENDING"
     SCHEDULED = "SCHEDULED"
+    MISFIRED = "MISFIRED"
     DISPATCHING = "DISPATCHING"
     COMPLETED = "COMPLETED"
     PARTIALLY_COMPLETED = "PARTIALLY_COMPLETED"
@@ -98,6 +120,22 @@ class BroadcastMessage:
             self.status = BroadcastStatus.COMPLETED
         else:
             self.status = BroadcastStatus.PARTIALLY_COMPLETED
+
+    def mark_misfired(self) -> None:
+        if self.status not in [BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED]:
+            raise ValueError("Only pending or scheduled broadcasts can become misfired")
+        self.status = BroadcastStatus.MISFIRED
+
+    def start_dispatch(self) -> None:
+        if self.status not in [
+            BroadcastStatus.PENDING,
+            BroadcastStatus.SCHEDULED,
+            BroadcastStatus.MISFIRED,
+        ]:
+            raise ValueError(
+                "Cannot dispatch an in-flight, completed, failed, or cancelled broadcast"
+            )
+        self.status = BroadcastStatus.DISPATCHING
 
     def cancel(self) -> None:
         if self.status in [BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED]:

@@ -968,6 +968,51 @@ export default function Home() {
     }
   };
 
+  // Disparar Agora um Agendamento Expirado (MISFIRED)
+  const handleDispatchMisfiredNow = async (broadcastId: string) => {
+    setActionInProgressId(broadcastId);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${broadcastId}/dispatch-now`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const result: BroadcastResponse = await res.json();
+        const dispatchedCount = result?.dispatched_count ?? 0;
+        const errorsList = Array.isArray(result?.errors) ? result.errors : [];
+        if (dispatchedCount === 0 || errorsList.length > 0) {
+          setFeedback({
+            type: "error",
+            message:
+              dispatchedCount > 0
+                ? `Envio parcial (${dispatchedCount} enviado(s)), mas houve falha: ${errorsList.join(", ")}`
+                : `Falha no envio: ${errorsList.join(", ") || "Nenhum canal recebeu a mensagem."}`,
+          });
+        } else {
+          setFeedback({
+            type: "success",
+            message: `Disparado com sucesso para ${dispatchedCount} canal(is)!`,
+          });
+        }
+        if (selectedProfile) {
+          fetchScheduledQueue(selectedProfile.id);
+        }
+      } else {
+        const err = await res.json().catch(() => null);
+        setFeedback({
+          type: "error",
+          message: extractApiError(err, "Falha ao disparar agendamento"),
+        });
+      }
+    } catch {
+      setFeedback({
+        type: "error",
+        message: "Erro de conexão ao tentar disparar agendamento",
+      });
+    } finally {
+      setActionInProgressId(null);
+    }
+  };
+
   // Abrir Modal de Edição de Agendamento
   const handleOpenEditScheduled = (item: ScheduledBroadcast) => {
     setEditingBroadcast(item);
@@ -977,11 +1022,10 @@ export default function Home() {
     // Formatar ISO para o input datetime-local e campos de data/hora no fuso local
     if (item.scheduled_at) {
       const d = new Date(item.scheduled_at);
-      if (!isNaN(d.getTime())) {
+      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) {
         applyScheduleDateTime(d, true);
       } else {
-        setEditScheduledAtInput("");
-        setEditScheduleConfirmedPreview(null);
+        applyScheduleDateTime(new Date(Date.now() + 15 * 60 * 1000), true);
       }
     } else {
       setEditScheduledAtInput("");
@@ -1711,6 +1755,38 @@ export default function Home() {
                 </button>
               </div>
             </div>
+
+            {/* BANNER NÃO BLOQUEANTE DE AGENDAMENTOS EXPIRADOS (MISFIRED) */}
+            {scheduledQueue.some((b) => b.status === "MISFIRED") && (() => {
+              const misfiredCount = scheduledQueue.filter((b) => b.status === "MISFIRED").length;
+              return (
+                <div
+                  role="status"
+                  data-testid="misfired-banner"
+                  className="bg-amber-950/80 border-b border-amber-600/60 px-6 py-2.5 flex items-center justify-between gap-3 text-xs text-amber-200"
+                >
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      {misfiredCount === 1
+                        ? "1 agendamento expirou enquanto o app estava fechado"
+                        : `${misfiredCount} agendamentos expiraram enquanto o app estava fechado`}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      fetchScheduledQueue();
+                      setQueueNow(new Date());
+                      setShowQueueDrawer(true);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600/80 hover:bg-amber-500 text-white font-semibold transition shrink-0"
+                  >
+                    Ver na fila
+                  </button>
+                </div>
+              );
+            })()}
 
             {/* FEED CENTRAL: PREVIEW AO VIVO DA MENSAGEM */}
             <div className="flex-1 overflow-y-auto p-6 flex flex-col justify-end items-center bg-[#0e1621] space-y-4">
@@ -2733,7 +2809,8 @@ export default function Home() {
               ) : (
                 scheduledQueue.map((item) => {
                   const isProcessing = actionInProgressId === item.id;
-                  const scheduledAt = new Date(item.scheduled_at);
+                  const isMisfired = item.status === "MISFIRED";
+                  const scheduledAt = new Date(item.scheduled_at || Date.now());
                   const formattedDate = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(scheduledAt);
                   const relativeDate = queueNow ? formatRelativeTime(scheduledAt, queueNow) : null;
                   const isPhoto = item.media?.media_type === "PHOTO";
@@ -2742,13 +2819,17 @@ export default function Home() {
                   return (
                     <div
                       key={item.id}
-                      className="bg-[#242f3d] rounded-xl p-4 border border-[#3b6694]/20 hover:border-[#3b6694]/50 transition flex flex-col space-y-3"
+                      className={`bg-[#242f3d] rounded-xl p-4 border transition flex flex-col space-y-3 ${
+                        isMisfired
+                          ? "border-amber-500/60 hover:border-amber-400"
+                          : "border-[#3b6694]/20 hover:border-[#3b6694]/50"
+                      }`}
                     >
                       {/* Topo do card: Data e Status */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5 text-xs text-[#71aaeb] font-medium">
                           <Clock className="w-3.5 h-3.5 shrink-0" />
-                          <time dateTime={item.scheduled_at}>{formattedDate}</time>
+                          <time dateTime={item.scheduled_at || undefined}>{formattedDate}</time>
                           {relativeDate && (
                             <span
                               className="px-1.5 py-0.5 rounded bg-[#2b5278]/60 text-[10px] text-white"
@@ -2758,9 +2839,18 @@ export default function Home() {
                             </span>
                           )}
                         </div>
-                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#2b5278] text-white">
-                          {item.status}
-                        </span>
+                        {isMisfired ? (
+                          <span
+                            data-testid="misfired-badge"
+                            className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-amber-600/80 text-white"
+                          >
+                            Expirado
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-[#2b5278] text-white">
+                            {item.status}
+                          </span>
+                        )}
                       </div>
 
                       {/* Conteúdo da mensagem com links formatados */}
@@ -2789,34 +2879,71 @@ export default function Home() {
 
                       {/* Ações do Card */}
                       <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-700/50">
-                        <button
-                          type="button"
-                          onClick={() => handleLoadIntoComposer(item)}
-                          className="text-xs px-2.5 py-1 text-gray-300 hover:text-white bg-[#17212b] hover:bg-[#202b36] rounded transition"
-                          title="Carregar mensagem de volta para o compositor principal"
-                        >
-                          Carregar no Editor
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditScheduled(item)}
-                          disabled={isProcessing}
-                          className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1"
-                          title="Editar mensagem e horário de agendamento"
-                        >
-                          <Edit className="w-3 h-3" />
-                          Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCancelScheduled(item.id)}
-                          disabled={isProcessing}
-                          className="text-xs px-2.5 py-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 rounded transition flex items-center gap-1 disabled:opacity-50"
-                          title="Cancelar agendamento e descartar mídias"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          Cancelar
-                        </button>
+                        {isMisfired ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleDispatchMisfiredNow(item.id)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-white bg-emerald-700 hover:bg-emerald-600 rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Enviar este agendamento expirado agora"
+                            >
+                              <Send className="w-3 h-3" />
+                              Enviar agora
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditScheduled(item)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Escolher novo horário para reagendar"
+                            >
+                              <Calendar className="w-3 h-3" />
+                              Reagendar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelScheduled(item.id)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Descartar agendamento expirado e remover mídia"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Descartar
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleLoadIntoComposer(item)}
+                              className="text-xs px-2.5 py-1 text-gray-300 hover:text-white bg-[#17212b] hover:bg-[#202b36] rounded transition"
+                              title="Carregar mensagem de volta para o compositor principal"
+                            >
+                              Carregar no Editor
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditScheduled(item)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1"
+                              title="Editar mensagem e horário de agendamento"
+                            >
+                              <Edit className="w-3 h-3" />
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleCancelScheduled(item.id)}
+                              disabled={isProcessing}
+                              className="text-xs px-2.5 py-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 rounded transition flex items-center gap-1 disabled:opacity-50"
+                              title="Cancelar agendamento e descartar mídias"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Cancelar
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   );

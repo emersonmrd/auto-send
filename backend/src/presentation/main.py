@@ -295,8 +295,8 @@ class BroadcastProgressResponse(BaseModel):
     sent_bytes: int
     total_bytes: int
     status: str
-    created_at: float
-    updated_at: float
+    created_at: Optional[float] = None
+    updated_at: Optional[float] = None
 
 class ScheduledBroadcastCreateResponse(BaseModel):
     broadcast_id: str
@@ -1049,14 +1049,14 @@ async def cancel_broadcast(broadcast_id: str):
     # Remove o agendamento no APScheduler
     scheduler_service.cancel_scheduled_broadcast(broadcast.id)
 
-    # Remove arquivo de mídia temporária se existir
-    if broadcast.media and broadcast.media.file_path:
-        path = broadcast.media.file_path
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+    # Remove arquivos de mídia temporária (principal e capa) se existirem
+    if broadcast.media:
+        for path in (broadcast.media.file_path, broadcast.media.thumbnail_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     await broadcast_repo.save(broadcast)
     return {
@@ -1064,6 +1064,73 @@ async def cancel_broadcast(broadcast_id: str):
         "status": broadcast.status.value,
         "message": "Broadcast successfully cancelled and resources released",
     }
+
+
+@app.post(
+    "/api/v1/broadcasts/{broadcast_id}/dispatch-now",
+    response_model=ImmediateBroadcastCreateResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
+async def dispatch_broadcast_now(broadcast_id: str):
+    broadcast = await broadcast_repo.get_by_id(broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+
+    profile = await profile_repo.get_by_id(broadcast.profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    try:
+        broadcast.start_dispatch()
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    scheduler_service.cancel_scheduled_broadcast(broadcast.id)
+    await broadcast_repo.save(broadcast)
+
+    dispatched_count = 0
+    errors: List[str] = []
+    try:
+        for chat_id in broadcast.target_channel_ids:
+            try:
+                success = await telegram_gateway.send_broadcast(
+                    bot_token=profile.credentials.token,
+                    chat_id=chat_id,
+                    message=broadcast,
+                )
+                if success:
+                    dispatched_count += 1
+                else:
+                    detail = getattr(telegram_gateway, "last_error", None)
+                    if detail:
+                        errors.append(f"Failed to send to {chat_id}: {detail}")
+                    else:
+                        errors.append(f"Failed to send to {chat_id}")
+            except Exception as e:
+                errors.append(f"Error sending to {chat_id}: {str(e)}")
+
+        broadcast.finish_dispatch(
+            delivered=dispatched_count,
+            total=len(broadcast.target_channel_ids),
+        )
+        await broadcast_repo.save(broadcast)
+    finally:
+        if broadcast.media:
+            for path in (broadcast.media.file_path, broadcast.media.thumbnail_path):
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+
+    return {
+        "broadcast_id": broadcast.id,
+        "status": broadcast.status.value,
+        "dispatched_count": dispatched_count,
+        "total_targets": len(broadcast.target_channel_ids),
+        "errors": errors,
+    }
+
 
 @app.patch(
     "/api/v1/broadcasts/{broadcast_id}",
@@ -1075,7 +1142,11 @@ async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
     if not broadcast:
         raise HTTPException(status_code=404, detail="Broadcast not found")
 
-    if broadcast.status in [BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED, BroadcastStatus.CANCELLED]:
+    if broadcast.status not in [
+        BroadcastStatus.PENDING,
+        BroadcastStatus.SCHEDULED,
+        BroadcastStatus.MISFIRED,
+    ]:
         raise HTTPException(status_code=422, detail="Cannot edit an in-flight, completed, or cancelled broadcast")
 
     # Validação e montagem de Button

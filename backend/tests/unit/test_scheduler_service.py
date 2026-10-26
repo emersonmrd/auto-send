@@ -244,3 +244,110 @@ async def test_scheduled_partial_dispatch_is_recorded_as_partially_completed():
     await service.execute_scheduled_broadcast("b-partial")
 
     assert (await broadcast_repo.get_by_id("b-partial")).status == BroadcastStatus.PARTIALLY_COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_overdue_broadcast_beyond_grace_window_as_misfired_and_keeps_media(tmp_path):
+    """
+    Regressão #1: broadcast vencido há mais tempo que SCHEDULE_MISFIRE_GRACE_MINUTES
+    NÃO é enviado e fica MISFIRED, preservando a mídia temporária até decisão do usuário.
+    """
+    from datetime import timedelta
+
+    fixed_now = datetime(2026, 10, 24, 15, 0, 0, tzinfo=timezone.utc)
+    media_file = tmp_path / "promo_video.mp4"
+    media_file.write_bytes(b"video-content")
+
+    broadcast_repo = InMemoryBroadcastRepository()
+    profile_repo = InMemoryProfileRepository()
+    gateway = MockTelegramGateway(should_succeed=True)
+    service = AutomationSchedulerService(
+        broadcast_repo=broadcast_repo,
+        profile_repo=profile_repo,
+        telegram_gateway=gateway,
+        misfire_grace_minutes=30,
+        clock=lambda: fixed_now,
+    )
+
+    creds = BotCredentials(token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz", bot_username="bot")
+    await profile_repo.save(Profile(id="p-misfire", name="Profile Misfire", credentials=creds))
+
+    # Vencido há 2 horas (> 30 min) -> deve virar MISFIRED sem enviar
+    overdue_broadcast = BroadcastMessage(
+        id="b-overdue",
+        profile_id="p-misfire",
+        target_channel_ids=["-1001234567890"],
+        text="Bom dia! Promoção das 8h",
+        media=MediaAttachment(file_path=str(media_file), media_type=MediaType.VIDEO, file_size=13),
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=fixed_now - timedelta(hours=2),
+    )
+    # Vencido há 20 minutos (<= 30 min) -> deve disparar normalmente
+    within_grace_broadcast = BroadcastMessage(
+        id="b-within-grace",
+        profile_id="p-misfire",
+        target_channel_ids=["-1001234567890"],
+        text="Dentro da janela de 30 min",
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=fixed_now - timedelta(minutes=20),
+    )
+    await broadcast_repo.save(overdue_broadcast)
+    await broadcast_repo.save(within_grace_broadcast)
+
+    await service.reconcile_due_broadcasts()
+
+    updated_overdue = await broadcast_repo.get_by_id("b-overdue")
+    assert updated_overdue is not None
+    assert updated_overdue.status == BroadcastStatus.MISFIRED
+    assert media_file.exists(), "A mídia deve ser mantida enquanto o agendamento estiver MISFIRED"
+
+    updated_within = await broadcast_repo.get_by_id("b-within-grace")
+    assert updated_within is not None
+    assert updated_within.status == BroadcastStatus.COMPLETED
+    assert [call[2] for call in gateway.sent_calls] == ["b-within-grace"]
+
+
+@pytest.mark.asyncio
+async def test_execute_scheduled_broadcast_after_pc_sleep_marks_misfired_instead_of_sending(tmp_path):
+    """
+    Mesma regra com o app aberto (#1 decisão 4): se o job do APScheduler atrasar além
+    da janela (ex: suspensão do PC), execute_scheduled_broadcast marca como MISFIRED sem enviar.
+    """
+    from datetime import timedelta
+
+    fixed_now = datetime(2026, 10, 24, 18, 0, 0, tzinfo=timezone.utc)
+    media_file = tmp_path / "delayed.mp4"
+    media_file.write_bytes(b"delayed-video")
+
+    broadcast_repo = InMemoryBroadcastRepository()
+    profile_repo = InMemoryProfileRepository()
+    gateway = MockTelegramGateway(should_succeed=True)
+    service = AutomationSchedulerService(
+        broadcast_repo=broadcast_repo,
+        profile_repo=profile_repo,
+        telegram_gateway=gateway,
+        misfire_grace_minutes=30,
+        clock=lambda: fixed_now,
+    )
+
+    creds = BotCredentials(token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz", bot_username="bot")
+    await profile_repo.save(Profile(id="p-sleep", name="Profile Sleep", credentials=creds))
+
+    delayed_broadcast = BroadcastMessage(
+        id="b-sleep",
+        profile_id="p-sleep",
+        target_channel_ids=["-1001234567890"],
+        text="Atrasou por suspensão do PC",
+        media=MediaAttachment(file_path=str(media_file), media_type=MediaType.VIDEO, file_size=13),
+        status=BroadcastStatus.SCHEDULED,
+        scheduled_at=fixed_now - timedelta(minutes=31),
+    )
+    await broadcast_repo.save(delayed_broadcast)
+
+    await service.execute_scheduled_broadcast("b-sleep")
+
+    updated = await broadcast_repo.get_by_id("b-sleep")
+    assert updated is not None
+    assert updated.status == BroadcastStatus.MISFIRED
+    assert gateway.sent_calls == []
+    assert media_file.exists()

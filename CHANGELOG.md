@@ -12,6 +12,10 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
   - Na primeira inicialização sem banco em `%LOCALAPPDATA%\Auto-Send\`, o app procura `data\autosend.db` da `v0.4.0` na própria pasta da release, na pasta pai e em Downloads, Área de Trabalho e Documentos, oferecendo importar sem apagar o arquivo original.
   - Migrações numeradas em `PRAGMA user_version` (em transação e idempotentes) com backup automático `autosend.db.bak-<versão anterior>` antes de cada migração, mantendo os 3 backups mais recentes; se uma migração falhar, o banco permanece na versão anterior e o app avisa sem abrir.
   - Botão "Abrir pasta de dados" na barra lateral (`POST /api/v1/system/open-data-dir`).
+- Janela de tolerância de agendamento (`SCHEDULE_MISFIRE_GRACE_MINUTES`, padrão: 30 minutos) e status `MISFIRED` (#1):
+  - Agendamentos vencidos dentro da janela disparam normalmente; acima da janela (no startup ou após suspensão do PC), vão para `MISFIRED` em vez de serem enviados fora de hora.
+  - O arquivo temporário de mídia é mantido enquanto o agendamento estiver `MISFIRED`, sendo apagado ao enviar ou descartar.
+  - Na interface, um banner não bloqueante avisa sobre agendamentos expirados e a fila exibe os itens `MISFIRED` no topo com o selo "Expirado" e as ações **Enviar agora** (`POST /api/v1/broadcasts/{broadcast_id}/dispatch-now`), **Reagendar** (`PATCH /api/v1/broadcasts/{broadcast_id}`) e **Descartar** (`DELETE /api/v1/broadcasts/{broadcast_id}/cancel`).
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).

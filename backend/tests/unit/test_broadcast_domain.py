@@ -205,6 +205,7 @@ async def test_in_memory_repository_get_scheduled_by_profile():
     d1 = datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc)
     d2 = datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)
     d3 = datetime(2026, 10, 22, 15, 0, tzinfo=timezone.utc)
+    d4 = datetime(2026, 10, 21, 18, 0, tzinfo=timezone.utc)
 
     # b1: profile-1, SCHEDULED, d1
     b1 = BroadcastMessage(id="b1", profile_id="m1", target_channel_ids=["-1001"], status=BroadcastStatus.SCHEDULED, scheduled_at=d1)
@@ -218,15 +219,108 @@ async def test_in_memory_repository_get_scheduled_by_profile():
     b5 = BroadcastMessage(id="b5", profile_id="m2", target_channel_ids=["-1001"], status=BroadcastStatus.SCHEDULED, scheduled_at=d2)
     # b6: profile-1, SCHEDULED, scheduled_at is None (should be excluded)
     b6 = BroadcastMessage(id="b6", profile_id="m1", target_channel_ids=["-1001"], status=BroadcastStatus.SCHEDULED, scheduled_at=None)
+    # b7: profile-1, MISFIRED, d4 (deve aparecer primeiro na fila antes dos SCHEDULED/PENDING)
+    b7 = BroadcastMessage(id="b7", profile_id="m1", target_channel_ids=["-1001"], status=BroadcastStatus.MISFIRED, scheduled_at=d4)
 
-    for b in [b1, b2, b3, b4, b5, b6]:
+    for b in [b1, b2, b3, b4, b5, b6, b7]:
         await repo.save(b)
 
     scheduled_m1 = await repo.get_scheduled_by_profile("m1")
-    assert len(scheduled_m1) == 2
-    # Deve ser ordenado ascendentemente por scheduled_at: b2 (d2: 10:00) depois b1 (d1: 12:00)
-    assert scheduled_m1[0].id == "b2"
-    assert scheduled_m1[1].id == "b1"
+    assert [b.id for b in scheduled_m1] == ["b7", "b2", "b1"]
+
+
+def test_misfired_transitions_and_guards():
+    now = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    future = datetime(2026, 10, 24, 15, 0, tzinfo=timezone.utc)
+
+    for valid_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED):
+        msg = BroadcastMessage(
+            id="b-m",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Bom dia",
+            status=valid_status,
+            scheduled_at=now,
+        )
+        msg.mark_misfired()
+        assert msg.status is BroadcastStatus.MISFIRED
+
+    # De MISFIRED -> SCHEDULED via reschedule, podendo editar conteúdo antes
+    msg_resched = BroadcastMessage(
+        id="b-m-resched",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890"],
+        text="Bom dia",
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now,
+    )
+    msg_resched.update_content("Boa tarde", None)
+    msg_resched.reschedule(future)
+    assert msg_resched.status is BroadcastStatus.SCHEDULED
+    assert msg_resched.scheduled_at == future
+    assert msg_resched.text == "Boa tarde"
+
+    # De MISFIRED -> DISPATCHING via start_dispatch
+    for dispatchable in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg_disp = BroadcastMessage(
+            id="b-m-disp",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Envio imediato",
+            status=dispatchable,
+            scheduled_at=now,
+        )
+        msg_disp.start_dispatch()
+        assert msg_disp.status is BroadcastStatus.DISPATCHING
+
+    # De MISFIRED -> CANCELLED via cancel
+    msg_cancel = BroadcastMessage(
+        id="b-m-cancel",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890"],
+        text="Descartar",
+        status=BroadcastStatus.MISFIRED,
+        scheduled_at=now,
+    )
+    msg_cancel.cancel()
+    assert msg_cancel.status is BroadcastStatus.CANCELLED
+
+    # Guardas de estados não permitidos para mark_misfired
+    for invalid_misfire_status in (
+        BroadcastStatus.MISFIRED,
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        invalid_msg = BroadcastMessage(
+            id="b-inv-m",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Inv",
+            status=invalid_misfire_status,
+        )
+        with pytest.raises(ValueError, match=r"^Only pending or scheduled broadcasts can become misfired$"):
+            invalid_msg.mark_misfired()
+
+    # Guardas de estados terminais/em voo para start_dispatch
+    for invalid_dispatch_status in (
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        invalid_msg = BroadcastMessage(
+            id="b-inv-d",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            text="Inv",
+            status=invalid_dispatch_status,
+        )
+        with pytest.raises(ValueError, match=r"^Cannot dispatch an in-flight, completed, failed, or cancelled broadcast$"):
+            invalid_msg.start_dispatch()
 
 
 def _dispatching_broadcast(targets: int) -> BroadcastMessage:

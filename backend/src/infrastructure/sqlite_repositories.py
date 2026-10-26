@@ -278,12 +278,16 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             res = await session.execute(
                 select(BroadcastModel)
                 .where(BroadcastModel.profile_id == profile_id)
-                .where(BroadcastModel.status.in_(["PENDING", "SCHEDULED"]))
+                .where(BroadcastModel.status.in_(["PENDING", "SCHEDULED", "MISFIRED"]))
                 .where(BroadcastModel.scheduled_at.is_not(None))
                 .order_by(BroadcastModel.scheduled_at.asc())
             )
             objs = res.scalars().all()
-            return [self._to_entity(o) for o in objs]
+            items = [self._to_entity(o) for o in objs]
+            return sorted(
+                items,
+                key=lambda b: (0 if b.status == BroadcastStatus.MISFIRED else 1, b.scheduled_at),
+            )
 
     async def list_pending_scheduled(self) -> List[BroadcastMessage]:
         from sqlalchemy import select
