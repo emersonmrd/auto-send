@@ -100,6 +100,13 @@ export default function Home() {
   const [tempButtonUrl, setTempButtonUrl] = useState("");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
+  // Mídia do agendamento sendo editado no compositor (#18)
+  const [existingEditingMedia, setExistingEditingMedia] = useState<{
+    mediaType: "PHOTO" | "VIDEO";
+    fileSize?: number | null;
+    url: string;
+  } | null>(null);
+  const [existingMediaRemoved, setExistingMediaRemoved] = useState(false);
 
   // Inserção de Link no Texto da Mensagem (Inline Hyperlink)
   const composerEditorRef = useRef<TelegramRichEditorHandle | null>(null);
@@ -371,16 +378,16 @@ export default function Home() {
     setIsLoadingQueue(true);
     try {
       const [res, histRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/scheduled-broadcasts`),
-        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/broadcasts`),
+        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/scheduled-broadcasts`).catch(() => null),
+        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/broadcasts`).catch(() => null),
       ]);
-      if (res.ok) {
+      if (res && res.ok) {
         const data = await res.json();
         setScheduledQueue(data);
       } else {
         setScheduledQueue([]);
       }
-      if (histRes.ok) {
+      if (histRes && histRes.ok) {
         const histData: BroadcastHistoryItem[] = await histRes.json();
         setBroadcastHistory(
           Array.isArray(histData)
@@ -393,7 +400,7 @@ export default function Home() {
         setBroadcastHistory([]);
       }
     } catch {
-      // Backend offline ou rota indisponível
+      // Backend offline ou erro inesperado
       setScheduledQueue([]);
       setBroadcastHistory([]);
     } finally {
@@ -453,6 +460,7 @@ export default function Home() {
       if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
       setMediaFile(file);
       setMediaPreviewUrl(URL.createObjectURL(file));
+      setExistingMediaRemoved(false);
 
       const isVideo =
         file.type.toLowerCase().startsWith("video/") ||
@@ -539,6 +547,9 @@ export default function Home() {
     if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
     setMediaPreviewUrl(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+    if (existingEditingMedia) {
+      setExistingMediaRemoved(true);
+    }
   };
 
   const clearComposerIfUnmodified = (
@@ -1087,6 +1098,28 @@ export default function Home() {
       const d = new Date(item.scheduled_at);
       if (!isNaN(d.getTime())) applyScheduleDateTime(d, false);
     }
+    // Mídia do agendamento (#18)
+    if (item.media) {
+      setExistingEditingMedia({
+        mediaType: item.media.media_type,
+        fileSize: item.media.file_size,
+        url: `${API_BASE_URL}/api/v1/broadcasts/${item.id}/media`,
+      });
+      setExistingMediaRemoved(false);
+      setMediaFile(null);
+      if (mediaPreviewUrl) {
+        URL.revokeObjectURL(mediaPreviewUrl);
+        setMediaPreviewUrl(null);
+      }
+    } else {
+      setExistingEditingMedia(null);
+      setExistingMediaRemoved(false);
+      setMediaFile(null);
+      if (mediaPreviewUrl) {
+        URL.revokeObjectURL(mediaPreviewUrl);
+        setMediaPreviewUrl(null);
+      }
+    }
     setComposerEditing({ id: item.id, scheduledAt: item.scheduled_at });
     setShowQueueDrawer(false);
     setFeedback({
@@ -1102,6 +1135,15 @@ export default function Home() {
     setButtonUrl("");
     setScheduledAtInput("");
     setScheduleConfirmedPreview(null);
+    setExistingEditingMedia(null);
+    setExistingMediaRemoved(false);
+    setMediaFile(null);
+    setVideoThumbnailBlob(null);
+    setVideoMetadata(null);
+    if (mediaPreviewUrl) {
+      URL.revokeObjectURL(mediaPreviewUrl);
+      setMediaPreviewUrl(null);
+    }
   };
 
   // Sair do modo edição sem salvar: libera a trava; se o horário já passou, o backend cancela (#15).
@@ -1121,7 +1163,7 @@ export default function Home() {
     if (selectedProfile) fetchScheduledQueue(selectedProfile.id);
   };
 
-  // Salvar o modo edição: PATCH no mesmo agendamento (não cria outro).
+  // Salvar o modo edição: PUT/DELETE na mídia (#18) e PATCH no mesmo agendamento (#15).
   const saveComposerEdit = async (scheduleDateIso: string) => {
     if (!composerEditing) return;
     if (selectedChannelIds.length === 0) {
@@ -1133,6 +1175,37 @@ export default function Home() {
       return;
     }
     try {
+      if (mediaFile) {
+        const formData = new FormData();
+        formData.append("media_file", mediaFile);
+        if (videoThumbnailBlob) {
+          formData.append("thumbnail_file", videoThumbnailBlob, "thumb.jpg");
+        }
+        if (videoMetadata) {
+          if (videoMetadata.duration) formData.append("video_duration", String(Math.round(videoMetadata.duration)));
+          if (videoMetadata.width) formData.append("video_width", String(videoMetadata.width));
+          if (videoMetadata.height) formData.append("video_height", String(videoMetadata.height));
+        }
+        const mediaRes = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}/media`, {
+          method: "PUT",
+          body: formData,
+        });
+        if (!mediaRes.ok) {
+          const err = await mediaRes.json().catch(() => null);
+          setFeedback({ type: "error", message: extractApiError(err, "Erro ao atualizar mídia do agendamento") });
+          return;
+        }
+      } else if (existingMediaRemoved) {
+        const mediaRes = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}/media`, {
+          method: "DELETE",
+        });
+        if (!mediaRes.ok) {
+          const err = await mediaRes.json().catch(() => null);
+          setFeedback({ type: "error", message: extractApiError(err, "Erro ao remover mídia do agendamento") });
+          return;
+        }
+      }
+
       const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1914,7 +1987,7 @@ export default function Home() {
                 {/* Balão do Telegram com Scroll Suave Irrestrito para Mensagens Longas */}
                 <div className="bg-[#2b5278] text-white rounded-2xl rounded-tr-sm p-3.5 shadow-lg max-w-md w-full border border-[#3b6694]/40 max-h-[70vh] overflow-y-auto scroll-smooth pr-2">
                   {/* Prévia de Imagem ou Vídeo */}
-                  {mediaPreviewUrl && (
+                  {mediaPreviewUrl ? (
                     <div className="relative mb-2 rounded-xl overflow-hidden bg-black/40 flex items-center justify-center">
                       {isImageMedia(mediaFile) ? (
                         <img
@@ -1930,7 +2003,23 @@ export default function Home() {
                         />
                       )}
                     </div>
-                  )}
+                  ) : existingEditingMedia && !existingMediaRemoved ? (
+                    <div className="relative mb-2 rounded-xl overflow-hidden bg-black/40 flex items-center justify-center">
+                      {existingEditingMedia.mediaType === "PHOTO" ? (
+                        <img
+                          src={existingEditingMedia.url}
+                          alt="Prévia da imagem do agendamento"
+                          className="max-h-64 w-full object-cover rounded-xl"
+                        />
+                      ) : (
+                        <video
+                          src={existingEditingMedia.url}
+                          controls
+                          className="max-h-64 w-full object-cover rounded-xl"
+                        />
+                      )}
+                    </div>
+                  ) : null}
 
                   {/* Texto da Mensagem com Renderização de Links e Preservação de Espaçamento */}
                   <div className="text-sm whitespace-pre-wrap leading-relaxed break-words">
@@ -2076,9 +2165,17 @@ export default function Home() {
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   className={`p-2.5 rounded-full hover:bg-[#242f3d] transition ${
-                    mediaFile ? "text-green-400 bg-[#242f3d]" : "text-gray-400"
+                    mediaFile || (existingEditingMedia && !existingMediaRemoved)
+                      ? "text-green-400 bg-[#242f3d]"
+                      : "text-gray-400"
                   }`}
-                  title={mediaFile ? `Anexado: ${mediaFile.name}` : "Anexar Vídeo / Imagem"}
+                  title={
+                    mediaFile
+                      ? `Anexado: ${mediaFile.name}`
+                      : existingEditingMedia && !existingMediaRemoved
+                      ? "Mídia agendada anexada (clique para trocar)"
+                      : "Anexar Vídeo / Imagem"
+                  }
                 >
                   <Paperclip className="w-5 h-5" />
                 </button>
@@ -2113,6 +2210,35 @@ export default function Home() {
 
                 {/* Área de Texto Expansível */}
                 <div className="flex-1 min-w-0 bg-[#242f3d] rounded-2xl px-4 py-2 flex flex-col">
+                  {!mediaFile && existingEditingMedia && !existingMediaRemoved && (
+                    <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
+                      <div className="flex items-center justify-between text-xs text-green-400">
+                        <span className="truncate min-w-0 flex items-center gap-1.5">
+                          {existingEditingMedia.mediaType === "PHOTO" ? (
+                            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <Video className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span className="truncate" title="Mídia do agendamento">
+                            Mídia do agendamento ({existingEditingMedia.mediaType === "PHOTO" ? "Foto" : "Vídeo"})
+                          </span>
+                          {existingEditingMedia.fileSize ? (
+                            <span className="text-[11px] text-gray-400 shrink-0">
+                              ({formatFileSize(existingEditingMedia.fileSize)})
+                            </span>
+                          ) : null}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isSending}
+                          onClick={removeMedia}
+                          className="text-red-400 hover:text-red-300 text-xs ml-2 disabled:opacity-50"
+                        >
+                          Remover
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {mediaFile && (
                     <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
                       <div className="flex items-center justify-between text-xs text-green-400">

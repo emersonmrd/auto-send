@@ -587,6 +587,12 @@ def test_validate_and_escape_telegram_html_allows_telegram_tags_and_escapes_plai
         )
         == 'Visite <a href="https://example.com/p?a=1&amp;b=2">Link</a>'
     )
+    assert (
+        validate_and_escape_telegram_html(
+            'Visite <a href=\'https://example.com/p?q="teste"\'>Busca</a>'
+        )
+        == 'Visite <a href="https://example.com/p?q=&quot;teste&quot;">Busca</a>'
+    )
 
     # BroadcastMessage aplica na criação e no update_content
     msg = BroadcastMessage(
@@ -754,3 +760,62 @@ def test_update_target_channels_only_for_active_broadcasts_and_non_empty():
         msg = _locked_candidate(status=status)
         with pytest.raises(ValueError, match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$"):
             msg.update_target_channels(["-1002222222222"])
+
+
+def test_replace_media_and_remove_media_lifecycle():
+    photo = MediaAttachment(file_path="/tmp/photo.jpg", media_type=MediaType.PHOTO, file_size=100)
+    video = MediaAttachment(file_path="/tmp/video.mp4", media_type=MediaType.VIDEO, file_size=500)
+
+    for active_status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = _locked_candidate(status=active_status)
+        assert msg.media is None
+        assert msg.get_dispatch_strategy() == DispatchStrategy.TEXT_ONLY
+
+        # Adicionar foto a um broadcast sem mídia
+        msg.replace_media(photo)
+        assert msg.media == photo
+        assert msg.get_dispatch_strategy() == DispatchStrategy.SINGLE_MEDIA_WITH_CAPTION
+
+        # Trocar foto por vídeo
+        msg.replace_media(video)
+        assert msg.media == video
+        assert msg.get_dispatch_strategy() == DispatchStrategy.SINGLE_MEDIA_WITH_CAPTION
+
+        # Remover mídia
+        msg.remove_media()
+        assert msg.media is None
+        assert msg.get_dispatch_strategy() == DispatchStrategy.TEXT_ONLY
+
+        # Remover novamente quando já é None não quebra
+        msg.remove_media()
+        assert msg.media is None
+
+
+def test_replace_media_rejects_invalid_type_and_terminal_states():
+    photo = MediaAttachment(file_path="/tmp/photo.jpg", media_type=MediaType.PHOTO, file_size=100)
+    msg = _locked_candidate(status=BroadcastStatus.SCHEDULED)
+
+    with pytest.raises(ValueError, match=r"^media must be a MediaAttachment instance$"):
+        msg.replace_media("not-a-media-attachment")  # type: ignore
+
+    with pytest.raises(ValueError, match=r"^media must be a MediaAttachment instance$"):
+        msg.replace_media(None)  # type: ignore
+
+    for term_status in (
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        msg = _locked_candidate(status=term_status)
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify media of an in-flight, completed, failed, or cancelled broadcast$",
+        ):
+            msg.replace_media(photo)
+        with pytest.raises(
+            ValueError,
+            match=r"^Cannot modify media of an in-flight, completed, failed, or cancelled broadcast$",
+        ):
+            msg.remove_media()

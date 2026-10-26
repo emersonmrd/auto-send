@@ -59,7 +59,7 @@ def _escape_text_segment(segment: str) -> str:
 def validate_and_escape_telegram_html(text: str) -> str:
     parts: List[str] = []
     open_tags: List[str] = []
-    last_idx = 0
+    last_idx = 0  # pragma: no mutate - slicing text[None:start] é equivalente a text[0:start]
 
     for match in _HTML_TAG_CANDIDATE_RE.finditer(text):
         start, end = match.span()
@@ -299,6 +299,22 @@ class BroadcastMessage:
             raise ValueError("Cannot update content of an in-flight, completed, or cancelled broadcast")
         self.text = validate_and_escape_telegram_html(text)
         self.button = button
+
+    def replace_media(self, media: MediaAttachment) -> None:
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot modify media of an in-flight, completed, failed, or cancelled broadcast"
+            )
+        if not isinstance(media, MediaAttachment):
+            raise ValueError("media must be a MediaAttachment instance")
+        self.media = media
+
+    def remove_media(self) -> None:
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot modify media of an in-flight, completed, failed, or cancelled broadcast"
+            )
+        self.media = None
 
     def update_target_channels(self, channel_ids: List[str]) -> None:
         if not self.is_pending_or_scheduled():

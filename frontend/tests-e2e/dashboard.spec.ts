@@ -53,6 +53,14 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
       }
     });
 
+    await page.route("**/api/v1/profiles/*/broadcasts", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([]),
+      });
+    });
+
     await page.route("**/api/v1/broadcasts", async (route) => {
       await route.fulfill({
         status: 201,
@@ -91,13 +99,13 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
   test("deve abrir modal de link inline e renderizar o botão no live preview", async ({ page }) => {
     await page.goto("/");
     
-    // Clica no botão de configurar link inline
-    const linkBtn = page.locator('button[title*="link"]').or(page.locator('button:has(svg.lucide-link)'));
+    // Clica no botão de configurar botão abaixo da mensagem
+    const linkBtn = page.getByRole("button", { name: "Adicionar Botão Abaixo da Mensagem" });
     if (await linkBtn.count() > 0) {
       await linkBtn.first().click();
       await page.fill('input[placeholder*="Saiba mais"]', "Acesse Aqui");
       await page.fill('input[placeholder*="https://"]', "https://t.me/+promo");
-      await page.click('button:has-text("Confirmar Botão")');
+      await page.getByRole("button", { name: "Salvar" }).click();
 
       // Verifica se o botão inline aparece no preview
       await expect(page.locator('text=Acesse Aqui').first()).toBeVisible();
@@ -194,7 +202,7 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
 
     await page.goto("/");
     await page.getByTitle("Abrir Fila de Agendamentos").click();
-    await page.getByTitle("Editar texto, botão ou horário deste agendamento").click();
+    await page.getByTitle("Editar mensagem e horário de agendamento").click();
 
     const editField = page.getByRole("textbox", { name: "Texto da Mensagem" });
     await expect(editField).toBeVisible();
@@ -220,7 +228,7 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
     await linkDialog.getByRole("button", { name: "Salvar Link" }).click();
     await expect(linkDialog).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Salvar Alterações" }).click();
+    await page.getByRole("button", { name: "OK — Confirmar Agendamento" }).click();
     expect(patchedBody).toMatchObject({
       text: '<b>Oferta</b> <a href="https://example.com/nova">novo link</a>',
     });
@@ -320,11 +328,17 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
     await page.getByRole("button", { name: "Agendar Mensagem" }).click();
     await page.getByRole("button", { name: "OK — Confirmar Agendamento" }).click();
 
-    await expect(page.getByText("Agendamento atualizado com sucesso!")).toBeVisible();
+    await expect(page.getByText("Agendamento atualizado com sucesso!").first()).toBeVisible();
     expect(patchCalledWith).toMatchObject({
       text: "Texto editado no compositor",
       target_channel_ids: ["-1001234567890"],
     });
+
+    // Fecha o toast para liberar a área de cliques
+    const closeToast = page.getByRole("button", { name: "OK / Fechar" });
+    if (await closeToast.count() > 0) {
+      await closeToast.click();
+    }
 
     // 5. Carregar de novo e sair do modo edição via botão no banner
     await page.getByTitle("Abrir Fila de Agendamentos").click();
@@ -333,5 +347,120 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
     await banner.getByRole("button", { name: "Sair do modo edição" }).click();
     expect(lockReleased).toBe(true);
     await expect(banner).toHaveCount(0);
+  });
+
+  test("loads scheduled broadcast with media into composer, shows preview, and handles remove media (#18)", async ({ page }) => {
+    let deleteMediaCalled = false;
+    let patchCalled = false;
+    const futureIso = new Date(Date.now() + 3600000).toISOString();
+
+    await page.route("**/api/v1/profiles/profile-1/scheduled-broadcasts", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "b-edit-18",
+            profile_id: "profile-1",
+            target_channel_ids: ["-1001234567890"],
+            text: "Texto do agendamento com foto",
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+            created_at: new Date().toISOString(),
+            media: {
+              media_type: "PHOTO",
+              file_size: 2048,
+            },
+            button: null,
+          },
+        ]),
+      }),
+    );
+
+    await page.route("**/api/v1/broadcasts/b-edit-18/edit-lock", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "b-edit-18",
+          status: "SCHEDULED",
+          edit_locked_until: new Date(Date.now() + 90000).toISOString(),
+          cancelled: false,
+        }),
+      }),
+    );
+
+    await page.route("**/api/v1/broadcasts/b-edit-18/media", (route) => {
+      if (route.request().method() === "GET") {
+        return route.fulfill({
+          status: 200,
+          contentType: "image/jpeg",
+          body: Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]),
+        });
+      }
+      if (route.request().method() === "DELETE") {
+        deleteMediaCalled = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "b-edit-18",
+            profile_id: "profile-1",
+            target_channel_ids: ["-1001234567890"],
+            text: "Texto do agendamento com foto",
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+            media: null,
+          }),
+        });
+      }
+      return route.continue();
+    });
+
+    await page.route("**/api/v1/broadcasts/b-edit-18", (route) => {
+      if (route.request().method() === "PATCH") {
+        patchCalled = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "b-edit-18",
+            profile_id: "profile-1",
+            target_channel_ids: ["-1001234567890"],
+            text: "Texto do agendamento com foto",
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+            media: null,
+          }),
+        });
+      }
+      return route.continue();
+    });
+
+    await page.goto("/");
+    await page.getByTitle("Abrir Fila de Agendamentos").click();
+
+    // 1. Clicar em "Carregar no Editor"
+    await page.getByRole("button", { name: "Carregar no Editor" }).click();
+
+    // 2. Imagem visível no preview e barra de mídia presente
+    const previewImg = page.locator('img[alt="Prévia da imagem do agendamento"]');
+    await expect(previewImg).toBeVisible();
+
+    const mediaBar = page.getByText("Mídia do agendamento (Foto)");
+    await expect(mediaBar).toBeVisible();
+
+    // 3. Remover a mídia existente
+    await page.getByRole("button", { name: "Remover" }).click();
+    await expect(previewImg).toHaveCount(0);
+    await expect(mediaBar).toHaveCount(0);
+
+    // 4. Salvar agendamento: dispara DELETE /media e PATCH
+    await page.getByRole("button", { name: "Agendar Mensagem" }).click();
+    await page.getByRole("button", { name: "OK — Confirmar Agendamento" }).click();
+
+    await expect(page.getByText("Agendamento atualizado com sucesso!").first()).toBeVisible();
+    expect(deleteMediaCalled).toBe(true);
+    expect(patchCalled).toBe(true);
   });
 });

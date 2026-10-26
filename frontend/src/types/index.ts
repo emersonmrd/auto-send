@@ -110,7 +110,6 @@ export interface BroadcastResponse {
 export type CreateBroadcastResponse = ScheduledBroadcastCreateResponse | BroadcastResponse;
 
 export interface BroadcastMedia {
-  file_path: string;
   media_type: "PHOTO" | "VIDEO";
   file_size?: number | null;
 }

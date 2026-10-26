@@ -34,6 +34,16 @@ async function mockBackend(page: Page, cancelCalls: string[]) {
   await page.route("**/api/v1/profiles/*/scheduled-broadcasts", (route) =>
     route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([scheduled]) }),
   );
+  await page.route("**/api/v1/profiles/*/broadcasts", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
+  );
+  await page.route("**/api/v1/broadcasts/*/edit-lock", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "broad-9", status: "SCHEDULED", cancelled: false }),
+    }),
+  );
   await page.route("**/api/v1/broadcasts/*/cancel", (route) => {
     cancelCalls.push(route.request().url());
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...scheduled, status: "CANCELLED" }) });
@@ -84,10 +94,10 @@ test.describe("Confirmação não bloqueante (AGENTS.md §8.5)", () => {
     const dialog = page.getByRole("dialog", { name: "Substituir rascunho" });
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Manter rascunho" }).click();
-    await expect(composer).toHaveValue("Rascunho em andamento");
+    await expect(composer).toHaveText("Rascunho em andamento");
 
     await page.getByRole("button", { name: "Carregar no Editor" }).click();
     await dialog.getByRole("button", { name: "Substituir" }).click();
-    await expect(composer).toHaveValue("Promo agendada");
+    await expect(composer).toHaveText("Promo agendada");
   });
 });

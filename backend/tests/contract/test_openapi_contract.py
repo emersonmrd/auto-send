@@ -81,8 +81,9 @@ def test_every_2xx_response_in_openapi_declares_a_schema():
             for status_code, response in operation.get("responses", {}).items():
                 if not str(status_code).startswith("2"):
                     continue
-                json_schema = response.get("content", {}).get("application/json", {}).get("schema", {})
-                if not json_schema:
+                content = response.get("content", {})
+                schema_present = any(media_type.get("schema") for media_type in content.values())
+                if not schema_present:
                     missing.append(f"{method.upper()} {path} -> {status_code}")
     assert missing == [], f"Rotas 2xx sem response_model no OpenAPI: {missing}"
 

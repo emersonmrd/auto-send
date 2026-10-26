@@ -32,6 +32,12 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
   - Ao clicar em "Agendar", salva no mesmo registro via `PATCH /api/v1/broadcasts/{id}` (com atualização de canais e liberação do lock) sem duplicar o agendamento na fila.
   - O agendador e reconciliador suspendem o disparo enquanto a trava estiver ativa; se o horário agendado for ultrapassado durante a edição, o lock expirado cancela o agendamento de forma limpa.
   - Migração #5 adiciona a coluna `edit_locked_until` na tabela `broadcasts`.
+- Mídia do agendamento no modo de edição do compositor (#18):
+  - Ao carregar um agendamento com mídia para edição, o preview exibe a foto ou o vídeo atual diretamente pela nova rota `GET /api/v1/broadcasts/{broadcast_id}/media` (streaming inline com validação contra path traversal e sem expor o caminho interno no servidor).
+  - O compositor exibe uma barra dedicada com o tipo e tamanho da mídia agendada e botão para remover (`DELETE /api/v1/broadcasts/{broadcast_id}/media`, apagando o arquivo físico do disco).
+  - O botão de anexo permite substituir a mídia existente ou adicionar mídia a um agendamento de texto (`PUT /api/v1/broadcasts/{broadcast_id}/media`, com remoção limpa do arquivo anterior se substituído).
+  - O DTO `BroadcastMediaResponse` deixa de expor o campo `file_path`.
+  - No domínio, `BroadcastMessage.replace_media()` e `BroadcastMessage.remove_media()` garantem a integridade do estado e tipos suportados em agendamentos pendentes.
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).

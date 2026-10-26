@@ -1996,4 +1996,271 @@ async def test_broadcast_edit_lock_workflow_routes_and_scheduler_suppression(mon
         assert b_cancelled.status.value == "CANCELLED"
 
 
+@pytest.mark.asyncio
+async def test_broadcast_media_get_preview_and_security(client, tmp_path):
+    import os
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import app, profile_repo, broadcast_repo, TEMP_MEDIA_DIR
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    p = Profile(id="p-media-get", name="P Media", credentials=BotCredentials(token="123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", bot_username="p_media_bot"))
+    await profile_repo.save(p)
+
+    # Cria arquivo real em TEMP_MEDIA_DIR
+    img_filename = f"{uuid.uuid4()}.jpg"
+    img_path = os.path.join(TEMP_MEDIA_DIR, img_filename)
+    with open(img_path, "wb") as f:
+        f.write(b"\xff\xd8\xff\xe0" + b"A" * 64)
+
+    sched_dt = datetime.now(timezone.utc) + timedelta(hours=2)
+    b_with_media = BroadcastMessage(
+        id="b-with-media",
+        profile_id="p-media-get",
+        target_channel_ids=["-1001234567890"],
+        text="Com imagem",
+        media=MediaAttachment(
+            file_path=img_path,
+            media_type=MediaType.PHOTO,
+            file_size=68,
+        ),
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    b_without_media = BroadcastMessage(
+        id="b-without-media",
+        profile_id="p-media-get",
+        target_channel_ids=["-1001234567890"],
+        text="Sem imagem",
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    await broadcast_repo.save(b_with_media)
+    await broadcast_repo.save(b_without_media)
+
+    try:
+        # 1. Sucesso: busca mídia para preview
+        resp = await client.get("/api/v1/broadcasts/b-with-media/media")
+        assert resp.status_code == 200
+        assert resp.headers["content-disposition"] == "inline"
+        assert resp.headers["content-type"].startswith("image/jpeg")
+        assert len(resp.content) == 68
+
+        # 2. 404 quando broadcast não existe
+        resp404_b = await client.get("/api/v1/broadcasts/non-existent/media")
+        assert resp404_b.status_code == 404
+        assert resp404_b.json()["detail"] == "Broadcast not found"
+
+        # 3. 404 quando broadcast não possui mídia
+        resp404_m = await client.get("/api/v1/broadcasts/b-without-media/media")
+        assert resp404_m.status_code == 404
+        assert resp404_m.json()["detail"] == "Media not found"
+
+        # 4. 404 quando o arquivo físico foi removido do disco
+        os.remove(img_path)
+        resp404_f = await client.get("/api/v1/broadcasts/b-with-media/media")
+        assert resp404_f.status_code == 404
+        assert resp404_f.json()["detail"] == "Media not found"
+
+        # 5. Segurança Anti-Path-Traversal (§9): arquivo fora de TEMP_MEDIA_DIR
+        outside_file = tmp_path / "outside.jpg"
+        outside_file.write_bytes(b"\xff\xd8\xff\xe0" + b"outside")
+        b_traversal = BroadcastMessage(
+            id="b-traversal",
+            profile_id="p-media-get",
+            target_channel_ids=["-1001234567890"],
+            text="Traversal",
+            media=MediaAttachment(
+                file_path=str(outside_file),
+                media_type=MediaType.PHOTO,
+                file_size=11,
+            ),
+            scheduled_at=sched_dt,
+            status=BroadcastStatus.SCHEDULED,
+        )
+        await broadcast_repo.save(b_traversal)
+        resp_trav = await client.get("/api/v1/broadcasts/b-traversal/media")
+        assert resp_trav.status_code == 404
+    finally:
+        if os.path.exists(img_path):
+            os.remove(img_path)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_media_put_replace_and_delete_workflow(client, tmp_path):
+    import io
+    import os
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import app, profile_repo, broadcast_repo, TEMP_MEDIA_DIR
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    p = Profile(id="p-media-ops", name="P Media Ops", credentials=BotCredentials(token="123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", bot_username="p_media_ops_bot"))
+    await profile_repo.save(p)
+
+    sched_dt = datetime.now(timezone.utc) + timedelta(hours=2)
+    b = BroadcastMessage(
+        id="b-media-ops",
+        profile_id="p-media-ops",
+        target_channel_ids=["-1001234567890"],
+        text="Mensagem para trocar midia",
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    await broadcast_repo.save(b)
+
+    # 1. Adicionar imagem via PUT
+    img_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"X" * 100
+    put_resp1 = await client.put(
+        "/api/v1/broadcasts/b-media-ops/media",
+        files={"media_file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert put_resp1.status_code == 200
+    data1 = put_resp1.json()
+    assert data1["media"] is not None
+    assert data1["media"]["media_type"] == "PHOTO"
+    assert "file_path" not in data1["media"]  # Não vaza caminho interno (§9, #18)
+
+    b_db1 = await broadcast_repo.get_by_id("b-media-ops")
+    assert b_db1.media is not None
+    assert b_db1.media.media_type == MediaType.PHOTO
+    first_file_path = b_db1.media.file_path
+    assert os.path.exists(first_file_path)
+
+    # 2. Trocar imagem por vídeo via PUT: verifica que arquivo antigo é deletado (Zero Clutter Policy §6)
+    # Assinatura ftyp para vídeo mp4
+    vid_header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00"
+    vid_bytes = vid_header + b"V" * 200
+    put_resp2 = await client.put(
+        "/api/v1/broadcasts/b-media-ops/media",
+        files={"media_file": ("video.mp4", io.BytesIO(vid_bytes), "video/mp4")},
+        data={"video_duration": 12, "video_width": 1280, "video_height": 720},
+    )
+    assert put_resp2.status_code == 200
+    data2 = put_resp2.json()
+    assert data2["media"]["media_type"] == "VIDEO"
+
+    b_db2 = await broadcast_repo.get_by_id("b-media-ops")
+    assert b_db2.media.media_type == MediaType.VIDEO
+    second_file_path = b_db2.media.file_path
+    assert os.path.exists(second_file_path)
+    assert not os.path.exists(first_file_path)  # Arquivo antigo foi apagado!
+
+    # 3. Remover mídia via DELETE
+    del_resp = await client.delete("/api/v1/broadcasts/b-media-ops/media")
+    assert del_resp.status_code == 200
+    data_del = del_resp.json()
+    assert data_del["media"] is None
+
+    b_db3 = await broadcast_repo.get_by_id("b-media-ops")
+    assert b_db3.media is None
+    assert not os.path.exists(second_file_path)  # Arquivo de vídeo também foi apagado!
+
+    # 4. Segundo DELETE retorna 404 (já removida)
+    del_resp2 = await client.delete("/api/v1/broadcasts/b-media-ops/media")
+    assert del_resp2.status_code == 404
+    assert del_resp2.json()["detail"] == "Media not found"
+
+    # 5. Não permite editar mídia de broadcast em estado terminal (ex: COMPLETED)
+    b_db3.status = BroadcastStatus.COMPLETED
+    await broadcast_repo.save(b_db3)
+    put_term = await client.put(
+        "/api/v1/broadcasts/b-media-ops/media",
+        files={"media_file": ("test.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert put_term.status_code == 422
+    del_term = await client.delete("/api/v1/broadcasts/b-media-ops/media")
+    assert del_term.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_broadcast_media_replaced_dispatches_with_correct_gateway_endpoint(client, monkeypatch):
+    import io
+    import os
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import app, profile_repo, broadcast_repo, scheduler_service, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        MediaAttachment,
+        MediaType,
+    )
+
+    p = Profile(
+        id="p-dispatch-check",
+        name="P Dispatch",
+        credentials=BotCredentials(token="123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", bot_username="p_dispatch_bot"),
+    )
+    await profile_repo.save(p)
+
+    now_utc = datetime.now(timezone.utc)
+    sched_dt = now_utc - timedelta(seconds=10)
+    b = BroadcastMessage(
+        id="b-dispatch-check",
+        profile_id="p-dispatch-check",
+        target_channel_ids=["-1001234567890"],
+        text="Legenda curta para video",
+        scheduled_at=sched_dt,
+        status=BroadcastStatus.SCHEDULED,
+    )
+    await broadcast_repo.save(b)
+
+    # 1. Adiciona foto
+    img_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"X" * 100
+    put_img = await client.put(
+        "/api/v1/broadcasts/b-dispatch-check/media",
+        files={"media_file": ("foto.jpg", io.BytesIO(img_bytes), "image/jpeg")},
+    )
+    assert put_img.status_code == 200
+
+    # 2. Troca foto por vídeo
+    vid_header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00"
+    vid_bytes = vid_header + b"V" * 200
+    put_vid = await client.put(
+        "/api/v1/broadcasts/b-dispatch-check/media",
+        files={"media_file": ("video.mp4", io.BytesIO(vid_bytes), "video/mp4")},
+        data={"video_duration": 10, "video_width": 1920, "video_height": 1080},
+    )
+    assert put_vid.status_code == 200
+    assert put_vid.json()["media"]["media_type"] == "VIDEO"
+
+    # 3. Intercepta envio no telegram_gateway para validar que recebe o vídeo e não a foto
+    sent_messages = []
+
+    async def mock_send_broadcast(bot_token, chat_id, message, **kwargs):
+        sent_messages.append((bot_token, chat_id, message))
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", mock_send_broadcast)
+
+    # Executa o disparo agendado
+    await scheduler_service.execute_scheduled_broadcast("b-dispatch-check")
+
+    assert len(sent_messages) == 1
+    _, chat_id, dispatched_msg = sent_messages[0]
+    assert chat_id == "-1001234567890"
+    assert dispatched_msg.media is not None
+    assert dispatched_msg.media.media_type == MediaType.VIDEO
+    assert dispatched_msg.get_dispatch_strategy().value == "SINGLE_MEDIA_WITH_CAPTION"
+
+    # Confirma que após a execução, a mídia temporária foi limpa do disco
+    assert not os.path.exists(dispatched_msg.media.file_path)
+
+
 

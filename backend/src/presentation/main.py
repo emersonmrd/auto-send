@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, List, Optional, Union
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import parse_host_header
 from pydantic import BaseModel
@@ -341,7 +341,6 @@ class ImmediateBroadcastCreateResponse(BaseModel):
     delivery_results: List[ChannelDeliveryResultResponse] = []
 
 class BroadcastMediaResponse(BaseModel):
-    file_path: str
     media_type: str
     file_size: Optional[int] = None
 
@@ -1302,6 +1301,26 @@ def _format_datetime_utc(dt: Optional[datetime]) -> Optional[str]:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+def _serialize_scheduled_broadcast(b: BroadcastMessage) -> dict:
+    return {
+        "id": b.id,
+        "profile_id": b.profile_id,
+        "target_channel_ids": b.target_channel_ids,
+        "text": b.text,
+        "media": {
+            "media_type": b.media.media_type.value,
+            "file_size": b.media.file_size,
+        } if b.media else None,
+        "button": {
+            "text": b.button.text,
+            "url": b.button.url,
+        } if b.button else None,
+        "status": b.status.value,
+        "scheduled_at": _format_datetime_utc(b.scheduled_at),
+        "created_at": _format_datetime_utc(b.created_at),
+    }
+
+
 @app.get(
     "/api/v1/profiles/{profile_id}/scheduled-broadcasts",
     response_model=List[ScheduledBroadcastResponse],
@@ -1313,27 +1332,7 @@ async def list_profile_scheduled_broadcasts(profile_id: str):
         raise HTTPException(status_code=404, detail="Profile not found")
     
     broadcasts = await broadcast_repo.get_scheduled_by_profile(profile_id)
-    return [
-        {
-            "id": b.id,
-            "profile_id": b.profile_id,
-            "target_channel_ids": b.target_channel_ids,
-            "text": b.text,
-            "media": {
-                "file_path": b.media.file_path,
-                "media_type": b.media.media_type.value,
-                "file_size": b.media.file_size,
-            } if b.media else None,
-            "button": {
-                "text": b.button.text,
-                "url": b.button.url,
-            } if b.button else None,
-            "status": b.status.value,
-            "scheduled_at": _format_datetime_utc(b.scheduled_at),
-            "created_at": _format_datetime_utc(b.created_at),
-        }
-        for b in broadcasts
-    ]
+    return [_serialize_scheduled_broadcast(b) for b in broadcasts]
 
 @app.delete(
     "/api/v1/broadcasts/{broadcast_id}/cancel",
@@ -1519,24 +1518,7 @@ async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
 
     await broadcast_repo.save(broadcast)
 
-    return {
-        "id": broadcast.id,
-        "profile_id": broadcast.profile_id,
-        "target_channel_ids": broadcast.target_channel_ids,
-        "text": broadcast.text,
-        "media": {
-            "file_path": broadcast.media.file_path,
-            "media_type": broadcast.media.media_type.value,
-            "file_size": broadcast.media.file_size,
-        } if broadcast.media else None,
-        "button": {
-            "text": broadcast.button.text,
-            "url": broadcast.button.url,
-        } if broadcast.button else None,
-        "status": broadcast.status.value,
-        "scheduled_at": _format_datetime_utc(broadcast.scheduled_at),
-        "created_at": _format_datetime_utc(broadcast.created_at),
-    }
+    return _serialize_scheduled_broadcast(broadcast)
 
 
 def _remove_broadcast_media_files(broadcast: BroadcastMessage) -> None:
@@ -1601,6 +1583,182 @@ async def release_broadcast_edit_lock(broadcast_id: str):
         "edit_locked_until": None,
         "cancelled": cancelled,
     }
+
+
+@app.get(
+    "/api/v1/broadcasts/{broadcast_id}/media",
+    responses={
+        200: {
+            "content": {
+                "image/*": {"schema": {"type": "string", "format": "binary"}},
+                "video/*": {"schema": {"type": "string", "format": "binary"}},
+            },
+            "description": "Media file stream for preview",
+        },
+        **_ERR_404,
+        **_ERR_422,
+    },
+)
+async def get_broadcast_media(broadcast_id: str):
+    """Devolve o arquivo de mídia para exibição no preview sem expor caminhos internos (§9, #18)."""
+    broadcast = await broadcast_repo.get_by_id(broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+
+    if not broadcast.media or not broadcast.media.file_path:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    file_path = os.path.abspath(broadcast.media.file_path)
+    temp_dir_abs = os.path.abspath(TEMP_MEDIA_DIR)
+    try:
+        common = os.path.commonpath([temp_dir_abs, file_path])
+        if common != temp_dir_abs:
+            raise HTTPException(status_code=404, detail="Media not found")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    ext = os.path.splitext(file_path)[1].lower()
+    media_type = "video/mp4" if broadcast.media.media_type == MediaType.VIDEO else "image/jpeg"
+    if ext in (".png", ".webp", ".gif"):
+        media_type = f"image/{ext[1:]}"
+    elif ext in (".jpg", ".jpeg"):
+        media_type = "image/jpeg"
+
+    return FileResponse(
+        path=file_path,
+        media_type=media_type,
+        headers={"Content-Disposition": "inline"},
+    )
+
+
+@app.put(
+    "/api/v1/broadcasts/{broadcast_id}/media",
+    response_model=ScheduledBroadcastResponse,
+    responses={**_ERR_404, **_ERR_413, **_ERR_422},
+)
+async def replace_broadcast_media(
+    broadcast_id: str,
+    media_file: UploadFile = File(...),
+    thumbnail_file: Optional[UploadFile] = File(None),
+    video_duration: Optional[int] = Form(None),
+    video_width: Optional[int] = Form(None),
+    video_height: Optional[int] = Form(None),
+):
+    """Substitui ou adiciona mídia a um agendamento existente em modo edição (#18)."""
+    broadcast = await broadcast_repo.get_by_id(broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+
+    if not broadcast.is_pending_or_scheduled():
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot edit media of an in-flight, completed, or cancelled broadcast",
+        )
+
+    temp_file_path = None
+    temp_thumb_path = None
+
+    def reject_upload(status_code: int, detail: str):
+        for path in (temp_thumb_path, temp_file_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    has_media = bool(media_file and media_file.filename)
+    if not has_media:
+        raise HTTPException(status_code=422, detail="No media file provided")
+
+    has_thumb = bool(thumbnail_file and thumbnail_file.filename)
+    try:
+        file_ext = os.path.splitext(os.path.basename(media_file.filename))[1].lower()
+        media_type = classify_media(file_ext, read_upload_header(media_file))
+        if has_thumb:
+            thumb_ext = os.path.splitext(os.path.basename(thumbnail_file.filename))[1].lower()
+            if classify_media(thumb_ext, read_upload_header(thumbnail_file)) is not MediaType.PHOTO:
+                raise ValueError("Unsupported media format")
+    except ValueError as e:
+        reject_upload(422, str(e))
+
+    max_bytes = media_upload_limit_bytes()
+    try:
+        if has_thumb:
+            temp_thumb_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}_thumb{thumb_ext}")
+            save_upload(thumbnail_file.file, temp_thumb_path, max_bytes)
+        temp_file_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}{file_ext}")
+        file_size = save_upload(media_file.file, temp_file_path, max_bytes)
+    except MediaTooLarge:
+        reject_upload(413, f"Media file too large (limit: {max_bytes // (1024 * 1024)} MB)")
+
+    final_duration = video_duration
+    final_width = video_width
+    final_height = video_height
+
+    if media_type == MediaType.VIDEO:
+        extracted = extract_mp4_metadata(temp_file_path)
+        if extracted.get("duration"):
+            final_duration = extracted["duration"]
+        if extracted.get("width") and extracted.get("height"):
+            final_width = extracted["width"]
+            final_height = extracted["height"]
+        final_width, final_height = normalize_video_dimensions(final_width, final_height)
+
+    new_attachment = MediaAttachment(
+        file_path=temp_file_path,
+        media_type=media_type,
+        file_size=file_size,
+        duration=final_duration,
+        width=final_width,
+        height=final_height,
+        thumbnail_path=temp_thumb_path,
+    )
+
+    # Limpa mídia antiga no disco com segurança
+    _remove_broadcast_media_files(broadcast)
+
+    try:
+        broadcast.replace_media(new_attachment)
+    except ValueError as e:
+        reject_upload(422, str(e))
+
+    await broadcast_repo.save(broadcast)
+    return _serialize_scheduled_broadcast(broadcast)
+
+
+@app.delete(
+    "/api/v1/broadcasts/{broadcast_id}/media",
+    response_model=ScheduledBroadcastResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
+async def delete_broadcast_media(broadcast_id: str):
+    """Remove a mídia do agendamento e apaga o arquivo temporário do servidor (#18)."""
+    broadcast = await broadcast_repo.get_by_id(broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+
+    if not broadcast.is_pending_or_scheduled():
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot edit media of an in-flight, completed, or cancelled broadcast",
+        )
+
+    if not broadcast.media:
+        raise HTTPException(status_code=404, detail="Media not found")
+
+    _remove_broadcast_media_files(broadcast)
+
+    try:
+        broadcast.remove_media()
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    await broadcast_repo.save(broadcast)
+    return _serialize_scheduled_broadcast(broadcast)
 
 from fastapi.staticfiles import StaticFiles
 

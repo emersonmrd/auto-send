@@ -73,6 +73,9 @@ export const API_ERROR_CATALOG: Record<string, string> = {
     "Não é possível editar um agendamento em envio, concluído, com falha ou cancelado.",
   "Cannot modify media of an in-flight, completed, failed, or cancelled broadcast":
     "Não é possível alterar a mídia de um agendamento em envio, concluído, com falha ou cancelado.",
+  "Cannot edit media of an in-flight, completed, or cancelled broadcast":
+    "Não é possível alterar a mídia de um agendamento em envio, concluído ou cancelado.",
+  "No media file provided": "Nenhum arquivo de mídia foi enviado.",
   "Broadcast does not have media": "Este agendamento não possui mídia.",
   "Media not found": "Arquivo de mídia do agendamento não encontrado.",
 
