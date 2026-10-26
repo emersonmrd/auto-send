@@ -282,3 +282,18 @@ async def test_mutation_profile_deletion_cascades_channels_and_broadcasts():
         assert len(rem_broadcasts) == 0, "Mutante sobreviveu: BroadcastModel órfão deixado no banco"
 
     await test_engine.dispose()
+
+
+def test_mutmut_runner_includes_every_domain_test_file():
+    # O runner do mutmut lista os testes um por um: um teste de domínio fora da lista deixa os mutantes
+    # do arquivo vivos, e a falha só aparece quando a mutação roda (#39, media_format).
+    import tomllib
+    from pathlib import Path
+
+    backend = Path(__file__).resolve().parents[1]
+    runner = tomllib.loads((backend / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["mutmut"]["runner"]
+    domain_tests = sorted(p.relative_to(backend).as_posix() for p in (backend / "tests" / "unit").glob("test_*_domain.py"))
+
+    assert domain_tests, "nenhum teste de domínio encontrado"
+    missing = [path for path in domain_tests if path not in runner.split()]
+    assert missing == [], f"fora do runner do mutmut em pyproject.toml: {missing}"
