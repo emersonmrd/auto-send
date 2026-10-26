@@ -16,6 +16,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
+from urllib.parse import unquote
 
 MAX_BACKUPS = 3
 
@@ -126,6 +127,7 @@ def sqlite_file_from_url(database_url: str) -> Path | None:
         raw = database_url[len(alt_prefix) :]
     if not raw or raw == ":memory:" or raw.startswith("file::memory:"):
         return None
+    raw = unquote(raw)
     return Path(raw).resolve()
 
 

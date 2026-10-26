@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import sqlite3
 import pytest
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from src.infrastructure.sqlite_migrations import (
     MIGRATIONS,
     MigrationStep,
     get_user_version,
+    sqlite_file_from_url,
 )
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
@@ -496,5 +498,21 @@ def test_run_app_aborts_startup_without_opening_browser_when_migration_fails(tmp
     assert opened_urls == []
     err = capsys.readouterr().err
     assert "versão 1" in err
+
+
+def test_sqlite_file_from_url_unquotes_percent_encoded_paths(tmp_path):
+    assert sqlite_file_from_url("sqlite+aiosqlite:///:memory:") is None
+    assert sqlite_file_from_url("sqlite:///:memory:") is None
+    assert sqlite_file_from_url("sqlite+aiosqlite:///file::memory:?cache=shared") is None
+    assert sqlite_file_from_url("postgres://user:pass@localhost/db") is None
+
+    f = tmp_path / "test.db"
+    assert sqlite_file_from_url(f"sqlite+aiosqlite:///{f}") == f.resolve()
+    assert sqlite_file_from_url(f"sqlite:///{f}") == f.resolve()
+
+    # Percent-encoded path (ex: SQLAlchemy on Windows with drive letter C%3A)
+    encoded = "sqlite+aiosqlite:///C%3A/Users/ContainerUser/AppData/Local/Temp/autosend.db"
+    expected = Path("C:/Users/ContainerUser/AppData/Local/Temp/autosend.db").resolve()
+    assert sqlite_file_from_url(encoded) == expected
 
 
