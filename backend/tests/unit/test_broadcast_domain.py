@@ -3,6 +3,8 @@ import pytest
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     BroadcastStatus,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     DispatchStrategy,
     InlineButton,
     MediaAttachment,
@@ -442,3 +444,85 @@ def test_finish_dispatch_rejects_impossible_counts():
         _dispatching_broadcast(2).finish_dispatch(delivered=3, total=2)
     with pytest.raises(ValueError, match=r"^delivered must be between 0 and total$"):
         _dispatching_broadcast(2).finish_dispatch(delivered=-1, total=2)
+
+
+def test_channel_delivery_result_and_finish_dispatch_with_results():
+    ok = ChannelDeliveryResult.success("-1001111111111")
+    assert ok.chat_id == "-1001111111111"
+    assert ok.delivered is True
+    assert ok.failure_category is None
+    assert ok.detail is None
+
+    fail = ChannelDeliveryResult.failure(
+        "-1002222222222",
+        category=DeliveryFailureCategory.NO_POST_PERMISSION,
+        detail="not enough rights",
+    )
+    assert fail.chat_id == "-1002222222222"
+    assert fail.delivered is False
+    assert fail.failure_category is DeliveryFailureCategory.NO_POST_PERMISSION
+    assert fail.detail == "not enough rights"
+
+    fail_no_detail = ChannelDeliveryResult.failure(
+        "-1003333333333",
+        category=DeliveryFailureCategory.INVALID_TOKEN,
+    )
+    assert fail_no_detail.detail is None
+
+    for empty_id in ("", "   "):
+        with pytest.raises(ValueError, match=r"^chat_id cannot be empty$"):
+            ChannelDeliveryResult(chat_id=empty_id, delivered=True)
+
+    with pytest.raises(ValueError, match=r"^Delivered result cannot have a failure_category$"):
+        ChannelDeliveryResult(
+            chat_id="-1001111111111",
+            delivered=True,
+            failure_category=DeliveryFailureCategory.OTHER,
+        )
+
+    with pytest.raises(ValueError, match=r"^Failed delivery result requires a failure_category$"):
+        ChannelDeliveryResult(chat_id="-1001111111111", delivered=False)
+
+    # Cálculo de status por finish_dispatch_with_results
+    msg_partial = BroadcastMessage(
+        id="b-res-partial",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111", "-1002222222222"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    msg_partial.finish_dispatch_with_results([ok, fail])
+    assert msg_partial.status is BroadcastStatus.PARTIALLY_COMPLETED
+    assert msg_partial.delivery_results == [ok, fail]
+
+    msg_all_ok = BroadcastMessage(
+        id="b-res-ok",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    msg_all_ok.finish_dispatch_with_results([ok])
+    assert msg_all_ok.status is BroadcastStatus.COMPLETED
+    assert msg_all_ok.delivery_results == [ok]
+
+    msg_fail_all = BroadcastMessage(
+        id="b-res-fail",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111", "-1002222222222"],
+        status=BroadcastStatus.DISPATCHING,
+    )
+    msg_fail_all.fail_all_channels(
+        DeliveryFailureCategory.INVALID_TOKEN,
+        detail="Unauthorized",
+    )
+    assert msg_fail_all.status is BroadcastStatus.FAILED
+    assert len(msg_fail_all.delivery_results) == 2
+    assert all(
+        r.delivered is False
+        and r.failure_category is DeliveryFailureCategory.INVALID_TOKEN
+        and r.detail == "Unauthorized"
+        for r in msg_fail_all.delivery_results
+    )
+    assert [r.chat_id for r in msg_fail_all.delivery_results] == [
+        "-1001111111111",
+        "-1002222222222",
+    ]

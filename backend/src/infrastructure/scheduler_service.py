@@ -5,13 +5,16 @@ from typing import Callable, Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.domain.broadcast.broadcast_message import (
     BroadcastStatus,
+    ChannelDeliveryResult,
     DEFAULT_MISFIRE_GRACE_MINUTES,
+    DeliveryFailureCategory,
     DueScheduleAction,
     evaluate_due_schedule,
 )
 from src.domain.ports.broadcast_repository import IBroadcastRepository
 from src.domain.ports.profile_repository import IProfileRepository
 from src.domain.ports.telegram_gateway import ITelegramGateway
+from src.infrastructure.telegram_gateway_http import dispatch_broadcast_to_channel, redact_bot_token
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +180,10 @@ class AutomationSchedulerService:
 
             profile = await self.profile_repo.get_by_id(broadcast.profile_id)
             if not profile:
-                broadcast.status = BroadcastStatus.FAILED
+                broadcast.fail_all_channels(
+                    DeliveryFailureCategory.OTHER,
+                    detail="Profile not found",
+                )
                 await self.broadcast_repo.save(broadcast)
                 self._cleanup_media(broadcast)
                 return
@@ -185,21 +191,25 @@ class AutomationSchedulerService:
             broadcast.start_dispatch()
             await self.broadcast_repo.save(broadcast)
 
-            success_count = 0
+            results: list[ChannelDeliveryResult] = []
             try:
                 for chat_id in broadcast.target_channel_ids:
-                    ok = await self.telegram_gateway.send_broadcast(
+                    res = await dispatch_broadcast_to_channel(
+                        gateway=self.telegram_gateway,
                         bot_token=profile.credentials.token,
                         chat_id=chat_id,
                         message=broadcast,
                     )
-                    if ok:
-                        success_count += 1
+                    results.append(res)
 
-                broadcast.finish_dispatch(delivered=success_count, total=len(broadcast.target_channel_ids))
+                broadcast.finish_dispatch_with_results(results)
             except Exception as e:
-                logger.exception(f"Error executing scheduled broadcast {broadcast_id}: {e}")
-                broadcast.status = BroadcastStatus.FAILED
+                clean_err = redact_bot_token(str(e), bot_token=profile.credentials.token)
+                logger.exception(f"Error executing scheduled broadcast {broadcast_id}: {clean_err}")
+                broadcast.fail_all_channels(
+                    DeliveryFailureCategory.OTHER,
+                    detail=clean_err,
+                )
             finally:
                 await self.broadcast_repo.save(broadcast)
                 self._cleanup_media(broadcast)

@@ -76,6 +76,10 @@ def _migration_003_profile_avatar_and_active(cursor: sqlite3.Cursor) -> None:
         _add_column_if_missing(cursor, "profiles", col_name, col_def)
 
 
+def _migration_004_broadcast_delivery_results(cursor: sqlite3.Cursor) -> None:
+    _add_column_if_missing(cursor, "broadcasts", "delivery_results", "TEXT")
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -91,6 +95,11 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         version=3,
         description="Campos avatar_url e is_active em profiles",
         apply=_migration_003_profile_avatar_and_active,
+    ),
+    MigrationStep(
+        version=4,
+        description="Resultados de entrega por canal em broadcasts (#31)",
+        apply=_migration_004_broadcast_delivery_results,
     ),
 )
 

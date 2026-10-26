@@ -20,6 +20,8 @@ from src.infrastructure.sqlite_migrations import (
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     BroadcastStatus,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     MediaAttachment,
     MediaType,
 )
@@ -333,7 +335,9 @@ async def test_upgrade_from_v040_preserves_data_sets_schema_version_and_creates_
         await main_module.init_db()
 
         assert get_user_version(db_path) == CURRENT_SCHEMA_VERSION
-        assert (tmp_path / "autosend.db.bak-0").is_file()
+        # Os 3 backups mais recentes são mantidos após a sequência de migrações
+        backups = sorted(p.name for p in tmp_path.glob("autosend.db.bak-*"))
+        assert len(backups) == 3
 
         profiles = await SqlAlchemyProfileRepository(session_factory).list_all()
         channels = await SqlAlchemyChannelRepository(session_factory).list_by_profile("prof-acme")
@@ -342,6 +346,7 @@ async def test_upgrade_from_v040_preserves_data_sets_schema_version_and_creates_
         assert [p.name for p in profiles] == ["Acme"]
         assert [c.title for c in channels] == ["Canal de Novidades"]
         assert [b.text for b in broadcasts] == ["Comunicado da v0.4.0"]
+        assert broadcasts[0].delivery_results == []
     finally:
         await test_engine.dispose()
 
@@ -382,14 +387,7 @@ async def test_four_consecutive_migrations_keep_only_the_three_most_recent_backu
     db_path = tmp_path / "autosend.db"
     create_legacy_sqlite_db(str(db_path))
 
-    four_steps = (
-        *MIGRATIONS,
-        MigrationStep(
-            version=4,
-            description="Passo extra para testar poda de backups",
-            apply=lambda cur: cur.execute("SELECT 1"),
-        ),
-    )
+    four_steps = MIGRATIONS[:4]
 
     test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
     monkeypatch.setattr(main_module, "engine", test_engine)
@@ -400,6 +398,49 @@ async def test_four_consecutive_migrations_keep_only_the_three_most_recent_backu
         backups = sorted(p.name for p in tmp_path.glob("autosend.db.bak-*"))
         assert backups == ["autosend.db.bak-1", "autosend.db.bak-2", "autosend.db.bak-3"]
         assert get_user_version(db_path) == 4
+        assert "delivery_results" in get_table_columns(str(db_path), "broadcasts")
+    finally:
+        await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_repository_persists_and_loads_delivery_results_column(tmp_path, monkeypatch):
+    db_path = tmp_path / "autosend.db"
+    create_v040_sqlite_db(str(db_path))
+
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db()
+        repo = SqlAlchemyBroadcastRepository(session_factory)
+        bc = BroadcastMessage(
+            id="bc-with-results",
+            profile_id="prof-acme",
+            target_channel_ids=["-1001111111111", "-1002222222222"],
+            text="Resultado por canal",
+            status=BroadcastStatus.DISPATCHING,
+        )
+        bc.finish_dispatch_with_results(
+            [
+                ChannelDeliveryResult.success("-1001111111111"),
+                ChannelDeliveryResult.failure(
+                    "-1002222222222",
+                    category=DeliveryFailureCategory.NO_POST_PERMISSION,
+                    detail="Bad Request: not enough rights to send text messages to the chat",
+                ),
+            ]
+        )
+        await repo.save(bc)
+
+        loaded = await repo.get_by_id("bc-with-results")
+        assert loaded is not None
+        assert loaded.status is BroadcastStatus.PARTIALLY_COMPLETED
+        assert len(loaded.delivery_results) == 2
+        assert loaded.delivery_results[0].delivered is True
+        assert loaded.delivery_results[1].delivered is False
+        assert loaded.delivery_results[1].failure_category is DeliveryFailureCategory.NO_POST_PERMISSION
     finally:
         await test_engine.dispose()
 

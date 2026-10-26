@@ -1165,4 +1165,83 @@ async def test_telegram_gateway_send_broadcast_split_mode_triggers_progress_call
     assert progress_reports[-1][1] == file_size
 
 
+@pytest.mark.asyncio
+async def test_dispatch_broadcast_to_channel_maps_all_telegram_failure_categories_and_redacts_token(monkeypatch):
+    """
+    Issue #31: Mapeamento das respostas do Telegram para DeliveryFailureCategory
+    e garantia de que o token do bot nunca aparece no motivo ou em logs (§9).
+    """
+    from src.domain.broadcast.broadcast_message import DeliveryFailureCategory
+    from src.infrastructure.telegram_gateway_http import dispatch_broadcast_to_channel
+
+    secret_token = "999888777:SECRET_TOKEN_NEVER_LEAK_THIS_12345"
+    scenario = {"status": 200, "body": {"ok": True}, "exc": None}
+
+    def mock_handler(request: httpx.Request):
+        if scenario["exc"] is not None:
+            raise scenario["exc"](request=request)
+        return httpx.Response(scenario["status"], json=scenario["body"])
+
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    msg = BroadcastMessage(
+        id="b-cat",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890"],
+        text="Teste de categorias",
+    )
+
+    cases = [
+        (400, {"ok": False, "description": "Bad Request: chat not found"}, DeliveryFailureCategory.BOT_NOT_IN_CHAT),
+        (403, {"ok": False, "description": "Forbidden: bot was kicked from the channel chat"}, DeliveryFailureCategory.BOT_NOT_IN_CHAT),
+        (400, {"ok": False, "description": "Bad Request: not enough rights to send text messages to the chat"}, DeliveryFailureCategory.NO_POST_PERMISSION),
+        (403, {"ok": False, "description": "Forbidden: need administrator rights in the channel chat"}, DeliveryFailureCategory.NO_POST_PERMISSION),
+        (401, {"ok": False, "description": f"Unauthorized for {secret_token}"}, DeliveryFailureCategory.INVALID_TOKEN),
+        (429, {"ok": False, "description": "Too Many Requests: retry after 15", "parameters": {"retry_after": 15}}, DeliveryFailureCategory.RATE_LIMITED),
+        (502, {"ok": False, "description": "Bad Gateway"}, DeliveryFailureCategory.TELEGRAM_UNAVAILABLE),
+        (400, {"ok": False, "description": f"Bad Request: message is too long (/bot{secret_token}/sendMessage)"}, DeliveryFailureCategory.OTHER),
+    ]
+
+    for status_code, body, expected_cat in cases:
+        gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+        scenario["status"] = status_code
+        scenario["body"] = body
+        scenario["exc"] = None
+
+        res = await dispatch_broadcast_to_channel(
+            gateway=gateway,
+            bot_token=secret_token,
+            chat_id="-1001234567890",
+            message=msg,
+        )
+        assert res.delivered is False
+        assert res.failure_category is expected_cat
+        assert secret_token not in (res.detail or "")
+        assert secret_token not in (gateway.last_error or "")
+
+    # Timeout / erro de rede -> TELEGRAM_UNAVAILABLE sem vazar o token
+    gateway_net = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    scenario["exc"] = lambda request: httpx.ReadTimeout(
+        f"ReadTimeout calling https://api.telegram.org/bot{secret_token}/sendMessage",
+        request=request,
+    )
+    res_net = await dispatch_broadcast_to_channel(
+        gateway=gateway_net,
+        bot_token=secret_token,
+        chat_id="-1001234567890",
+        message=msg,
+    )
+    assert res_net.delivered is False
+    assert res_net.failure_category is DeliveryFailureCategory.TELEGRAM_UNAVAILABLE
+    assert secret_token not in (res_net.detail or "")
+    assert secret_token not in (gateway_net.last_error or "")
+
+
+
 

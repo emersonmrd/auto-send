@@ -10,6 +10,27 @@ const CHANNEL_REGISTRATION_ERRORS: Record<string, string> = {
     "Há um envio em andamento. Aguarde terminar e tente de novo.",
 };
 
+const DELIVERY_FAILURE_MESSAGES: Record<string, string> = {
+  BOT_NOT_IN_CHAT: "O bot não está no canal",
+  NO_POST_PERMISSION: "O bot não é administrador ou não tem permissão de publicar",
+  INVALID_TOKEN: "Token do bot inválido ou revogado",
+  RATE_LIMITED: "Limite do Telegram; tente mais tarde",
+  TELEGRAM_UNAVAILABLE: "Telegram indisponível no momento do envio",
+};
+
+export function formatDeliveryFailureReason(
+  category?: string | null,
+  detail?: string | null
+): string {
+  if (category && DELIVERY_FAILURE_MESSAGES[category]) {
+    return DELIVERY_FAILURE_MESSAGES[category];
+  }
+  if (detail && detail.trim()) {
+    return detail.trim();
+  }
+  return "Falha ao enviar para o canal";
+}
+
 export function extractApiError(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null | undefined)?.detail;
 

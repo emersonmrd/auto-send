@@ -7,6 +7,8 @@ from sqlalchemy.orm import declarative_base, relationship
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     BroadcastStatus,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     InlineButton,
     MediaAttachment,
     MediaType,
@@ -61,6 +63,7 @@ class BroadcastModel(Base):
     status = Column(String, default="PENDING")
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    delivery_results = Column(Text, nullable=True)  # JSON encoded (#31)
 
 # Repositórios SQLAlchemy com aiosqlite
 class SqlAlchemyProfileRepository(IProfileRepository):
@@ -218,6 +221,21 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                 m_thumb = broadcast.media.thumbnail_path if broadcast.media else None
                 b_text = broadcast.button.text if broadcast.button else None
                 b_url = broadcast.button.url if broadcast.button else None
+                results_json = (
+                    json.dumps(
+                        [
+                            {
+                                "chat_id": r.chat_id,
+                                "delivered": r.delivered,
+                                "failure_category": r.failure_category.value if r.failure_category else None,
+                                "detail": r.detail,
+                            }
+                            for r in broadcast.delivery_results
+                        ]
+                    )
+                    if broadcast.delivery_results
+                    else None
+                )
 
                 if existing:
                     existing.target_channel_ids = channels_json
@@ -233,6 +251,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                     existing.scheduled_at = broadcast.scheduled_at
                     existing.button_text = b_text
                     existing.button_url = b_url
+                    existing.delivery_results = results_json
                 else:
                     db_obj = BroadcastModel(
                         id=broadcast.id,
@@ -251,6 +270,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                         status=broadcast.status.value,
                         scheduled_at=broadcast.scheduled_at,
                         created_at=broadcast.created_at,
+                        delivery_results=results_json,
                     )
                     session.add(db_obj)
 
@@ -326,6 +346,23 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
         if created_dt is not None and created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
 
+        delivery_results: List[ChannelDeliveryResult] = []
+        raw_results = getattr(obj, "delivery_results", None)
+        if raw_results:
+            try:
+                for item in json.loads(raw_results):
+                    cat = item.get("failure_category")
+                    delivery_results.append(
+                        ChannelDeliveryResult(
+                            chat_id=item["chat_id"],
+                            delivered=bool(item["delivered"]),
+                            failure_category=DeliveryFailureCategory(cat) if cat else None,
+                            detail=item.get("detail"),
+                        )
+                    )
+            except Exception:
+                delivery_results = []
+
         return BroadcastMessage(
             id=obj.id,
             profile_id=obj.profile_id,
@@ -336,4 +373,5 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             status=BroadcastStatus(obj.status),
             scheduled_at=scheduled_dt,
             created_at=created_dt,
+            delivery_results=delivery_results,
         )

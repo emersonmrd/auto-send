@@ -8,9 +8,11 @@ import {
   ScheduledBroadcast,
   AffectedBroadcastItem,
   AffectedBroadcastsResponse,
+  BroadcastHistoryItem,
+  ChannelDeliveryResult,
 } from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
-import { ApiHttpError, extractApiError } from "@/lib/apiError";
+import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
 import ConfirmDialog, { ConfirmDialogProps } from "@/components/ConfirmDialog";
 
@@ -23,6 +25,7 @@ interface BroadcastResponse {
   dispatched_count?: number;
   total_targets?: number;
   errors?: string[];
+  delivery_results?: ChannelDeliveryResult[];
   detail?: string | Array<{ msg?: string }>;
 }
 
@@ -120,6 +123,7 @@ export default function Home() {
     return () => clearInterval(timer);
   }, [showQueueDrawer]);
   const [scheduledQueue, setScheduledQueue] = useState<ScheduledBroadcast[]>([]);
+  const [broadcastHistory, setBroadcastHistory] = useState<BroadcastHistoryItem[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [editingBroadcast, setEditingBroadcast] = useState<ScheduledBroadcast | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -332,22 +336,54 @@ export default function Home() {
     };
   }, []);
 
+  const formatChannelDeliveryList = useCallback(
+    (results?: ChannelDeliveryResult[] | null): string => {
+      if (!results || results.length === 0) return "";
+      return results
+        .map((r) => {
+          const channelName = channels.find((c) => c.chat_id === r.chat_id)?.title || r.chat_id;
+          if (r.delivered) {
+            return `${channelName} ✓`;
+          }
+          return `${channelName} ✗ ${formatDeliveryFailureReason(r.failure_category, r.detail)}`;
+        })
+        .join(" · ");
+    },
+    [channels]
+  );
+
   // Carregar Fila de Agendamentos do Perfil Selecionado
   const fetchScheduledQueue = useCallback(async (profileId?: string) => {
     const targetProfileId = profileId || selectedProfile?.id;
     if (!targetProfileId) return;
     setIsLoadingQueue(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/scheduled-broadcasts`);
+      const [res, histRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/scheduled-broadcasts`),
+        fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/broadcasts`),
+      ]);
       if (res.ok) {
         const data = await res.json();
         setScheduledQueue(data);
       } else {
         setScheduledQueue([]);
       }
+      if (histRes.ok) {
+        const histData: BroadcastHistoryItem[] = await histRes.json();
+        setBroadcastHistory(
+          Array.isArray(histData)
+            ? histData.filter((b) =>
+                ["COMPLETED", "PARTIALLY_COMPLETED", "FAILED"].includes(b.status)
+              )
+            : []
+        );
+      } else {
+        setBroadcastHistory([]);
+      }
     } catch {
       // Backend offline ou rota indisponível
       setScheduledQueue([]);
+      setBroadcastHistory([]);
     } finally {
       setIsLoadingQueue(false);
     }
@@ -869,13 +905,19 @@ export default function Home() {
       } else {
         const dispatchedCount = result?.dispatched_count ?? 0;
         const errorsList = Array.isArray(result?.errors) ? result.errors : [];
-        const hasErrors = errorsList.length > 0;
+        const deliverySummary = formatChannelDeliveryList(result?.delivery_results);
+        const hasFailedChannel = Array.isArray(result?.delivery_results)
+          ? result.delivery_results.some((r) => !r.delivered)
+          : false;
+        const hasErrors = errorsList.length > 0 || hasFailedChannel;
 
         if (dispatchedCount === 0 || hasErrors) {
           lastSubmitSignatureRef.current = null;
-          const errorDetails = hasErrors
-            ? errorsList.join(", ")
-            : "Nenhum canal recebeu a mensagem (0 disparos concluídos).";
+          const errorDetails =
+            deliverySummary ||
+            (errorsList.length > 0
+              ? errorsList.join(", ")
+              : "Nenhum canal recebeu a mensagem (0 disparos concluídos).");
           const sizeHint =
             currentMediaFile && currentMediaFile.size > TELEGRAM_MAX_STANDARD_SIZE_BYTES
               ? ` (Arquivo com ${formatFileSize(currentMediaFile.size)}: verifique estabilidade da rede).`
@@ -885,14 +927,16 @@ export default function Home() {
             type: "error",
             message:
               dispatchedCount > 0
-                ? `Envio parcial (${dispatchedCount} enviado(s)), mas houve falha: ${errorDetails}${sizeHint}`
+                ? `Envio parcial (${dispatchedCount} enviado(s)): ${errorDetails}${sizeHint}`
                 : `Falha no envio: ${errorDetails}${sizeHint}`,
           });
+          fetchScheduledQueue(currentProfileId);
         } else {
           setFeedback({
             type: "success",
             message: `Disparado com sucesso para ${dispatchedCount} canal(is)!`,
           });
+          fetchScheduledQueue(currentProfileId);
           clearComposerIfUnmodified(currentText, currentMediaFile, currentButtonText, currentButtonUrl);
           setShowScheduleModal(false);
           setScheduledAtInput("");
@@ -1010,13 +1054,19 @@ export default function Home() {
         const result: BroadcastResponse = await res.json();
         const dispatchedCount = result?.dispatched_count ?? 0;
         const errorsList = Array.isArray(result?.errors) ? result.errors : [];
-        if (dispatchedCount === 0 || errorsList.length > 0) {
+        const deliverySummary = formatChannelDeliveryList(result?.delivery_results);
+        const hasFailedChannel = Array.isArray(result?.delivery_results)
+          ? result.delivery_results.some((r) => !r.delivered)
+          : false;
+        if (dispatchedCount === 0 || errorsList.length > 0 || hasFailedChannel) {
+          const details =
+            deliverySummary || errorsList.join(", ") || "Nenhum canal recebeu a mensagem.";
           setFeedback({
             type: "error",
             message:
               dispatchedCount > 0
-                ? `Envio parcial (${dispatchedCount} enviado(s)), mas houve falha: ${errorsList.join(", ")}`
-                : `Falha no envio: ${errorsList.join(", ") || "Nenhum canal recebeu a mensagem."}`,
+                ? `Envio parcial (${dispatchedCount} enviado(s)): ${details}`
+                : `Falha no envio: ${details}`,
           });
         } else {
           setFeedback({
@@ -3067,6 +3117,62 @@ export default function Home() {
                     </div>
                   );
                 })
+              )}
+
+              {/* Histórico Recente de Envios com resultado por canal (#31) */}
+              {broadcastHistory.length > 0 && (
+                <div
+                  data-testid="broadcast-history-section"
+                  className="pt-4 mt-4 border-t border-[#242f3d] space-y-2.5"
+                >
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                    Histórico Recente
+                  </h4>
+                  {broadcastHistory.slice(0, 10).map((hist) => {
+                    const summary = formatChannelDeliveryList(hist.delivery_results);
+                    const createdDt = new Intl.DateTimeFormat(undefined, {
+                      dateStyle: "short",
+                      timeStyle: "short",
+                    }).format(new Date(hist.created_at));
+                    return (
+                      <div
+                        key={hist.id}
+                        data-testid="broadcast-history-item"
+                        className="bg-[#1e2a38] rounded-xl p-3 border border-[#3b6694]/20 space-y-1.5 text-xs"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] text-gray-400">{createdDt}</span>
+                          <span
+                            className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
+                              hist.status === "COMPLETED"
+                                ? "bg-emerald-800/70 text-emerald-200"
+                                : hist.status === "PARTIALLY_COMPLETED"
+                                ? "bg-amber-800/70 text-amber-200"
+                                : "bg-red-900/70 text-red-200"
+                            }`}
+                          >
+                            {hist.status}
+                          </span>
+                        </div>
+                        <div className="text-gray-200 line-clamp-2 whitespace-pre-wrap">
+                          {hist.text || <span className="italic text-gray-400">Mensagem sem texto</span>}
+                        </div>
+                        {summary ? (
+                          <div
+                            data-testid="delivery-results-summary"
+                            className="text-[11px] text-gray-300 pt-1 border-t border-gray-700/40"
+                          >
+                            {summary}
+                          </div>
+                        ) : (
+                          <div className="text-[11px] text-gray-500 pt-1 border-t border-gray-700/40">
+                            {hist.channels_count} canal(is)
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           </div>

@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import re
 from typing import Any, Callable, Dict, List, Optional
 import httpx
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
@@ -12,7 +13,13 @@ from src.domain.ports.chat_discovery_gateway import (
     WebhookActiveError,
 )
 from src.domain.ports.telegram_gateway import ITelegramGateway
-from src.domain.broadcast.broadcast_message import BroadcastMessage, DispatchStrategy, MediaType
+from src.domain.broadcast.broadcast_message import (
+    BroadcastMessage,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
+    DispatchStrategy,
+    MediaType,
+)
 from src.infrastructure.progress_reader import ProgressFileReader
 from src.infrastructure.resilience import CircuitBreaker, CircuitBreakerOpenException
 
@@ -23,6 +30,62 @@ PUBLIC_API_MAX_BYTES = 50 * 1024 * 1024
 # Tipos de update que trazem o chat onde o bot está (canal, supergrupo ou grupo).
 _CHAT_UPDATE_KINDS = ("my_chat_member", "channel_post", "edited_channel_post", "message", "edited_message")
 _BOT_LEFT_STATUSES = ("left", "kicked")
+_BOT_TOKEN_IN_URL_RE = re.compile(r"/bot[^/\s\"']+")
+_BARE_BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{10,}\b")
+
+
+def redact_bot_token(text: str, bot_token: Optional[str] = None) -> str:
+    """Remove qualquer ocorrência do token de bot de mensagens de erro ou logs (§9)."""
+    if not text:
+        return ""
+    sanitized = _BOT_TOKEN_IN_URL_RE.sub("/bot[REDACTED]", text)
+    if bot_token and bot_token in sanitized:
+        sanitized = sanitized.replace(bot_token, "[REDACTED]")
+    sanitized = _BARE_BOT_TOKEN_RE.sub("[REDACTED]", sanitized)
+    return sanitized
+
+
+def classify_telegram_error(
+    status_code: Optional[int],
+    description: Optional[str],
+    bot_token: Optional[str] = None,
+) -> tuple[DeliveryFailureCategory, str]:
+    """Converte resposta de erro do Telegram em categoria pura do domínio (ACL, §2)."""
+    clean_desc = redact_bot_token((description or "").strip(), bot_token=bot_token)
+    lower = clean_desc.lower()
+
+    if status_code == 401 or "unauthorized" in lower:
+        return DeliveryFailureCategory.INVALID_TOKEN, clean_desc or "Unauthorized"
+    if status_code == 429 or "too many requests" in lower:
+        return DeliveryFailureCategory.RATE_LIMITED, clean_desc or "Too Many Requests"
+    if status_code is not None and status_code >= 500:
+        return DeliveryFailureCategory.TELEGRAM_UNAVAILABLE, clean_desc or f"Server Error {status_code}"
+
+    if any(
+        marker in lower
+        for marker in (
+            "chat not found",
+            "bot was kicked",
+            "bot is not a member",
+            "user is deactivated",
+            "channel_private",
+        )
+    ):
+        return DeliveryFailureCategory.BOT_NOT_IN_CHAT, clean_desc
+
+    if any(
+        marker in lower
+        for marker in (
+            "not enough rights",
+            "need administrator rights",
+            "chat_write_forbidden",
+            "chat_admin_required",
+            "have no rights to send",
+        )
+    ) or status_code == 403:
+        return DeliveryFailureCategory.NO_POST_PERMISSION, clean_desc
+
+    return DeliveryFailureCategory.OTHER, clean_desc or (f"HTTP {status_code}" if status_code else "Unknown error")
 
 
 class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
@@ -35,6 +98,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         self.base_url = resolved_url.rstrip("/")
         self.circuit_breaker = circuit_breaker or CircuitBreaker()
         self.last_error: Optional[str] = None
+        self.last_failure_category: Optional[DeliveryFailureCategory] = None
+        self.last_failure_detail: Optional[str] = None
 
     async def resolve_effective_base_url(self) -> str:
         """
@@ -62,6 +127,12 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
         return self.base_url
 
+    def _record_telegram_failure(self, status_code: int, desc: str) -> None:
+        cat, clean_desc = classify_telegram_error(status_code, desc)
+        self.last_error = f"Telegram API error ({status_code}): {clean_desc}"
+        self.last_failure_category = cat
+        self.last_failure_detail = clean_desc
+
     async def _handle_response(self, response: httpx.Response) -> Dict[str, Any]:
         """
         Interpreta status e payload do Telegram, atualizando o Circuit Breaker conforme o status.
@@ -86,7 +157,7 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                     pass
 
             await self.circuit_breaker.record_failure(retry_after=retry_after)
-            self.last_error = f"Telegram API error (429): {desc}"
+            self._record_telegram_failure(429, desc)
             logger.warning(f"Telegram returned 429 Rate Limit. retry_after={retry_after}s")
             return {"ok": False, "error_code": 429, "description": desc}
 
@@ -98,8 +169,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                     desc = data["description"]
             except Exception:
                 pass
-            self.last_error = f"Telegram API error (413): {desc}"
-            logger.error(f"Telegram 413 Payload Too Large: {desc}")
+            self._record_telegram_failure(413, desc)
+            logger.error(f"Telegram 413 Payload Too Large: {redact_bot_token(desc)}")
             return {"ok": False, "error_code": 413, "description": desc}
 
         if response.status_code >= 500:
@@ -111,8 +182,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                     desc = data["description"]
             except Exception:
                 pass
-            self.last_error = f"Telegram API error ({response.status_code}): {desc}"
-            logger.error(f"Telegram server error: HTTP {response.status_code} - {desc}")
+            self._record_telegram_failure(response.status_code, desc)
+            logger.error(f"Telegram server error: HTTP {response.status_code} - {redact_bot_token(desc)}")
             return {"ok": False, "error_code": response.status_code, "description": desc}
 
         # 2xx, 4xx (exceto 413/429/5xx)
@@ -123,11 +194,13 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
         if response.is_success and data.get("ok"):
             self.last_error = None
+            self.last_failure_category = None
+            self.last_failure_detail = None
             await self.circuit_breaker.record_success()
         else:
             desc = data.get("description", f"HTTP {response.status_code}")
-            self.last_error = f"Telegram API error ({response.status_code}): {desc}"
-            logger.warning(f"Telegram API error ({response.status_code}): {desc}")
+            self._record_telegram_failure(response.status_code, desc)
+            logger.warning(f"Telegram API error ({response.status_code}): {self.last_failure_detail}")
 
         return data
 
@@ -140,11 +213,12 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                 resp = await client.get(url)
                 data = await self._handle_response(resp)
                 if not data.get("ok"):
-                    raise ValueError(f"Telegram Bot Token validation failed: {data.get('description', 'Unknown error')}")
+                    clean = redact_bot_token(str(data.get("description", "Unknown error")), bot_token=token)
+                    raise ValueError(f"Telegram Bot Token validation failed: {clean}")
                 return data.get("result", {})
         except httpx.RequestError as exc:
             await self.circuit_breaker.record_failure()
-            logger.error(f"Network error validating bot token: {exc}")
+            logger.error("Network error validating bot token: %s", redact_bot_token(str(exc), bot_token=token))
             raise
 
     def _enrich_large_file_error(self, message: BroadcastMessage, effective_url: str) -> None:
@@ -161,6 +235,10 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                 self.last_error = f"{self.last_error} — {hint}"
             else:
                 self.last_error = hint
+            if self.last_failure_detail:
+                self.last_failure_detail = f"{self.last_failure_detail} — {hint}"
+            else:
+                self.last_failure_detail = hint
 
     async def send_broadcast(
         self,
@@ -170,6 +248,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         progress_callback: Optional[Callable[[int, int], None]] = None,
     ) -> bool:
         self.last_error = None
+        self.last_failure_category = None
+        self.last_failure_detail = None
         await self.circuit_breaker.can_execute()
         effective_url = await self.resolve_effective_base_url()
         strategy = message.get_dispatch_strategy()
@@ -247,6 +327,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                             if thumb_f:
                                 thumb_f.close()
                     self.last_error = "Arquivo de mídia não encontrado no servidor antes do envio."
+                    self.last_failure_category = DeliveryFailureCategory.OTHER
+                    self.last_failure_detail = self.last_error
                     return False
 
                 elif strategy == DispatchStrategy.SPLIT_TEXT_THEN_MEDIA:
@@ -307,9 +389,12 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             return False
         except httpx.RequestError as exc:
             await self.circuit_breaker.record_failure()
-            self.last_error = f"Network error: {exc}"
+            clean_exc = redact_bot_token(str(exc), bot_token=bot_token)
+            self.last_error = f"Network error: {clean_exc}"
+            self.last_failure_category = DeliveryFailureCategory.TELEGRAM_UNAVAILABLE
+            self.last_failure_detail = f"Network error ({type(exc).__name__})"
             self._enrich_large_file_error(message, effective_url)
-            logger.error(f"Network error in send_broadcast: {exc}")
+            logger.error("Network error in send_broadcast: %s", clean_exc)
             raise
 
     async def discover_chats(self, bot_token: str) -> List[DiscoveredChat]:
@@ -411,3 +496,63 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         except ValueError:
             # Conversa privada ou dado incompleto: não é um chat que possa virar canal.
             return None
+
+
+async def dispatch_broadcast_to_channel(
+    gateway: ITelegramGateway,
+    bot_token: str,
+    chat_id: str,
+    message: BroadcastMessage,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> ChannelDeliveryResult:
+    """Despacha para um canal e retorna o resultado estruturado por canal sem vazar o token (§2, §9)."""
+    send_kwargs: Dict[str, Any] = {}
+    if progress_callback is not None:
+        send_kwargs["progress_callback"] = progress_callback
+    try:
+        ok = await gateway.send_broadcast(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            message=message,
+            **send_kwargs,
+        )
+    except CircuitBreakerOpenException as exc:
+        return ChannelDeliveryResult.failure(
+            chat_id,
+            category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
+            detail=redact_bot_token(str(exc), bot_token=bot_token),
+        )
+    except httpx.RequestError as exc:
+        return ChannelDeliveryResult.failure(
+            chat_id,
+            category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
+            detail=f"Network error ({type(exc).__name__})",
+        )
+    except Exception as exc:
+        return ChannelDeliveryResult.failure(
+            chat_id,
+            category=DeliveryFailureCategory.OTHER,
+            detail=redact_bot_token(str(exc), bot_token=bot_token),
+        )
+
+    if ok:
+        return ChannelDeliveryResult.success(chat_id)
+
+    raw_cat = getattr(gateway, "last_failure_category", None)
+    raw_detail = getattr(gateway, "last_failure_detail", None)
+    raw_error = getattr(gateway, "last_error", None)
+
+    detail: Optional[str] = None
+    if isinstance(raw_detail, str) and raw_detail:
+        detail = redact_bot_token(raw_detail, bot_token=bot_token)
+    elif isinstance(raw_error, str) and raw_error:
+        detail = redact_bot_token(raw_error, bot_token=bot_token)
+
+    if isinstance(raw_cat, DeliveryFailureCategory):
+        category = raw_cat
+    elif detail:
+        category, _ = classify_telegram_error(None, detail, bot_token=bot_token)
+    else:
+        category = DeliveryFailureCategory.OTHER
+
+    return ChannelDeliveryResult.failure(chat_id, category=category, detail=detail)

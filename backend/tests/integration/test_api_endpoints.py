@@ -1701,3 +1701,96 @@ async def test_channel_delete_and_edit_update_pending_broadcasts_and_block_on_di
         assert scheduler_service.scheduler.get_job("broadcast_b-a-and-b") is None
     finally:
         scheduler_service.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_delivery_results_per_channel_in_immediate_response_and_history(monkeypatch):
+    """
+    Issue #31:
+    - Envio para Canal A e Canal B com o bot sem permissão em B -> PARTIALLY_COMPLETED,
+      A entregue e B com NO_POST_PERMISSION.
+    - Envio antigo sem delivery_results aparece no histórico com delivery_results=[].
+    """
+    from src.domain.broadcast.broadcast_message import (
+        BroadcastMessage,
+        BroadcastStatus,
+        DeliveryFailureCategory,
+    )
+    from src.presentation.main import broadcast_repo, profile_repo, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+
+    await profile_repo.save(
+        Profile(
+            id="p-31",
+            name="Acme 31",
+            credentials=BotCredentials(
+                token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz",
+                bot_username="acme31_bot",
+            ),
+        )
+    )
+
+    # Envio antigo sem delivery_results salvo direto no repositório
+    old_broadcast = BroadcastMessage(
+        id="b-old-31",
+        profile_id="p-31",
+        target_channel_ids=["-1001111111111"],
+        text="Envio antigo sem delivery_results",
+        status=BroadcastStatus.COMPLETED,
+    )
+    await broadcast_repo.save(old_broadcast)
+
+    async def fake_send_broadcast(*, bot_token: str, chat_id: str, message, **kwargs) -> bool:
+        if chat_id == "-1001111111111":
+            telegram_gateway.last_error = None
+            telegram_gateway.last_failure_category = None
+            telegram_gateway.last_failure_detail = None
+            return True
+        telegram_gateway.last_error = (
+            "Telegram API error (400): Bad Request: not enough rights to send text messages to the chat"
+        )
+        telegram_gateway.last_failure_category = DeliveryFailureCategory.NO_POST_PERMISSION
+        telegram_gateway.last_failure_detail = (
+            "Bad Request: not enough rights to send text messages to the chat"
+        )
+        return False
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send_broadcast)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-31",
+                "target_channel_ids": json.dumps(["-1001111111111", "-1002222222222"]),
+                "text": "Disparo para A e B",
+            },
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["status"] == "PARTIALLY_COMPLETED"
+        assert body["dispatched_count"] == 1
+        assert body["delivery_results"] == [
+            {
+                "chat_id": "-1001111111111",
+                "delivered": True,
+                "failure_category": None,
+                "detail": None,
+            },
+            {
+                "chat_id": "-1002222222222",
+                "delivered": False,
+                "failure_category": "NO_POST_PERMISSION",
+                "detail": "Bad Request: not enough rights to send text messages to the chat",
+            },
+        ]
+
+        hist_resp = await client.get("/api/v1/profiles/p-31/broadcasts")
+        assert hist_resp.status_code == 200
+        hist = hist_resp.json()
+        by_id = {item["id"]: item for item in hist}
+        assert by_id[body["broadcast_id"]]["delivery_results"] == body["delivery_results"]
+        assert by_id["b-old-31"]["delivery_results"] == []
+

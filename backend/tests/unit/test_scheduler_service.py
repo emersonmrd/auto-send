@@ -93,6 +93,9 @@ async def test_scheduler_handles_missing_profile_and_cleans_media():
 
     updated = await broadcast_repo.get_by_id(broadcast.id)
     assert updated.status == BroadcastStatus.FAILED
+    assert len(updated.delivery_results) == 1
+    assert updated.delivery_results[0].delivered is False
+    assert updated.delivery_results[0].detail == "Profile not found"
     assert not os.path.exists(temp_file)
 
 @pytest.mark.asyncio
@@ -243,7 +246,12 @@ async def test_scheduled_partial_dispatch_is_recorded_as_partially_completed():
 
     await service.execute_scheduled_broadcast("b-partial")
 
-    assert (await broadcast_repo.get_by_id("b-partial")).status == BroadcastStatus.PARTIALLY_COMPLETED
+    saved = await broadcast_repo.get_by_id("b-partial")
+    assert saved.status == BroadcastStatus.PARTIALLY_COMPLETED
+    assert [(r.chat_id, r.delivered) for r in saved.delivery_results] == [
+        ("-1001111111111", True),
+        ("-1002222222222", False),
+    ]
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,21 @@ export interface ChannelUpdateResponse {
   chat_id: string;
 }
 
+export type DeliveryFailureCategory =
+  | "BOT_NOT_IN_CHAT"
+  | "NO_POST_PERMISSION"
+  | "INVALID_TOKEN"
+  | "RATE_LIMITED"
+  | "TELEGRAM_UNAVAILABLE"
+  | "OTHER";
+
+export interface ChannelDeliveryResult {
+  chat_id: string;
+  delivered: boolean;
+  failure_category?: DeliveryFailureCategory | null;
+  detail?: string | null;
+}
+
 export interface BroadcastHistoryItem {
   id: string;
   profile_id: string;
@@ -61,6 +76,7 @@ export interface BroadcastHistoryItem {
   channels_count: number;
   scheduled_at?: string | null;
   created_at: string;
+  delivery_results?: ChannelDeliveryResult[];
 }
 
 export interface BroadcastProgressResponse {
@@ -88,6 +104,7 @@ export interface BroadcastResponse {
   dispatched_count: number;
   total_targets: number;
   errors: string[];
+  delivery_results?: ChannelDeliveryResult[];
 }
 
 export type CreateBroadcastResponse = ScheduledBroadcastCreateResponse | BroadcastResponse;

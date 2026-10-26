@@ -56,6 +56,49 @@ class BroadcastStatus(str, Enum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
 
+
+class DeliveryFailureCategory(str, Enum):
+    BOT_NOT_IN_CHAT = "BOT_NOT_IN_CHAT"
+    NO_POST_PERMISSION = "NO_POST_PERMISSION"
+    INVALID_TOKEN = "INVALID_TOKEN"
+    RATE_LIMITED = "RATE_LIMITED"
+    TELEGRAM_UNAVAILABLE = "TELEGRAM_UNAVAILABLE"
+    OTHER = "OTHER"
+
+
+@dataclass(frozen=True)
+class ChannelDeliveryResult:
+    chat_id: str
+    delivered: bool
+    failure_category: Optional[DeliveryFailureCategory] = None
+    detail: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.chat_id or not self.chat_id.strip():
+            raise ValueError("chat_id cannot be empty")
+        if self.delivered and self.failure_category is not None:
+            raise ValueError("Delivered result cannot have a failure_category")
+        if not self.delivered and self.failure_category is None:
+            raise ValueError("Failed delivery result requires a failure_category")
+
+    @classmethod
+    def success(cls, chat_id: str) -> "ChannelDeliveryResult":
+        return cls(chat_id=chat_id, delivered=True)
+
+    @classmethod
+    def failure(
+        cls,
+        chat_id: str,
+        category: DeliveryFailureCategory,
+        detail: Optional[str] = None,
+    ) -> "ChannelDeliveryResult":
+        return cls(
+            chat_id=chat_id,
+            delivered=False,
+            failure_category=category,
+            detail=detail,
+        )
+
 @dataclass(frozen=True)
 class InlineButton:
     text: str
@@ -100,6 +143,7 @@ class BroadcastMessage:
     status: BroadcastStatus = BroadcastStatus.PENDING
     scheduled_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    delivery_results: List[ChannelDeliveryResult] = field(default_factory=list)
 
     def get_dispatch_strategy(self) -> DispatchStrategy:
         if not self.media:
@@ -120,6 +164,20 @@ class BroadcastMessage:
             self.status = BroadcastStatus.COMPLETED
         else:
             self.status = BroadcastStatus.PARTIALLY_COMPLETED
+
+    def finish_dispatch_with_results(self, results: List[ChannelDeliveryResult]) -> None:
+        self.delivery_results = list(results)
+        delivered = sum(1 for r in self.delivery_results if r.delivered)
+        self.finish_dispatch(delivered=delivered, total=len(self.target_channel_ids))
+
+    def fail_all_channels(
+        self, category: DeliveryFailureCategory, detail: Optional[str] = None
+    ) -> None:
+        results = [
+            ChannelDeliveryResult.failure(cid, category=category, detail=detail)
+            for cid in self.target_channel_ids
+        ]
+        self.finish_dispatch_with_results(results)
 
     def mark_misfired(self) -> None:
         if self.status not in [BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED]:

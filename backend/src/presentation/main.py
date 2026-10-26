@@ -16,6 +16,8 @@ from pydantic import BaseModel
 from src.domain.broadcast.media_format import classify_media
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
+    ChannelDeliveryResult,
+    DeliveryFailureCategory,
     InlineButton,
     MediaAttachment,
     MediaType,
@@ -41,10 +43,14 @@ from src.infrastructure.in_memory_repositories import (
 )
 from src.infrastructure.in_memory_broadcast_repository import InMemoryBroadcastRepository
 from src.infrastructure.resilience import CircuitBreakerOpenException
-from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
+from src.infrastructure.telegram_gateway_http import (
+    PUBLIC_API_MAX_BYTES,
+    TelegramGatewayHttp,
+    dispatch_broadcast_to_channel,
+    redact_bot_token,
+)
 from src.infrastructure.upload_progress_store import UploadProgressStore
 from src.infrastructure.temp_media_storage import MediaTooLarge, save_upload
-from src.infrastructure.telegram_gateway_http import PUBLIC_API_MAX_BYTES
 from src.infrastructure.sqlite_migrations import (
     DatabaseMigrationError,
     MIGRATIONS,
@@ -284,6 +290,13 @@ class BroadcastPatchRequest(BaseModel):
     button_url: Optional[str] = None
     scheduled_at: Optional[str] = None
 
+class ChannelDeliveryResultResponse(BaseModel):
+    chat_id: str
+    delivered: bool
+    failure_category: Optional[str] = None
+    detail: Optional[str] = None
+
+
 class BroadcastHistoryItemResponse(BaseModel):
     id: str
     profile_id: str
@@ -292,6 +305,7 @@ class BroadcastHistoryItemResponse(BaseModel):
     channels_count: int
     scheduled_at: Optional[str] = None
     created_at: str
+    delivery_results: List[ChannelDeliveryResultResponse] = []
 
 class BroadcastProgressResponse(BaseModel):
     tracking_id: str
@@ -316,6 +330,7 @@ class ImmediateBroadcastCreateResponse(BaseModel):
     dispatched_count: int
     total_targets: int
     errors: List[str]
+    delivery_results: List[ChannelDeliveryResultResponse] = []
 
 class BroadcastMediaResponse(BaseModel):
     file_path: str
@@ -778,6 +793,97 @@ async def resolve_chat(
         raise HTTPException(status_code=400, detail=str(e))
     return _chat_response(chat)
 
+def _format_legacy_channel_error(chat_id: str, res: ChannelDeliveryResult, raised_exc: bool, raw_last: Any, bot_token: str) -> str:
+    err_msg = (
+        redact_bot_token(raw_last, bot_token=bot_token)
+        if isinstance(raw_last, str) and raw_last
+        else res.detail
+    )
+    if raised_exc:
+        return f"Error sending to {chat_id}: {res.detail or err_msg or 'Unknown error'}"
+    if err_msg:
+        return f"Failed to send to {chat_id}: {err_msg}"
+    return f"Failed to send to {chat_id}"
+
+
+async def _dispatch_and_record(
+    gateway,
+    bot_token: str,
+    chat_id: str,
+    message: BroadcastMessage,
+    progress_callback=None,
+) -> tuple[ChannelDeliveryResult, Optional[str]]:
+    raised_exc = False
+    send_kwargs = {}
+    if progress_callback is not None:
+        send_kwargs["progress_callback"] = progress_callback
+    try:
+        ok = await gateway.send_broadcast(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            message=message,
+            **send_kwargs,
+        )
+    except CircuitBreakerOpenException as exc:
+        raised_exc = True
+        res = ChannelDeliveryResult.failure(
+            chat_id,
+            category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
+            detail=redact_bot_token(str(exc), bot_token=bot_token),
+        )
+        return res, _format_legacy_channel_error(chat_id, res, raised_exc, None, bot_token)
+    except Exception as exc:
+        import httpx as _httpx
+        raised_exc = True
+        if isinstance(exc, _httpx.RequestError):
+            res = ChannelDeliveryResult.failure(
+                chat_id,
+                category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
+                detail=redact_bot_token(str(exc), bot_token=bot_token) or f"Network error ({type(exc).__name__})",
+            )
+        else:
+            res = ChannelDeliveryResult.failure(
+                chat_id,
+                category=DeliveryFailureCategory.OTHER,
+                detail=redact_bot_token(str(exc), bot_token=bot_token),
+            )
+        return res, _format_legacy_channel_error(chat_id, res, raised_exc, None, bot_token)
+
+    if ok:
+        return ChannelDeliveryResult.success(chat_id), None
+
+    from src.infrastructure.telegram_gateway_http import classify_telegram_error
+    raw_cat = getattr(gateway, "last_failure_category", None)
+    raw_detail = getattr(gateway, "last_failure_detail", None)
+    raw_error = getattr(gateway, "last_error", None)
+
+    detail: Optional[str] = None
+    if isinstance(raw_detail, str) and raw_detail:
+        detail = redact_bot_token(raw_detail, bot_token=bot_token)
+    elif isinstance(raw_error, str) and raw_error:
+        detail = redact_bot_token(raw_error, bot_token=bot_token)
+
+    if isinstance(raw_cat, DeliveryFailureCategory):
+        category = raw_cat
+    elif detail:
+        category, _ = classify_telegram_error(None, detail, bot_token=bot_token)
+    else:
+        category = DeliveryFailureCategory.OTHER
+
+    res = ChannelDeliveryResult.failure(chat_id, category=category, detail=detail)
+    return res, _format_legacy_channel_error(chat_id, res, False, raw_error, bot_token)
+def _serialize_delivery_results(results: List[ChannelDeliveryResult]) -> List[dict]:
+    return [
+        {
+            "chat_id": r.chat_id,
+            "delivered": r.delivered,
+            "failure_category": r.failure_category.value if r.failure_category else None,
+            "detail": r.detail,
+        }
+        for r in results
+    ]
+
+
 @app.get(
     "/api/v1/profiles/{profile_id}/broadcasts",
     response_model=List[BroadcastHistoryItemResponse],
@@ -793,6 +899,7 @@ async def list_profile_broadcasts(profile_id: str):
             "channels_count": len(b.target_channel_ids),
             "scheduled_at": b.scheduled_at.isoformat() if b.scheduled_at else None,
             "created_at": b.created_at.isoformat(),
+            "delivery_results": _serialize_delivery_results(b.delivery_results),
         }
         for b in broadcasts
     ]
@@ -1092,6 +1199,7 @@ async def create_broadcast(
     # Cenário de Disparo Imediato
     dispatched_count = 0
     errors = []
+    delivery_results: List[ChannelDeliveryResult] = []
     try:
         broadcast.status = BroadcastStatus.DISPATCHING
         await broadcast_repo.save(broadcast)
@@ -1114,27 +1222,18 @@ async def create_broadcast(
                             upload_progress_tracker[tracking_id]["stage"] = "uploading_to_telegram"
                 channel_cb = channel_progress_cb
 
-            try:
-                send_kwargs = {}
-                if channel_cb is not None:
-                    send_kwargs["progress_callback"] = channel_cb
-
-                success = await telegram_gateway.send_broadcast(
-                    bot_token=profile.credentials.token,
-                    chat_id=chat_id,
-                    message=broadcast,
-                    **send_kwargs,
-                )
-                if success:
-                    dispatched_count += 1
-                else:
-                    detail = getattr(telegram_gateway, "last_error", None)
-                    if detail:
-                        errors.append(f"Failed to send to {chat_id}: {detail}")
-                    else:
-                        errors.append(f"Failed to send to {chat_id}")
-            except Exception as e:
-                errors.append(f"Error sending to {chat_id}: {str(e)}")
+            res, legacy_err = await _dispatch_and_record(
+                gateway=telegram_gateway,
+                bot_token=profile.credentials.token,
+                chat_id=chat_id,
+                message=broadcast,
+                progress_callback=channel_cb,
+            )
+            delivery_results.append(res)
+            if res.delivered:
+                dispatched_count += 1
+            elif legacy_err:
+                errors.append(legacy_err)
 
             if tracking_id and not media_attachment:
                 pct = int(((idx + 1) / total_channels) * 100)
@@ -1142,7 +1241,7 @@ async def create_broadcast(
                 upload_progress_tracker[tracking_id]["percent"] = pct
                 upload_progress_tracker[tracking_id]["sent_bytes"] = int(tot * (pct / 100))
 
-        broadcast.finish_dispatch(delivered=dispatched_count, total=len(channels_list))
+        broadcast.finish_dispatch_with_results(delivery_results)
         await broadcast_repo.save(broadcast)
         if tracking_id:
             upload_progress_tracker[tracking_id]["status"] = "completed"
@@ -1165,6 +1264,7 @@ async def create_broadcast(
         "dispatched_count": dispatched_count,
         "total_targets": len(channels_list),
         "errors": errors,
+        "delivery_results": _serialize_delivery_results(broadcast.delivery_results),
     }
 
 def _format_datetime_utc(dt: Optional[datetime]) -> Optional[str]:
@@ -1266,29 +1366,22 @@ async def dispatch_broadcast_now(broadcast_id: str):
 
     dispatched_count = 0
     errors: List[str] = []
+    delivery_results: List[ChannelDeliveryResult] = []
     try:
         for chat_id in broadcast.target_channel_ids:
-            try:
-                success = await telegram_gateway.send_broadcast(
-                    bot_token=profile.credentials.token,
-                    chat_id=chat_id,
-                    message=broadcast,
-                )
-                if success:
-                    dispatched_count += 1
-                else:
-                    detail = getattr(telegram_gateway, "last_error", None)
-                    if detail:
-                        errors.append(f"Failed to send to {chat_id}: {detail}")
-                    else:
-                        errors.append(f"Failed to send to {chat_id}")
-            except Exception as e:
-                errors.append(f"Error sending to {chat_id}: {str(e)}")
+            res, legacy_err = await _dispatch_and_record(
+                gateway=telegram_gateway,
+                bot_token=profile.credentials.token,
+                chat_id=chat_id,
+                message=broadcast,
+            )
+            delivery_results.append(res)
+            if res.delivered:
+                dispatched_count += 1
+            elif legacy_err:
+                errors.append(legacy_err)
 
-        broadcast.finish_dispatch(
-            delivered=dispatched_count,
-            total=len(broadcast.target_channel_ids),
-        )
+        broadcast.finish_dispatch_with_results(delivery_results)
         await broadcast_repo.save(broadcast)
     finally:
         if broadcast.media:
@@ -1305,6 +1398,7 @@ async def dispatch_broadcast_now(broadcast_id: str):
         "dispatched_count": dispatched_count,
         "total_targets": len(broadcast.target_channel_ids),
         "errors": errors,
+        "delivery_results": _serialize_delivery_results(broadcast.delivery_results),
     }
 
 
