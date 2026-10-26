@@ -36,6 +36,7 @@ from src.infrastructure.in_memory_repositories import (
 from src.infrastructure.in_memory_broadcast_repository import InMemoryBroadcastRepository
 from src.infrastructure.resilience import CircuitBreakerOpenException
 from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
+from src.infrastructure.upload_progress_store import UploadProgressStore
 import sys
 import threading
 import webbrowser
@@ -452,7 +453,13 @@ async def list_profile_broadcasts(profile_id: str):
         for b in broadcasts
     ]
 
-upload_progress_tracker: dict[str, dict] = {}
+UPLOAD_PROGRESS_TTL_SECONDS = 1800
+UPLOAD_PROGRESS_MAX_ITEMS = 1000
+
+upload_progress_tracker = UploadProgressStore(
+    ttl_seconds=UPLOAD_PROGRESS_TTL_SECONDS,
+    max_items=UPLOAD_PROGRESS_MAX_ITEMS,
+)
 progress_tracker = upload_progress_tracker
 
 def update_progress(
@@ -477,16 +484,6 @@ def update_progress(
         "created_at": created_at,
         "updated_at": now,
     }
-
-def prune_upload_progress_tracker(max_age_seconds: int = 1800) -> int:
-    now = time.time()
-    expired_keys = [
-        k for k, v in upload_progress_tracker.items()
-        if now - v.get("updated_at", v.get("created_at", now)) > max_age_seconds
-    ]
-    for k in expired_keys:
-        upload_progress_tracker.pop(k, None)
-    return len(expired_keys)
 
 @app.get("/api/v1/broadcasts/progress/{tracking_id}")
 async def get_broadcast_progress(tracking_id: str):
