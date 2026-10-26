@@ -343,6 +343,7 @@ Toda afirmação no PR ("N testes passando", "0 mutantes") precisa vir dessas sa
 - Antes da tag, rode a `security-audit` e a `appsec-dynamic` (§9). Sem as duas, ou com achado crítico ou alto em aberto, não há tag.
 - Fontes de versão (devem ser iguais): `backend/pyproject.toml`, `frontend/package.json` e o `version=` do `FastAPI(...)` em `backend/src/presentation/main.py`.
 - A tag `vX.Y.Z` dispara `.github/workflows/release.yml`, que exige CI verde no commit, gera o pacote portátil no Windows e publica a GitHub Release.
+- **Ordem obrigatória após merge na `main`:** após o merge do PR de release na `main`, o agente **nunca cria nem envia a tag imediatamente**. Ele deve acompanhar o CI do commit de merge na `main` até a conclusão com sucesso (`conclusion: "success"`). Somente com o CI verde é que a tag `vX.Y.Z` é criada e enviada, evitando falha prematura na trava `Require green CI on the tagged commit` do `release.yml` e a necessidade de rerun manual (kaizen v0.5.0 em 2026-10-26).
 
 ## 5. Skills úteis
 As skills citadas neste arquivo ficam no ambiente do mantenedor, fora deste repositório. Use conforme a tarefa, não como fases obrigatórias: `systematic-debugging`, `test-driven-development`, `verification-before-completion`, `clean-architecture`, `api-design-principles`, `domain-modeling`, `pr-audit`, `iss-audit`, `github-resolution`, `pr-post-audit`, `security-audit`, `appsec-dynamic`, `pr-bump`, `release`, `kaizen`. Sem elas, as regras deste arquivo bastam.
