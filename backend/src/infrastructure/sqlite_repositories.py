@@ -93,36 +93,33 @@ class SqlAlchemyProfileRepository(IProfileRepository):
                     )
                     session.add(db_obj)
 
+    @staticmethod
+    def _to_entity(obj: ProfileModel) -> Profile:
+        created_dt = obj.created_at or datetime.now(timezone.utc)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        return Profile(
+            id=obj.id,
+            name=obj.name,
+            credentials=BotCredentials(token=obj.bot_token, bot_username=obj.bot_username),
+            avatar_url=obj.avatar_url,
+            is_active=obj.is_active,
+            created_at=created_dt,
+        )
+
     async def get_by_id(self, profile_id: str) -> Optional[Profile]:
         async with self.session_factory() as session:
             obj = await session.get(ProfileModel, profile_id)
             if not obj:
                 return None
-            return Profile(
-                id=obj.id,
-                name=obj.name,
-                credentials=BotCredentials(token=obj.bot_token, bot_username=obj.bot_username),
-                avatar_url=obj.avatar_url,
-                is_active=obj.is_active,
-                created_at=obj.created_at,
-            )
+            return self._to_entity(obj)
 
     async def list_all(self) -> List[Profile]:
         from sqlalchemy import select
         async with self.session_factory() as session:
             res = await session.execute(select(ProfileModel).order_by(ProfileModel.created_at.desc()))
             objs = res.scalars().all()
-            return [
-                Profile(
-                    id=obj.id,
-                    name=obj.name,
-                    credentials=BotCredentials(token=obj.bot_token, bot_username=obj.bot_username),
-                    avatar_url=obj.avatar_url,
-                    is_active=obj.is_active,
-                    created_at=obj.created_at,
-                )
-                for obj in objs
-            ]
+            return [self._to_entity(obj) for obj in objs]
 
     async def delete(self, profile_id: str) -> bool:
         from sqlalchemy import delete
@@ -159,20 +156,27 @@ class SqlAlchemyChannelRepository(IChannelRepository):
                     )
                     session.add(db_obj)
 
+    @staticmethod
+    def _to_entity(obj: ChannelModel) -> Channel:
+        created_dt = obj.created_at or datetime.now(timezone.utc)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        return Channel(
+            id=obj.id,
+            profile_id=obj.profile_id,
+            title=obj.title,
+            chat_id=obj.chat_id,
+            invite_link=obj.invite_link,
+            is_active=obj.is_active,
+            created_at=created_dt,
+        )
+
     async def get_by_id(self, channel_id: str) -> Optional[Channel]:
         async with self.session_factory() as session:
             obj = await session.get(ChannelModel, channel_id)
             if not obj:
                 return None
-            return Channel(
-                id=obj.id,
-                profile_id=obj.profile_id,
-                title=obj.title,
-                chat_id=obj.chat_id,
-                invite_link=obj.invite_link,
-                is_active=obj.is_active,
-                created_at=obj.created_at,
-            )
+            return self._to_entity(obj)
 
     async def list_by_profile(self, profile_id: str) -> List[Channel]:
         from sqlalchemy import select
@@ -181,18 +185,7 @@ class SqlAlchemyChannelRepository(IChannelRepository):
                 select(ChannelModel).where(ChannelModel.profile_id == profile_id)
             )
             objs = res.scalars().all()
-            return [
-                Channel(
-                    id=obj.id,
-                    profile_id=obj.profile_id,
-                    title=obj.title,
-                    chat_id=obj.chat_id,
-                    invite_link=obj.invite_link,
-                    is_active=obj.is_active,
-                    created_at=obj.created_at,
-                )
-                for obj in objs
-            ]
+            return [self._to_entity(obj) for obj in objs]
 
     async def delete(self, channel_id: str) -> bool:
         from sqlalchemy import delete
@@ -345,8 +338,8 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
         if scheduled_dt is not None and scheduled_dt.tzinfo is None:
             scheduled_dt = scheduled_dt.replace(tzinfo=timezone.utc)
 
-        created_dt = obj.created_at
-        if created_dt is not None and created_dt.tzinfo is None:
+        created_dt = obj.created_at or datetime.now(timezone.utc)
+        if created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
 
         locked_dt = getattr(obj, "edit_locked_until", None)
