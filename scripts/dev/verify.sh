@@ -69,11 +69,12 @@ run_mutation() {
   local targets="$1" args=()
   [[ "$targets" != ALL ]] && args=(--paths-to-mutate "$targets")
   cd backend || return 1
-  rm -f .mutmut-cache
-  uvx --from mutmut==2.5.1 mutmut run "${args[@]}" >/dev/null
+  rm -f .mutmut-cache*
+  python3 -c "import sqlite3; c = sqlite3.connect('.mutmut-cache'); c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA busy_timeout=60000'); c.close()"
+  uvx --from mutmut==2.5.1 mutmut run --no-progress "${args[@]}" >/dev/null
   local rc=$?
   uvx --from mutmut==2.5.1 mutmut results | sed -n '/Survived\|Timed out/,$p'
-  rm -f .mutmut-cache
+  rm -f .mutmut-cache*
   # Código de saída do mutmut 2 é bitmask: 1 fatal, 2 sobreviventes, 4 timeout, 8 suspeito (morto, só lento).
   (( (rc & 7) == 0 ))
 }

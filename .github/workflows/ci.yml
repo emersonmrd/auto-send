@@ -146,8 +146,9 @@ jobs:
           [ "$targets" != ALL ] && args=(--paths-to-mutate "$targets")
           cd backend
           uv sync --frozen
+          python3 -c "import sqlite3; c = sqlite3.connect('.mutmut-cache'); c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA busy_timeout=60000'); c.close()"
           set +e
-          uvx --from mutmut==2.5.1 mutmut run "${args[@]}"
+          uvx --from mutmut==2.5.1 mutmut run --no-progress "${args[@]}"
           rc=$?
           set -e
           uvx --from mutmut==2.5.1 mutmut results | tee mutmut-results.txt
