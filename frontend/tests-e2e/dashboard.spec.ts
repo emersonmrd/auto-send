@@ -110,7 +110,7 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
     await page.locator('button:has(svg.lucide-send)').first().click();
   }
 
-  test("mostra as mensagens do 422 do Pydantic quando o detail é uma lista", async ({ page }) => {
+  test("mostra as mensagens do 422 do Pydantic traduzidas como 'Campo X inválido' (issue #32)", async ({ page }) => {
     // Registrada depois do beforeEach, esta rota tem precedência sobre o mock de sucesso.
     await page.route("**/api/v1/broadcasts", (route) =>
       route.fulfill({
@@ -120,7 +120,7 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
       }),
     );
     await sendBroadcast(page);
-    await expect(page.getByText("scheduled_at cannot be in the past").first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText("Campo scheduled_at inválido").first()).toBeVisible({ timeout: 5000 });
   });
 
   test("resposta HTTP sem JSON não vira erro de conexão", async ({ page }) => {
@@ -148,5 +148,81 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
 
     // A mensagem aparece no toast e na faixa de status do compositor; basta a primeira estar visível
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 5000 });
+  });
+
+  test("edita link de texto em agendamento sem mostrar HTML cru e exige https:// (issue #16)", async ({ page }) => {
+    const futureIso = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+    let patchedBody: Record<string, unknown> | null = null;
+
+    await page.route("**/api/v1/profiles/profile-1/scheduled-broadcasts", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "b-link-1",
+            profile_id: "profile-1",
+            target_channel_ids: ["-1001234567890"],
+            text: '<b>Oferta</b> <a href="https://example.com/pagina">teste</a>',
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+            created_at: new Date().toISOString(),
+            media: null,
+            button: null,
+          },
+        ]),
+      }),
+    );
+
+    await page.route("**/api/v1/broadcasts/b-link-1", async (route) => {
+      if (route.request().method() === "PATCH") {
+        patchedBody = route.request().postDataJSON();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            broadcast_id: "b-link-1",
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+            text: patchedBody?.text,
+            button: null,
+          }),
+        });
+      }
+      return route.continue();
+    });
+
+    await page.goto("/");
+    await page.getByTitle("Abrir Fila de Agendamentos").click();
+    await page.getByTitle("Editar texto, botão ou horário deste agendamento").click();
+
+    const editField = page.getByRole("textbox", { name: "Texto da Mensagem" });
+    await expect(editField).toBeVisible();
+    // Aparece formatado, sem mostrar tags HTML cruas
+    await expect(editField).toContainText("Oferta teste");
+    await expect(editField).not.toContainText("<a href");
+
+    // Clicar no link dentro do editor abre o modal de link preenchido
+    await editField.locator("a", { hasText: "teste" }).click();
+    const linkDialog = page.getByRole("dialog", { name: "Inserir Link em Palavra do Texto" });
+    await expect(linkDialog).toBeVisible();
+    await expect(linkDialog.getByLabel("Palavra / Texto exibido")).toHaveValue("teste");
+    await expect(linkDialog.getByLabel("URL de destino")).toHaveValue("https://example.com/pagina");
+
+    // Recusa http:// mostrando "Use um endereço https://"
+    await linkDialog.getByLabel("URL de destino").fill("http://example.com/inseguro");
+    await linkDialog.getByRole("button", { name: "Salvar Link" }).click();
+    await expect(linkDialog.getByRole("alert")).toContainText("Use um endereço https://");
+
+    // Completa https:// quando informado sem protocolo e salva
+    await linkDialog.getByLabel("Palavra / Texto exibido").fill("novo link");
+    await linkDialog.getByLabel("URL de destino").fill("example.com/nova");
+    await linkDialog.getByRole("button", { name: "Salvar Link" }).click();
+    await expect(linkDialog).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Salvar Alterações" }).click();
+    expect(patchedBody).toMatchObject({
+      text: '<b>Oferta</b> <a href="https://example.com/nova">novo link</a>',
+    });
   });
 });

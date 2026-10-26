@@ -1794,3 +1794,88 @@ async def test_broadcast_delivery_results_per_channel_in_immediate_response_and_
         assert by_id[body["broadcast_id"]]["delivery_results"] == body["delivery_results"]
         assert by_id["b-old-31"]["delivery_results"] == []
 
+
+@pytest.mark.asyncio
+async def test_broadcast_escapes_plain_symbols_and_rejects_unsupported_html_or_http_links_with_422(monkeypatch):
+    """
+    Issue #16:
+    - Texto com <, > ou & é escapado antes de chegar ao Telegram.
+    - Texto com tag não suportada (<script>) ou link http:// enviado direto à API (POST ou PATCH) retorna 422.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import profile_repo, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+
+    await profile_repo.save(
+        Profile(
+            id="p-16",
+            name="Acme 16",
+            credentials=BotCredentials(
+                token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz",
+                bot_username="acme16_bot",
+            ),
+        )
+    )
+
+    dispatched_texts: list[str] = []
+
+    async def fake_send_broadcast(*, bot_token: str, chat_id: str, message, **kwargs) -> bool:
+        dispatched_texts.append(message.text)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send_broadcast)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        # 1. Símbolos <, > e & escapados no envio imediato
+        ok_resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-16",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": '2 < 3 & Tom & Jerry > 1 com <a href="https://example.com/p?x=1&y=2">link</a>',
+            },
+        )
+        assert ok_resp.status_code == 201
+        assert dispatched_texts == [
+            '2 &lt; 3 &amp; Tom &amp; Jerry &gt; 1 com <a href="https://example.com/p?x=1&amp;y=2">link</a>'
+        ]
+
+        # 2. Tag não suportada e link http:// recusados com 422 no POST
+        for invalid_text in (
+            "<script>alert(1)</script>",
+            '<a href="http://example.com">link</a>',
+            "<b>sem fechar",
+        ):
+            bad_post = await client.post(
+                "/api/v1/broadcasts",
+                data={
+                    "profile_id": "p-16",
+                    "target_channel_ids": json.dumps(["-1001111111111"]),
+                    "text": invalid_text,
+                },
+            )
+            assert bad_post.status_code == 422
+
+        # 3. Também no PATCH de agendamento
+        future_iso = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+        sched_resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-16",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": "<b>Original</b>",
+                "scheduled_at": future_iso,
+            },
+        )
+        assert sched_resp.status_code == 201
+        broadcast_id = sched_resp.json()["broadcast_id"]
+
+        bad_patch = await client.patch(
+            f"/api/v1/broadcasts/{broadcast_id}",
+            json={"text": '<a href="http://example.com">inseguro</a>'},
+        )
+        assert bad_patch.status_code == 422
+
+

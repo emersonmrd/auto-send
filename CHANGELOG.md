@@ -50,6 +50,10 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Mensagens de erro em português e separação entre webhook ativo e bot em uso por outro programa (#32):
   - No `getUpdates` da busca de canais, o `409` por leitura concorrente (`"terminated by other getUpdates request"`) passa a levantar `BotInUseError("Bot is currently in use by another program")` em vez de `WebhookActiveError`, exibindo na tela que o bot está em uso em outro programa.
   - Catálogo centralizado em `frontend/src/lib/apiError.ts` traduz todos os `detail` da API e listas `422` do Pydantic (`"Campo <campo> inválido"`) para português, remove eventuais tokens de bot e usa mensagem genérica em português com o original entre parênteses quando não houver tradução cadastrada.
+- Editor de mensagem com formatação visual (sem HTML cru) e sanitização de HTML do Telegram (#16):
+  - Novo componente `TelegramRichEditor` usado no compositor e no modal "Editar", exibindo o texto formatado (negrito, itálico, sublinhado, riscado, código, bloco de código, citação, spoiler e link `https://`) sem expor tags `<a href="...">`, com edição/remoção ao clicar em um link existente.
+  - O preview e os cards da fila renderizam todas as formatações do Telegram (incluindo spoiler borrado até clicar, citação com barra lateral e código monoespaçado).
+  - No domínio (`validate_and_escape_telegram_html`), caracteres `<`, `>` e `&` comuns são escapados antes do envio ao Telegram, e tags não suportadas ou links que não sejam `https://` com host público são recusados com `422`.
 
 ### Security
 - `docker-compose.yml`: a API (que não tem autenticação) e a tela passam a ser publicadas só em `127.0.0.1` (`127.0.0.1:8000`, `127.0.0.1:3000`), e o servidor local do Telegram deixa de ser publicado no host: só o backend o usa, pela rede do Compose. Antes, as três portas abriam em todas as interfaces, e numa rede compartilhada ou num VPS qualquer um podia usar a API. Para acessar de outra máquina, ponha um proxy reverso com autenticação na frente (#35).

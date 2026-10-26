@@ -15,6 +15,11 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
 import ConfirmDialog, { ConfirmDialogProps } from "@/components/ConfirmDialog";
+import {
+  TelegramRichEditor,
+  TelegramRichEditorHandle,
+  renderTelegramHtmlPreview,
+} from "@/components/TelegramRichEditor";
 
 type PendingConfirm = Omit<ConfirmDialogProps, "onCancel">;
 
@@ -97,12 +102,7 @@ export default function Home() {
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
 
   // Inserção de Link no Texto da Mensagem (Inline Hyperlink)
-  const [showTextLinkModal, setShowTextLinkModal] = useState(false);
-  const [textLinkWord, setTextLinkWord] = useState("");
-  const [textLinkUrl, setTextLinkUrl] = useState("");
-  const [textLinkSelection, setTextLinkSelection] = useState<{ start: number; end: number } | null>(null);
-
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerEditorRef = useRef<TelegramRichEditorHandle | null>(null);
   const [telegramProgress, setTelegramProgress] = useState<TelegramUploadProgress | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -576,61 +576,7 @@ export default function Home() {
 
   // Handlers do Recurso 2: Inserção de Link no Texto da Mensagem (Inline Hyperlink na Palavra)
   const handleOpenTextLinkModal = () => {
-    const textarea = textareaRef.current;
-    let selected = "";
-    let start = text.length;
-    let end = text.length;
-
-    if (textarea) {
-      start = textarea.selectionStart;
-      end = textarea.selectionEnd;
-      selected = textarea.value.substring(start, end);
-    }
-
-    setTextLinkSelection({ start, end });
-    setTextLinkWord(selected);
-    setTextLinkUrl("");
-    setShowTextLinkModal(true);
-  };
-
-  const handleInsertTextLink = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const word = textLinkWord.trim();
-    let url = textLinkUrl.trim();
-
-    if (!word) {
-      showToast("Informe a palavra ou texto a ser exibido.", "error");
-      return;
-    }
-    if (!url) {
-      showToast("Informe a URL de destino.", "error");
-      return;
-    }
-
-    // Garante protocolo https:// ou http://
-    if (!/^https?:\/\//i.test(url)) {
-      url = `https://${url}`;
-    }
-
-    const linkHtml = `<a href="${url}">${word}</a>`;
-    const start = textLinkSelection ? textLinkSelection.start : text.length;
-    const end = textLinkSelection ? textLinkSelection.end : text.length;
-
-    const before = text.substring(0, start);
-    const after = text.substring(end);
-    const newText = before + linkHtml + after;
-
-    setText(newText);
-    setShowTextLinkModal(false);
-
-    // Devolve o foco ao textarea e ajusta o cursor após a tag inserida
-    setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.focus();
-        const newCursor = start + linkHtml.length;
-        textareaRef.current.setSelectionRange(newCursor, newCursor);
-      }
-    }, 50);
+    composerEditorRef.current?.openLinkModal();
   };
 
   // Handlers do Recurso 1: Botão Físico Abaixo da Mensagem (Inline Keyboard)
@@ -664,44 +610,7 @@ export default function Home() {
   };
 
   // Renderizador impecável de Links HTML e texto para o Balão do Telegram (Live Preview)
-  const renderFormattedMessage = (rawText: string) => {
-    if (!rawText || !rawText.trim()) {
-      return <span className="text-gray-300 italic">Digite uma mensagem abaixo...</span>;
-    }
-
-    const linkRegex = /<a\b[^>]*?\bhref=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi;
-    const elements: React.ReactNode[] = [];
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = linkRegex.exec(rawText)) !== null) {
-      const matchIndex = match.index;
-      if (matchIndex > lastIndex) {
-        elements.push(rawText.substring(lastIndex, matchIndex));
-      }
-      const url = match[1];
-      const linkText = match[2];
-      elements.push(
-        <a
-          key={`link-${matchIndex}-${url}`}
-          href={url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[#64b5f6] hover:text-[#90caf9] underline font-medium cursor-pointer"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {linkText}
-        </a>
-      );
-      lastIndex = matchIndex + match[0].length;
-    }
-
-    if (lastIndex < rawText.length) {
-      elements.push(rawText.substring(lastIndex));
-    }
-
-    return elements;
-  };
+  const renderFormattedMessage = (rawText: string) => renderTelegramHtmlPreview(rawText);
 
   // Envio ou Agendamento do Broadcast
   const handleSendBroadcast = async (scheduleDateIso?: string) => {
@@ -2124,14 +2033,13 @@ export default function Home() {
                       )}
                     </div>
                   )}
-                  <textarea
-                    ref={textareaRef}
-                    aria-label="Mensagem do canal"
+                  <TelegramRichEditor
+                    ariaLabel="Mensagem do canal"
                     value={text}
-                    onChange={(e) => setText(e.target.value)}
+                    onChange={setText}
                     placeholder="Escreva a mensagem do canal..."
-                    rows={2}
-                    className="w-full bg-transparent resize-none border-none outline-none text-sm text-gray-100 placeholder-gray-400"
+                    minRows={2}
+                    editorRefHandle={composerEditorRef}
                   />
                 </div>
 
@@ -2257,63 +2165,6 @@ export default function Home() {
                   Salvar
                 </button>
               </div>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* RECURSO 2: MODAL INSERIR LINK EM PALAVRA DO TEXTO (INLINE HYPERLINK) */}
-      {showTextLinkModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <form
-            onSubmit={handleInsertTextLink}
-            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-sm w-full p-5 shadow-2xl"
-          >
-            <h3 className="text-base font-semibold text-gray-100 mb-1 flex items-center gap-2">
-              <Link2 className="w-4 h-4 text-[#5288c1]" /> Inserir Link em Palavra do Texto
-            </h3>
-            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-              Insere um hyperlink direto em uma palavra ou frase no corpo da mensagem.
-            </p>
-            <div className="space-y-3">
-              <div>
-                <label htmlFor="field-text-link-word" className="text-xs text-gray-400 block mb-1">Palavra / Texto exibido</label>
-                <input
-                  id="field-text-link-word"
-                  type="text"
-                  placeholder="Ex: CLIQUE AQUI!"
-                  value={textLinkWord}
-                  onChange={(e) => setTextLinkWord(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  autoFocus
-                />
-              </div>
-              <div>
-                <label htmlFor="field-text-link-url" className="text-xs text-gray-400 block mb-1">URL de destino</label>
-                <input
-                  id="field-text-link-url"
-                  type="text"
-                  placeholder="https://seulink.com"
-                  value={textLinkUrl}
-                  onChange={(e) => setTextLinkUrl(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                />
-              </div>
-            </div>
-            <div className="mt-5 flex items-center justify-end gap-2 pt-2 border-t border-gray-800">
-              <button
-                type="button"
-                onClick={() => setShowTextLinkModal(false)}
-                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition rounded-lg"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-1.5 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition shadow"
-              >
-                Inserir Link
-              </button>
             </div>
           </form>
         </div>
@@ -2979,7 +2830,9 @@ export default function Home() {
                 scheduledQueue.map((item) => {
                   const isProcessing = actionInProgressId === item.id;
                   const isMisfired = item.status === "MISFIRED";
-                  const scheduledAt = new Date(item.scheduled_at || Date.now());
+                  const scheduledAt = item.scheduled_at
+                    ? new Date(item.scheduled_at)
+                    : queueNow ?? new Date(0);
                   const formattedDate = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(scheduledAt);
                   const relativeDate = queueNow ? formatRelativeTime(scheduledAt, queueNow) : null;
                   const isPhoto = item.media?.media_type === "PHOTO";
@@ -3155,7 +3008,7 @@ export default function Home() {
                           </span>
                         </div>
                         <div className="text-gray-200 line-clamp-2 whitespace-pre-wrap">
-                          {hist.text || <span className="italic text-gray-400">Mensagem sem texto</span>}
+                          {hist.text ? renderFormattedMessage(hist.text) : <span className="italic text-gray-400">Mensagem sem texto</span>}
                         </div>
                         {summary ? (
                           <div
@@ -3196,14 +3049,16 @@ export default function Home() {
             <div className="space-y-4">
               <div>
                 <label htmlFor="field-edit-text" className="text-xs text-gray-400 block mb-1">Texto da Mensagem</label>
-                <textarea
-                  id="field-edit-text"
-                  rows={3}
-                  value={editText}
-                  onChange={(e) => setEditText(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1] resize-none"
-                  placeholder="Escreva a mensagem..."
-                />
+                <div className="w-full bg-[#242f3d] rounded-lg px-3 py-2 border border-transparent focus-within:border-[#5288c1]">
+                  <TelegramRichEditor
+                    id="field-edit-text"
+                    ariaLabel="Texto da Mensagem"
+                    value={editText}
+                    onChange={setEditText}
+                    placeholder="Escreva a mensagem..."
+                    minRows={3}
+                  />
+                </div>
               </div>
 
               {/* Atalhos rápidos na Edição */}

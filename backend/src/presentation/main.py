@@ -23,6 +23,7 @@ from src.domain.broadcast.broadcast_message import (
     MediaType,
     BroadcastStatus,
     ensure_schedulable,
+    validate_and_escape_telegram_html,
 )
 from src.application.discover_chats_use_case import DiscoverChatsUseCase
 from src.application.errors import ProfileNotFoundError
@@ -1082,6 +1083,14 @@ async def create_broadcast(
             if tracking_id:
                 upload_progress_tracker[tracking_id]["status"] = "failed"
             raise HTTPException(status_code=422, detail=str(e))
+
+    # Sanitização e validação de HTML do Telegram (Issue #16)
+    try:
+        text = validate_and_escape_telegram_html(text or "")
+    except ValueError as e:
+        if tracking_id:
+            upload_progress_tracker[tracking_id]["status"] = "failed"
+        raise HTTPException(status_code=422, detail=str(e))
 
     # Mídia temporária
     media_attachment = None

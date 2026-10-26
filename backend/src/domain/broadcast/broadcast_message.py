@@ -1,4 +1,6 @@
+import html
 import ipaddress
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -8,6 +10,101 @@ from urllib.parse import urlparse
 # Margem para o datetime-local do navegador (sem segundos) e relógios levemente atrasados; vale para POST e PATCH.
 SCHEDULE_CLOCK_TOLERANCE = timedelta(seconds=60)
 DEFAULT_MISFIRE_GRACE_MINUTES = 30
+
+ALLOWED_SIMPLE_HTML_TAGS = (
+    "b",
+    "strong",
+    "i",
+    "em",
+    "u",
+    "ins",
+    "s",
+    "strike",
+    "del",
+    "code",
+    "pre",
+    "blockquote",
+    "tg-spoiler",
+)
+_HTML_TAG_CANDIDATE_RE = re.compile(r"<[a-zA-Z/!?][^>]*>?")
+_ANCHOR_TAG_RE = re.compile(r'^a\s+href=(?:"([^"]*)"|\'([^\']*)\')$', re.IGNORECASE)
+_BARE_AMP_RE = re.compile(r"&(?!(?:lt|gt|amp|quot|#39);)")
+
+
+def validate_https_public_url(url: str) -> None:
+    parsed = urlparse(url)
+    # Exigir HTTPS para evitar vazamento ou SSRF com http/file/gopher
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("Insecure or invalid URL scheme. Only https:// allowed.")
+
+    # Bloquear localhost e IPs privados
+    hostname = parsed.hostname or ""  # pragma: no mutate - qualquer string que não seja IP nem host bloqueado dá o mesmo resultado
+    if hostname.lower() in ["localhost", "127.0.0.1", "0.0.0.0"]:  # nosec B104 - lista de hosts bloqueados (anti-SSRF), não é bind
+        raise ValueError("Insecure or invalid URL scheme: Private network prohibited.")
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        ip = None  # Nome de domínio padrão público (não é um IP literal)
+
+    if ip is not None and (ip.is_private or ip.is_loopback):
+        raise ValueError("Insecure or invalid URL scheme: Private IP prohibited.")
+
+
+def _escape_text_segment(segment: str) -> str:
+    escaped_amp = _BARE_AMP_RE.sub("&amp;", segment)
+    return escaped_amp.replace("<", "&lt;").replace(">", "&gt;")
+
+
+def validate_and_escape_telegram_html(text: str) -> str:
+    parts: List[str] = []
+    open_tags: List[str] = []
+    last_idx = 0
+
+    for match in _HTML_TAG_CANDIDATE_RE.finditer(text):
+        start, end = match.span()
+        parts.append(_escape_text_segment(text[last_idx:start]))
+        token = match.group(0)
+        if not token.endswith(">"):
+            raise ValueError("Invalid HTML formatting in message")
+
+        inner = token[1:-1].strip()
+        if inner.startswith("/"):
+            tag_name = inner[1:].strip().lower()
+            if tag_name not in ALLOWED_SIMPLE_HTML_TAGS and tag_name not in ("a", "span"):
+                raise ValueError("Unsupported HTML tag in message")
+            if not open_tags or open_tags[-1] != tag_name:
+                raise ValueError("Invalid HTML formatting in message")
+            open_tags.pop()
+            parts.append(f"</{tag_name}>")
+        elif inner.lower() in ALLOWED_SIMPLE_HTML_TAGS:
+            tag_name = inner.lower()
+            open_tags.append(tag_name)
+            parts.append(f"<{tag_name}>")
+        elif inner.lower() in ('span class="tg-spoiler"', "span class='tg-spoiler'"):
+            open_tags.append("span")
+            parts.append('<span class="tg-spoiler">')
+        else:
+            anchor_match = _ANCHOR_TAG_RE.match(inner)
+            if not anchor_match:
+                raise ValueError("Unsupported HTML tag in message")
+            raw_attr = (
+                anchor_match.group(1)
+                if anchor_match.group(1) is not None
+                else anchor_match.group(2)
+            )
+            raw_url = html.unescape(raw_attr)
+            validate_https_public_url(raw_url)
+            open_tags.append("a")
+            parts.append(f'<a href="{html.escape(raw_url, quote=True)}">')
+
+        last_idx = end
+
+    parts.append(_escape_text_segment(text[last_idx:]))
+
+    if open_tags:
+        raise ValueError("Invalid HTML formatting in message")
+
+    return "".join(parts)
 
 
 class DueScheduleAction(str, Enum):
@@ -105,22 +202,7 @@ class InlineButton:
     url: str
 
     def __post_init__(self):
-        parsed = urlparse(self.url)
-        # Exigir HTTPS para evitar vazamento ou SSRF com http/file/gopher
-        if parsed.scheme.lower() != "https" or not parsed.netloc:
-            raise ValueError("Insecure or invalid URL scheme. Only https:// allowed.")
-        
-        # Bloquear localhost e IPs privados
-        hostname = parsed.hostname or ""  # pragma: no mutate - qualquer string que não seja IP nem host bloqueado dá o mesmo resultado
-        if hostname.lower() in ["localhost", "127.0.0.1", "0.0.0.0"]:  # nosec B104 - lista de hosts bloqueados (anti-SSRF), não é bind
-            raise ValueError("Insecure or invalid URL scheme: Private network prohibited.")
-        try:
-            ip = ipaddress.ip_address(hostname)
-        except ValueError:
-            ip = None  # Nome de domínio padrão público (não é um IP literal)
-
-        if ip is not None and (ip.is_private or ip.is_loopback):
-            raise ValueError("Insecure or invalid URL scheme: Private IP prohibited.")
+        validate_https_public_url(self.url)
 
 @dataclass(frozen=True)
 class MediaAttachment:
@@ -144,6 +226,9 @@ class BroadcastMessage:
     scheduled_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     delivery_results: List[ChannelDeliveryResult] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.text = validate_and_escape_telegram_html(self.text)
 
     def get_dispatch_strategy(self) -> DispatchStrategy:
         if not self.media:
@@ -209,7 +294,7 @@ class BroadcastMessage:
     def update_content(self, text: str, button: Optional[InlineButton] = None) -> None:
         if self.status in [BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED, BroadcastStatus.CANCELLED]:
             raise ValueError("Cannot update content of an in-flight, completed, or cancelled broadcast")
-        self.text = text
+        self.text = validate_and_escape_telegram_html(text)
         self.button = button
 
     def is_pending_or_scheduled(self) -> bool:

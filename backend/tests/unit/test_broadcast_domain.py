@@ -9,6 +9,7 @@ from src.domain.broadcast.broadcast_message import (
     InlineButton,
     MediaAttachment,
     MediaType,
+    validate_and_escape_telegram_html,
 )
 
 def test_should_choose_single_message_strategy_when_text_le_1024_and_has_media():
@@ -526,3 +527,109 @@ def test_channel_delivery_result_and_finish_dispatch_with_results():
         "-1001111111111",
         "-1002222222222",
     ]
+
+
+def test_validate_and_escape_telegram_html_allows_telegram_tags_and_escapes_plain_symbols():
+    assert validate_and_escape_telegram_html("") == ""
+
+    # Caracteres <, > e & fora de tags válidas são escapados sem quebrar
+    assert (
+        validate_and_escape_telegram_html("2 < 3 & Tom & Jerry > 1")
+        == "2 &lt; 3 &amp; Tom &amp; Jerry &gt; 1"
+    )
+    # Idempotente se já estiver escapado
+    assert (
+        validate_and_escape_telegram_html("2 &lt; 3 &amp; Tom &quot;ok&quot; &#39;x&#39; &gt; 1")
+        == "2 &lt; 3 &amp; Tom &quot;ok&quot; &#39;x&#39; &gt; 1"
+    )
+
+    # Todas as tags suportadas pelo Telegram
+    for tag in (
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "ins",
+        "s",
+        "strike",
+        "del",
+        "code",
+        "pre",
+        "blockquote",
+        "tg-spoiler",
+    ):
+        formatted = f"<{tag.upper()}>Texto &amp; 2 < 3</{tag.upper()}>"
+        assert (
+            validate_and_escape_telegram_html(formatted)
+            == f"<{tag}>Texto &amp; 2 &lt; 3</{tag}>"
+        )
+
+    assert (
+        validate_and_escape_telegram_html("<span class='tg-spoiler'>segredo</span>")
+        == '<span class="tg-spoiler">segredo</span>'
+    )
+    assert (
+        validate_and_escape_telegram_html('<SPAN class="tg-spoiler">segredo</SPAN>')
+        == '<span class="tg-spoiler">segredo</span>'
+    )
+
+    # Links https:// válidos (aspas duplas ou simples, com query string escapada)
+    assert (
+        validate_and_escape_telegram_html(
+            "Visite <a href='https://example.com/p?a=1&b=2'>Tom & Jerry</a>!"
+        )
+        == 'Visite <a href="https://example.com/p?a=1&amp;b=2">Tom &amp; Jerry</a>!'
+    )
+    assert (
+        validate_and_escape_telegram_html(
+            'Visite <A HREF="https://example.com/p?a=1&amp;b=2">Link</A>'
+        )
+        == 'Visite <a href="https://example.com/p?a=1&amp;b=2">Link</a>'
+    )
+
+    # BroadcastMessage aplica na criação e no update_content
+    msg = BroadcastMessage(
+        id="b-html",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        text='<b>Oferta</b> 2 < 3 & <a href="https://example.com">link</a>',
+    )
+    assert msg.text == '<b>Oferta</b> 2 &lt; 3 &amp; <a href="https://example.com">link</a>'
+    msg.update_content("Tom & Jerry < 5")
+    assert msg.text == "Tom &amp; Jerry &lt; 5"
+
+
+@pytest.mark.parametrize(
+    "invalid_html, expected_msg",
+    [
+        ("<script>alert(1)</script>", r"^Unsupported HTML tag in message$"),
+        ("<div>bloco</div>", r"^Unsupported HTML tag in message$"),
+        ("<img src=\"https://example.com/a.png\">", r"^Unsupported HTML tag in message$"),
+        ("</script>", r"^Unsupported HTML tag in message$"),
+        ("<span class=\"other\">x</span>", r"^Unsupported HTML tag in message$"),
+        ("<a href=\"https://example.com\" onclick=\"x\">x</a>", r"^Unsupported HTML tag in message$"),
+        ("<a>sem href</a>", r"^Unsupported HTML tag in message$"),
+        ("<b class=\"x\">bold</b>", r"^Unsupported HTML tag in message$"),
+        ("<b>sem fechar", r"^Invalid HTML formatting in message$"),
+        ("</b>", r"^Invalid HTML formatting in message$"),
+        ("<b><i>ordem errada</b></i>", r"^Invalid HTML formatting in message$"),
+        ("Texto com <b sem fechar o sinal", r"^Invalid HTML formatting in message$"),
+        ('<a href="http://example.com">inseguro</a>', r"^Insecure or invalid URL scheme\. Only https:// allowed\.$"),
+        ('<a href="https://localhost/admin">local</a>', r"^Insecure or invalid URL scheme: Private network prohibited\.$"),
+        ('<a href="https://192.168.1.1/admin">privado</a>', r"^Insecure or invalid URL scheme: Private IP prohibited\.$"),
+    ],
+)
+def test_validate_and_escape_telegram_html_rejects_unsupported_tags_broken_markup_and_unsafe_links(
+    invalid_html, expected_msg
+):
+    with pytest.raises(ValueError, match=expected_msg):
+        validate_and_escape_telegram_html(invalid_html)
+    with pytest.raises(ValueError, match=expected_msg):
+        BroadcastMessage(
+            id="b-bad",
+            profile_id="p-1",
+            target_channel_ids=["-1001111111111"],
+            text=invalid_html,
+        )
+
