@@ -119,7 +119,7 @@ async def test_should_create_broadcast_with_video_upload_and_pass_duration_and_d
 
     monkeypatch.setattr(telegram_gateway, "send_broadcast", mock_send_broadcast)
 
-    file_bytes = b"fake-mp4-video-bytes"
+    file_bytes = b"\x00\x00\x00\x18ftypmp42" + b"fake-mp4-video-bytes"
     files = {
         "media_file": ("promo.mp4", file_bytes, "video/mp4")
     }
@@ -157,8 +157,8 @@ async def test_should_create_broadcast_with_video_and_thumbnail_upload(client, m
     monkeypatch.setattr(telegram_gateway, "send_broadcast", mock_send_broadcast)
 
     files = {
-        "media_file": ("promo.mp4", b"fake-video-bytes", "video/mp4"),
-        "thumbnail_file": ("thumb.jpg", b"fake-thumb-bytes", "image/jpeg"),
+        "media_file": ("promo.mp4", b"\x00\x00\x00\x18ftypmp42" + b"fake-video-bytes", "video/mp4"),
+        "thumbnail_file": ("thumb.jpg", b"\xff\xd8\xff\xe0" + b"fake-thumb-bytes", "image/jpeg"),
     }
     data = {
         "profile_id": "profile-test-video-thumb",
@@ -1355,3 +1355,103 @@ async def test_partial_dispatch_responds_and_persists_the_same_status(client, mo
     assert body["dispatched_count"] == 1
     persisted = await broadcast_repo.get_by_id(body["broadcast_id"])
     assert persisted.status.value == "PARTIALLY_COMPLETED"
+
+
+# Issue #39: a mídia é conferida pela assinatura do arquivo e pelo tamanho, e nada sobra em temp_media/.
+MP4_HEADER = b"\x00\x00\x00\x18ftypmp42"
+JPEG_HEADER = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+
+
+async def _profile_for_upload(monkeypatch, profile_id: str) -> list:
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    await profile_repo.save(Profile(id=profile_id, name="Acme Upload", credentials=creds))
+    sent: list = []
+
+    async def fake_send(bot_token: str, chat_id: str, message, **kwargs):
+        sent.append(message)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send)
+    return sent
+
+
+def _temp_media_files() -> set:
+    from src.presentation.main import TEMP_MEDIA_DIR
+    import os
+    return set(os.listdir(TEMP_MEDIA_DIR))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field, filename, content",
+    [
+        ("media_file", "promo.jpg", b"<html>not an image</html>"),
+        ("media_file", "promo.mp4", JPEG_HEADER + b"photo pretending to be a video"),
+        ("thumbnail_file", "thumb.jpg", b"<html>not an image</html>"),
+    ],
+)
+async def test_upload_whose_content_does_not_match_the_extension_is_rejected(client, monkeypatch, field, filename, content):
+    sent = await _profile_for_upload(monkeypatch, "profile-upload-mismatch")
+    files = {field: (filename, content, "application/octet-stream")}
+    if field == "thumbnail_file":
+        files["media_file"] = ("promo.mp4", MP4_HEADER + b"video", "video/mp4")
+    before = _temp_media_files()
+
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={"profile_id": "profile-upload-mismatch", "target_channel_ids": '["-1001234567890"]', "text": "x"},
+        files=files,
+    )
+
+    assert resp.status_code == 422
+    assert resp.json() == {"detail": "Unsupported media format"}
+    assert sent == []
+    assert _temp_media_files() == before
+
+
+@pytest.mark.asyncio
+async def test_upload_above_the_size_limit_is_rejected_with_413(client, monkeypatch):
+    sent = await _profile_for_upload(monkeypatch, "profile-upload-too-large")
+    monkeypatch.setenv("MAX_MEDIA_UPLOAD_MB", "1")
+    before = _temp_media_files()
+
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={"profile_id": "profile-upload-too-large", "target_channel_ids": '["-1001234567890"]', "text": "x"},
+        files={"media_file": ("big.mp4", MP4_HEADER + b"\x00" * (1024 * 1024), "video/mp4")},
+    )
+
+    assert resp.status_code == 413
+    assert resp.json() == {"detail": "Media file too large (limit: 1 MB)"}
+    assert sent == []
+    assert _temp_media_files() == before
+
+
+@pytest.mark.parametrize(
+    "env, expected_mb",
+    [
+        ({"MAX_MEDIA_UPLOAD_MB": "300"}, 300),
+        ({"TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": "fake-api-hash"}, 2000),
+        ({}, 50),
+        ({"TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": " "}, 50),
+    ],
+)
+def test_media_upload_limit_follows_the_telegram_api_in_use(monkeypatch, env, expected_mb):
+    from src.presentation.main import media_upload_limit_bytes
+
+    for name in ("MAX_MEDIA_UPLOAD_MB", "TELEGRAM_API_ID", "TELEGRAM_API_HASH"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    assert media_upload_limit_bytes() == expected_mb * 1024 * 1024
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "abc"])
+def test_invalid_media_upload_limit_env_falls_back_to_the_default(monkeypatch, value):
+    from src.presentation.main import media_upload_limit_bytes
+
+    monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
+    monkeypatch.setenv("MAX_MEDIA_UPLOAD_MB", value)
+
+    assert media_upload_limit_bytes() == 50 * 1024 * 1024

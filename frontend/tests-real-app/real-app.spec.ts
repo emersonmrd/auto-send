@@ -21,6 +21,8 @@ const botToken = process.env.E2E_BOT_TOKEN || FAKE_TOKEN;
 const channelId = process.env.E2E_CHANNEL_ID || "-1001234567890";
 const profileName = `Perfil ${Date.now()}`;
 // PNG 1x1 válido.
+// O backend confere a assinatura (caixa ftyp de um MP4) antes de aceitar o vídeo (#39).
+const FAKE_MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from("ftypmp42fake mp4 bytes")]);
 const PHOTO = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
@@ -116,7 +118,7 @@ test.describe.serial("aplicação real", () => {
     await openProfile(page);
     await page
       .locator('input[type="file"]')
-      .setInputFiles({ name: "video.mp4", mimeType: "video/mp4", buffer: Buffer.from("fake mp4 bytes") });
+      .setInputFiles({ name: "video.mp4", mimeType: "video/mp4", buffer: FAKE_MP4 });
     await page.getByPlaceholder("Escreva a mensagem do canal").fill("Legenda do vídeo");
     await page.getByLabel("Enviar Agora").click();
 

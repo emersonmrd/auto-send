@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -13,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import parse_host_header
 from pydantic import BaseModel
 
+from src.domain.broadcast.media_format import classify_media
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
     InlineButton,
@@ -37,6 +37,8 @@ from src.infrastructure.in_memory_broadcast_repository import InMemoryBroadcastR
 from src.infrastructure.resilience import CircuitBreakerOpenException
 from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
 from src.infrastructure.upload_progress_store import UploadProgressStore
+from src.infrastructure.temp_media_storage import MediaTooLarge, save_upload
+from src.infrastructure.telegram_gateway_http import PUBLIC_API_MAX_BYTES
 import sys
 import threading
 import webbrowser
@@ -74,6 +76,29 @@ DEFAULT_DB_URL = f"sqlite+aiosqlite:///{BASE_DIR / 'auto_send.db'}"
 
 TEMP_MEDIA_DIR = os.getenv("TEMP_MEDIA_DIR", DEFAULT_TEMP_DIR)
 os.makedirs(TEMP_MEDIA_DIR, exist_ok=True)
+
+# O servidor local do Telegram aceita até 2.000 MB; a API pública, 50 MB.
+LOCAL_API_MAX_BYTES = 2000 * 1024 * 1024
+
+
+def media_upload_limit_bytes() -> int:
+    """Limite de cada arquivo de upload: MAX_MEDIA_UPLOAD_MB, ou o limite do Telegram em uso."""
+    try:
+        configured_mb = int(os.getenv("MAX_MEDIA_UPLOAD_MB", ""))
+    except ValueError:
+        configured_mb = 0
+    if configured_mb > 0:
+        return configured_mb * 1024 * 1024
+    if os.getenv("TELEGRAM_API_ID", "").strip() and os.getenv("TELEGRAM_API_HASH", "").strip():
+        return LOCAL_API_MAX_BYTES
+    return PUBLIC_API_MAX_BYTES
+
+
+def read_upload_header(upload: UploadFile) -> bytes:
+    """Primeiros bytes do upload, para conferir a assinatura, sem consumir o arquivo."""
+    header = upload.file.read(16)
+    upload.file.seek(0)
+    return header
 
 DB_PATH = os.getenv("DATABASE_URL", DEFAULT_DB_URL)
 engine = create_async_engine(DB_PATH, echo=False)
@@ -616,34 +641,45 @@ async def create_broadcast(
     temp_file_path = None
     temp_thumb_path = None
 
-    if thumbnail_file and thumbnail_file.filename:
-        safe_thumb_filename = os.path.basename(thumbnail_file.filename)
-        thumb_ext = os.path.splitext(safe_thumb_filename)[1].lower()
-        if thumb_ext in [".jpg", ".jpeg", ".png", ".webp"]:
+    def reject_upload(status_code: int, detail: str):
+        for path in (temp_thumb_path, temp_file_path):
+            if path and os.path.exists(path):
+                os.remove(path)
+        if tracking_id:
+            upload_progress_tracker[tracking_id]["status"] = "failed"
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    # Tipo real pela assinatura do arquivo, antes de gravar qualquer coisa em temp_media/ (#39).
+    has_media = bool(media_file and media_file.filename)
+    # Capa sem vídeo não tem uso: não é gravada (antes ficava esquecida em temp_media/).
+    has_thumb = has_media and bool(thumbnail_file and thumbnail_file.filename)
+    try:
+        if has_media:
+            # basename: prevenção de path traversal
+            file_ext = os.path.splitext(os.path.basename(media_file.filename))[1].lower()
+            media_type = classify_media(file_ext, read_upload_header(media_file))
+        if has_thumb:
+            thumb_ext = os.path.splitext(os.path.basename(thumbnail_file.filename))[1].lower()
+            if classify_media(thumb_ext, read_upload_header(thumbnail_file)) is not MediaType.PHOTO:
+                raise ValueError("Unsupported media format")
+    except ValueError as e:
+        reject_upload(422, str(e))
+
+    max_bytes = media_upload_limit_bytes()
+    try:
+        if has_thumb:
             temp_thumb_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}_thumb{thumb_ext}")
-            with open(temp_thumb_path, "wb") as buffer:
-                shutil.copyfileobj(thumbnail_file.file, buffer)
+            save_upload(thumbnail_file.file, temp_thumb_path, max_bytes)
+        if has_media:
+            temp_file_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}{file_ext}")
+            file_size = save_upload(media_file.file, temp_file_path, max_bytes)
+    except MediaTooLarge:
+        reject_upload(413, f"Media file too large (limit: {max_bytes // (1024 * 1024)} MB)")
 
-    if media_file and media_file.filename:
-        # Prevenção de Path Traversal
-        safe_filename = os.path.basename(media_file.filename)
-        file_ext = os.path.splitext(safe_filename)[1].lower()
-        if file_ext not in [".mp4", ".mov", ".jpg", ".jpeg", ".png", ".webp"]:
-            if temp_thumb_path and os.path.exists(temp_thumb_path):
-                os.remove(temp_thumb_path)
-            if tracking_id:
-                upload_progress_tracker[tracking_id]["status"] = "failed"
-            raise HTTPException(status_code=422, detail="Unsupported media format")
-
-        temp_file_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}{file_ext}")
-        with open(temp_file_path, "wb") as buffer:
-            shutil.copyfileobj(media_file.file, buffer)
-        
-        file_size = os.path.getsize(temp_file_path)
+    if has_media:
         if tracking_id:
             upload_progress_tracker[tracking_id]["total_bytes"] = file_size
 
-        media_type = MediaType.VIDEO if file_ext in [".mp4", ".mov"] else MediaType.PHOTO
         final_duration = video_duration
         final_width = video_width
         final_height = video_height
