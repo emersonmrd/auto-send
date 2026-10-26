@@ -27,6 +27,11 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
   - `POST /api/v1/broadcasts` (envio imediato), `POST /api/v1/broadcasts/{broadcast_id}/dispatch-now` e `GET /api/v1/profiles/{profile_id}/broadcasts` passam a incluir `delivery_results` (`chat_id`, `delivered`, `failure_category`, `detail`).
   - O gateway classifica as recusas do Telegram nas categorias do domínio (`BOT_NOT_IN_CHAT`, `NO_POST_PERMISSION`, `INVALID_TOKEN`, `RATE_LIMITED`, `TELEGRAM_UNAVAILABLE`, `OTHER`) sem nunca expor o token do bot, e a tela mostra o resultado e o motivo em português por canal.
   - Migração #4 adiciona a coluna `delivery_results` na tabela `broadcasts`.
+- Edição de agendamentos diretamente no compositor com trava de edição temporária (#15):
+  - Na fila de agendamentos, a ação "Carregar no Editor" adquire uma trava temporária de 90 segundos (`POST /api/v1/broadcasts/{id}/edit-lock`, renovada a cada 30 s), carrega texto, canais de destino, data e botões inline no compositor principal e exibe aviso de modo de edição com botão para sair (`DELETE /api/v1/broadcasts/{id}/edit-lock`).
+  - Ao clicar em "Agendar", salva no mesmo registro via `PATCH /api/v1/broadcasts/{id}` (com atualização de canais e liberação do lock) sem duplicar o agendamento na fila.
+  - O agendador e reconciliador suspendem o disparo enquanto a trava estiver ativa; se o horário agendado for ultrapassado durante a edição, o lock expirado cancela o agendamento de forma limpa.
+  - Migração #5 adiciona a coluna `edit_locked_until` na tabela `broadcasts`.
 
 ### Changed
 - `POST /api/v1/profiles/{profile_id}/resolve-chat` aceita as novas formas de identificador. Link de convite (`t.me/+…`) responde `422` explicando que é preciso o link de um post ou o ID; os demais identificadores inválidos respondem `422 "Invalid chat identifier (...)"` (#12).

@@ -123,6 +123,15 @@ class AutomationSchedulerService:
             for b in pending_list:
                 if not b.scheduled_at:
                     continue
+                if b.is_edit_locked(now_utc):
+                    if b.edit_locked_until and self.scheduler.running:
+                        self.schedule_broadcast(b.id, b.edit_locked_until)
+                    continue
+                if b.expire_overdue_edit_lock(now_utc):
+                    self.cancel_scheduled_broadcast(b.id)
+                    await self.broadcast_repo.save(b)
+                    self._cleanup_media(b)
+                    continue
                 sched_utc = (
                     b.scheduled_at.replace(tzinfo=timezone.utc)
                     if b.scheduled_at.tzinfo is None
@@ -160,6 +169,18 @@ class AutomationSchedulerService:
             if broadcast.status not in [BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED]:
                 return
 
+            now_utc = self._clock()
+            if broadcast.is_edit_locked(now_utc):
+                if broadcast.edit_locked_until and self.scheduler.running:
+                    self.schedule_broadcast(broadcast.id, broadcast.edit_locked_until)
+                return
+
+            if broadcast.expire_overdue_edit_lock(now_utc):
+                self.cancel_scheduled_broadcast(broadcast.id)
+                await self.broadcast_repo.save(broadcast)
+                self._cleanup_media(broadcast)
+                return
+
             # Mesma regra quando o job do APScheduler dispara atrasado (ex.: suspensão do PC, #1).
             if broadcast.scheduled_at is not None:
                 sched_utc = (
@@ -176,6 +197,11 @@ class AutomationSchedulerService:
                     broadcast.mark_misfired()
                     self.cancel_scheduled_broadcast(broadcast.id)
                     await self.broadcast_repo.save(broadcast)
+                    return
+                if decision is DueScheduleAction.WAIT:
+                    # Job adiantado (ex.: reagendado para o fim de uma trava de edição, #15): volta para o horário.
+                    if self.scheduler.running:
+                        self.schedule_broadcast(broadcast.id, sched_utc)
                     return
 
             profile = await self.profile_repo.get_by_id(broadcast.profile_id)

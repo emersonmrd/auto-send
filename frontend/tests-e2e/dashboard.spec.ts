@@ -225,4 +225,113 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
       text: '<b>Oferta</b> <a href="https://example.com/nova">novo link</a>',
     });
   });
+
+  test("carregar no editor ativa trava, edita o agendamento via PATCH sem duplicar e permite sair (issue #15)", async ({ page }) => {
+    const futureIso = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    let lockAcquired = false;
+    let lockReleased = false;
+    let patchCalledWith: Record<string, unknown> | null = null;
+
+    await page.route("**/api/v1/profiles/profile-1/scheduled-broadcasts", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "b-edit-15",
+            profile_id: "profile-1",
+            target_channel_ids: ["-1001234567890"],
+            text: "Texto original do agendamento",
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+            created_at: new Date().toISOString(),
+            media: null,
+            button: null,
+          },
+        ]),
+      }),
+    );
+
+    await page.route("**/api/v1/broadcasts/b-edit-15/edit-lock", (route) => {
+      if (route.request().method() === "POST") {
+        lockAcquired = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "b-edit-15",
+            status: "SCHEDULED",
+            edit_locked_until: new Date(Date.now() + 90000).toISOString(),
+            cancelled: false,
+          }),
+        });
+      }
+      if (route.request().method() === "DELETE") {
+        lockReleased = true;
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "b-edit-15",
+            status: "SCHEDULED",
+            edit_locked_until: null,
+            cancelled: false,
+          }),
+        });
+      }
+      return route.continue();
+    });
+
+    await page.route("**/api/v1/broadcasts/b-edit-15", (route) => {
+      if (route.request().method() === "PATCH") {
+        patchCalledWith = route.request().postDataJSON();
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            id: "b-edit-15",
+            profile_id: "profile-1",
+            target_channel_ids: ["-1001234567890"],
+            text: patchCalledWith?.text,
+            status: "SCHEDULED",
+            scheduled_at: futureIso,
+          }),
+        });
+      }
+      return route.continue();
+    });
+
+    await page.goto("/");
+    await page.getByTitle("Abrir Fila de Agendamentos").click();
+
+    // 1. Clicar em "Carregar no Editor"
+    await page.getByRole("button", { name: "Carregar no Editor" }).click();
+    expect(lockAcquired).toBe(true);
+
+    // 2. Banner de edição visível
+    const banner = page.getByRole("status").filter({ hasText: "Editando agendamento" });
+    await expect(banner).toBeVisible();
+
+    // 3. Modifica o texto no editor
+    const composerInput = page.getByPlaceholder("Escreva a mensagem do canal");
+    await composerInput.fill("Texto editado no compositor");
+
+    // 4. Salva a edição via modal de agendamento -> PATCH no mesmo broadcast
+    await page.getByRole("button", { name: "Agendar Mensagem" }).click();
+    await page.getByRole("button", { name: "OK — Confirmar Agendamento" }).click();
+
+    await expect(page.getByText("Agendamento atualizado com sucesso!")).toBeVisible();
+    expect(patchCalledWith).toMatchObject({
+      text: "Texto editado no compositor",
+      target_channel_ids: ["-1001234567890"],
+    });
+
+    // 5. Carregar de novo e sair do modo edição via botão no banner
+    await page.getByTitle("Abrir Fila de Agendamentos").click();
+    await page.getByRole("button", { name: "Carregar no Editor" }).click();
+    await expect(banner).toBeVisible();
+    await banner.getByRole("button", { name: "Sair do modo edição" }).click();
+    expect(lockReleased).toBe(true);
+    await expect(banner).toHaveCount(0);
+  });
 });

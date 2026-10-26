@@ -10,6 +10,7 @@ import {
   AffectedBroadcastsResponse,
   BroadcastHistoryItem,
   ChannelDeliveryResult,
+  EditLockResponse,
 } from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
@@ -54,7 +55,6 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 import {
   Send,
   Paperclip,
-  Link as LinkIcon,
   CheckCheck,
   Plus,
   Users,
@@ -103,6 +103,18 @@ export default function Home() {
 
   // Inserção de Link no Texto da Mensagem (Inline Hyperlink)
   const composerEditorRef = useRef<TelegramRichEditorHandle | null>(null);
+
+  // Modo edição de um agendamento carregado no compositor (#15)
+  const [composerEditing, setComposerEditing] = useState<{ id: string; scheduledAt: string | null } | null>(null);
+  useEffect(() => {
+    if (!composerEditing) return;
+    const renew = setInterval(() => {
+      void fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}/edit-lock`, { method: "POST" }).catch(
+        () => undefined,
+      );
+    }, 30_000);
+    return () => clearInterval(renew);
+  }, [composerEditing]);
   const [telegramProgress, setTelegramProgress] = useState<TelegramUploadProgress | null>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -619,6 +631,11 @@ export default function Home() {
       return;
     }
 
+    if (composerEditing) {
+      showToast("Você está editando um agendamento. Use Agendar para salvar ou saia do modo edição.", "info");
+      return;
+    }
+
     if (!selectedProfile) {
       setFeedback({ type: "error", message: "Selecione um perfil!" });
       return;
@@ -903,6 +920,10 @@ export default function Home() {
       setFeedback({ type: "error", message: "A data de agendamento deve ser no futuro." });
       return;
     }
+    if (composerEditing) {
+      void saveComposerEdit(selectedDate.toISOString());
+      return;
+    }
     handleSendBroadcast(selectedDate.toISOString());
   };
 
@@ -1035,26 +1056,106 @@ export default function Home() {
         cancelLabel: "Manter rascunho",
         onConfirm: () => {
           setPendingConfirm(null);
-          applyScheduledToComposer(item);
+          void applyScheduledToComposer(item);
         },
       });
       return;
     }
-    applyScheduledToComposer(item);
+    void applyScheduledToComposer(item);
   };
 
-  const applyScheduledToComposer = (item: ScheduledBroadcast) => {
+  const applyScheduledToComposer = async (item: ScheduledBroadcast) => {
+    // "Carregar no Editor" edita o próprio agendamento, com trava no backend (#15).
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${item.id}/edit-lock`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        showToast(extractApiError(err, "Não foi possível abrir o agendamento para edição"), "error");
+        return;
+      }
+    } catch {
+      showToast("Erro de conexão ao abrir o agendamento para edição", "error");
+      return;
+    }
     setText(item.text || "");
     setButtonText(item.button?.text || "");
     setButtonUrl(item.button?.url || "");
     if (item.target_channel_ids && item.target_channel_ids.length > 0) {
       setSelectedChannelIds(item.target_channel_ids);
     }
+    if (item.scheduled_at) {
+      const d = new Date(item.scheduled_at);
+      if (!isNaN(d.getTime())) applyScheduleDateTime(d, false);
+    }
+    setComposerEditing({ id: item.id, scheduledAt: item.scheduled_at });
     setShowQueueDrawer(false);
     setFeedback({
       type: "success",
-      message: "Dados da mensagem carregados no compositor!",
+      message: "Agendamento aberto no editor para edição.",
     });
+  };
+
+  const resetComposerAfterEdit = () => {
+    setComposerEditing(null);
+    setText("");
+    setButtonText("");
+    setButtonUrl("");
+    setScheduledAtInput("");
+    setScheduleConfirmedPreview(null);
+  };
+
+  // Sair do modo edição sem salvar: libera a trava; se o horário já passou, o backend cancela (#15).
+  const handleExitComposerEdit = async () => {
+    if (!composerEditing) return;
+    const editingId = composerEditing.id;
+    resetComposerAfterEdit();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${editingId}/edit-lock`, { method: "DELETE" });
+      const data: EditLockResponse | null = await res.json().catch(() => null);
+      if (res.ok && data?.cancelled) {
+        showToast("O horário passou durante a edição: o agendamento foi cancelado.", "info");
+      }
+    } catch {
+      // Sem rede: a trava expira sozinha em ~90 s.
+    }
+    if (selectedProfile) fetchScheduledQueue(selectedProfile.id);
+  };
+
+  // Salvar o modo edição: PATCH no mesmo agendamento (não cria outro).
+  const saveComposerEdit = async (scheduleDateIso: string) => {
+    if (!composerEditing) return;
+    if (selectedChannelIds.length === 0) {
+      setFeedback({ type: "error", message: "Selecione pelo menos um canal de destino!" });
+      return;
+    }
+    if ((buttonText && !buttonUrl) || (!buttonText && buttonUrl)) {
+      showToast("Informe tanto o texto quanto a URL do botão, ou deixe ambos vazios.", "error");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${composerEditing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          scheduled_at: scheduleDateIso,
+          target_channel_ids: selectedChannelIds,
+          button_text: buttonText && buttonUrl ? buttonText : "",
+          button_url: buttonText && buttonUrl ? buttonUrl : "",
+        }),
+      });
+      if (res.ok) {
+        setShowScheduleModal(false);
+        resetComposerAfterEdit();
+        setFeedback({ type: "success", message: "Agendamento atualizado com sucesso!" });
+        if (selectedProfile) fetchScheduledQueue(selectedProfile.id);
+      } else {
+        const err = await res.json().catch(() => null);
+        setFeedback({ type: "error", message: extractApiError(err, "Erro ao atualizar agendamento") });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Falha de conexão com o servidor" });
+    }
   };
 
   // Salvar Edição do Agendamento
@@ -1938,6 +2039,28 @@ export default function Home() {
                   </div>
                 );
               })()}
+              {composerEditing && (
+                <div
+                  role="status"
+                  className="max-w-4xl mx-auto mb-3 bg-amber-900/40 border border-amber-600/60 rounded-xl px-3.5 py-2 flex items-center justify-between gap-3 text-xs text-amber-100"
+                >
+                  <span className="flex items-center gap-2">
+                    <Edit className="w-4 h-4 shrink-0 text-amber-300" />
+                    Editando agendamento
+                    {composerEditing.scheduledAt
+                      ? ` de ${new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(composerEditing.scheduledAt))}`
+                      : ""}
+                    . Use Agendar para salvar.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void handleExitComposerEdit()}
+                    className="px-2.5 py-1 bg-[#242f3d] hover:bg-[#2b5278] text-white rounded-lg font-medium transition shrink-0"
+                  >
+                    Sair do modo edição
+                  </button>
+                </div>
+              )}
               <div className="max-w-4xl mx-auto flex items-end gap-3">
                 {/* Input Invisível de Arquivo */}
                 <input

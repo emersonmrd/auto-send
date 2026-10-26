@@ -290,6 +290,13 @@ class BroadcastPatchRequest(BaseModel):
     button_text: Optional[str] = None
     button_url: Optional[str] = None
     scheduled_at: Optional[str] = None
+    target_channel_ids: Optional[List[str]] = None
+
+class EditLockResponse(BaseModel):
+    id: str
+    status: str
+    edit_locked_until: Optional[str] = None
+    cancelled: bool = False
 
 class ChannelDeliveryResultResponse(BaseModel):
     chat_id: str
@@ -1472,10 +1479,26 @@ async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
             raise HTTPException(status_code=422, detail=str(schedule_error))
         new_run_date = parsed_dt
 
+    now_utc = datetime.now(timezone.utc)
+    was_edit_locked = broadcast.edit_locked_until is not None
+    # Salvar no modo edição sem novo horário, depois que o horário passou, exige um horário futuro (#15).
+    if (
+        new_run_date is None
+        and was_edit_locked
+        and broadcast.scheduled_at is not None
+        and broadcast.status != BroadcastStatus.MISFIRED
+    ):
+        try:
+            ensure_schedulable(broadcast.scheduled_at, now=now_utc)
+        except ValueError as schedule_error:
+            raise HTTPException(status_code=422, detail=str(schedule_error))
+
     # Atualiza conteúdo se texto ou botão foram alterados
     updated_text = req.text if req.text is not None else broadcast.text
     try:
         broadcast.update_content(text=updated_text, button=updated_button)
+        if req.target_channel_ids is not None:
+            broadcast.update_target_channels(req.target_channel_ids)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -1486,6 +1509,13 @@ async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
             scheduler_service.reschedule_broadcast(broadcast.id, new_run_date)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
+    elif was_edit_locked:
+        broadcast.release_edit_lock(now_utc)
+        if broadcast.scheduled_at is not None and broadcast.status in (
+            BroadcastStatus.PENDING,
+            BroadcastStatus.SCHEDULED,
+        ):
+            scheduler_service.reschedule_broadcast(broadcast.id, broadcast.scheduled_at)
 
     await broadcast_repo.save(broadcast)
 
@@ -1506,6 +1536,70 @@ async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
         "status": broadcast.status.value,
         "scheduled_at": _format_datetime_utc(broadcast.scheduled_at),
         "created_at": _format_datetime_utc(broadcast.created_at),
+    }
+
+
+def _remove_broadcast_media_files(broadcast: BroadcastMessage) -> None:
+    if broadcast.media:
+        for path in (broadcast.media.file_path, broadcast.media.thumbnail_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+
+@app.post(
+    "/api/v1/broadcasts/{broadcast_id}/edit-lock",
+    response_model=EditLockResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
+async def acquire_broadcast_edit_lock(broadcast_id: str):
+    """Trava (ou renova) a edição do agendamento: o job não posta enquanto a trava vale (#15)."""
+    broadcast = await broadcast_repo.get_by_id(broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+    try:
+        broadcast.acquire_edit_lock(scheduler_service._clock())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    await broadcast_repo.save(broadcast)
+    return {
+        "id": broadcast.id,
+        "status": broadcast.status.value,
+        "edit_locked_until": _format_datetime_utc(broadcast.edit_locked_until),
+        "cancelled": False,
+    }
+
+
+@app.delete(
+    "/api/v1/broadcasts/{broadcast_id}/edit-lock",
+    response_model=EditLockResponse,
+    responses={**_ERR_404, **_ERR_422},
+)
+async def release_broadcast_edit_lock(broadcast_id: str):
+    """Sai do modo edição sem salvar: se o horário já passou, o agendamento é cancelado (#15)."""
+    broadcast = await broadcast_repo.get_by_id(broadcast_id)
+    if not broadcast:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
+    try:
+        cancelled = broadcast.release_edit_lock(scheduler_service._clock())
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if cancelled:
+        scheduler_service.cancel_scheduled_broadcast(broadcast.id)
+        _remove_broadcast_media_files(broadcast)
+    elif broadcast.scheduled_at is not None and broadcast.status in (
+        BroadcastStatus.PENDING,
+        BroadcastStatus.SCHEDULED,
+    ):
+        scheduler_service.reschedule_broadcast(broadcast.id, broadcast.scheduled_at)
+    await broadcast_repo.save(broadcast)
+    return {
+        "id": broadcast.id,
+        "status": broadcast.status.value,
+        "edit_locked_until": None,
+        "cancelled": cancelled,
     }
 
 from fastapi.staticfiles import StaticFiles

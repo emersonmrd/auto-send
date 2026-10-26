@@ -132,6 +132,14 @@ export interface ScheduledBroadcast {
   created_at?: string | null;
 }
 
+// Trava de edição do agendamento (#15): POST renova, DELETE sai do modo edição.
+export interface EditLockResponse {
+  id: string;
+  status: string;
+  edit_locked_until?: string | null;
+  cancelled: boolean;
+}
+
 export interface CancelBroadcastResponse {
   id: string;
   status: string;

@@ -80,6 +80,10 @@ def _migration_004_broadcast_delivery_results(cursor: sqlite3.Cursor) -> None:
     _add_column_if_missing(cursor, "broadcasts", "delivery_results", "TEXT")
 
 
+def _migration_005_broadcast_edit_locked_until(cursor: sqlite3.Cursor) -> None:
+    _add_column_if_missing(cursor, "broadcasts", "edit_locked_until", "DATETIME")
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -100,6 +104,11 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         version=4,
         description="Resultados de entrega por canal em broadcasts (#31)",
         apply=_migration_004_broadcast_delivery_results,
+    ),
+    MigrationStep(
+        version=5,
+        description="Trava de edição em broadcasts (#15)",
+        apply=_migration_005_broadcast_edit_locked_until,
     ),
 )
 

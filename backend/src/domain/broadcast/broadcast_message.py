@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 # Margem para o datetime-local do navegador (sem segundos) e relógios levemente atrasados; vale para POST e PATCH.
 SCHEDULE_CLOCK_TOLERANCE = timedelta(seconds=60)
 DEFAULT_MISFIRE_GRACE_MINUTES = 30
+DEFAULT_EDIT_LOCK_SECONDS = 90
 
 ALLOWED_SIMPLE_HTML_TAGS = (
     "b",
@@ -226,6 +227,7 @@ class BroadcastMessage:
     scheduled_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     delivery_results: List[ChannelDeliveryResult] = field(default_factory=list)
+    edit_locked_until: Optional[datetime] = None
 
     def __post_init__(self) -> None:
         self.text = validate_and_escape_telegram_html(self.text)
@@ -290,12 +292,54 @@ class BroadcastMessage:
             raise ValueError("Cannot reschedule an in-flight, completed, or cancelled broadcast")
         self.scheduled_at = new_run_date
         self.status = BroadcastStatus.SCHEDULED
+        self.edit_locked_until = None
 
     def update_content(self, text: str, button: Optional[InlineButton] = None) -> None:
         if self.status in [BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED, BroadcastStatus.CANCELLED]:
             raise ValueError("Cannot update content of an in-flight, completed, or cancelled broadcast")
         self.text = validate_and_escape_telegram_html(text)
         self.button = button
+
+    def update_target_channels(self, channel_ids: List[str]) -> None:
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot modify target channels of a completed, failed, or cancelled broadcast"
+            )
+        if not channel_ids:
+            raise ValueError("target_channel_ids must be a non-empty list")
+        self.target_channel_ids = list(channel_ids)
+
+    def is_edit_locked(self, now: datetime) -> bool:
+        return self.edit_locked_until is not None and now < self.edit_locked_until
+
+    def acquire_edit_lock(
+        self,
+        now: datetime,
+        ttl: timedelta = timedelta(seconds=DEFAULT_EDIT_LOCK_SECONDS),
+    ) -> None:
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot lock an in-flight, completed, failed, or cancelled broadcast"
+            )
+        if ttl <= timedelta(0):
+            raise ValueError("ttl must be positive")
+        self.edit_locked_until = now + ttl
+
+    def release_edit_lock(self, now: datetime) -> bool:
+        if not self.is_pending_or_scheduled():
+            raise ValueError(
+                "Cannot lock an in-flight, completed, failed, or cancelled broadcast"
+            )
+        self.edit_locked_until = None
+        if self.scheduled_at is not None and now >= self.scheduled_at:
+            self.status = BroadcastStatus.CANCELLED
+            return True
+        return False
+
+    def expire_overdue_edit_lock(self, now: datetime) -> bool:
+        if self.edit_locked_until is None or now < self.edit_locked_until:
+            return False
+        return self.release_edit_lock(now)
 
     def is_pending_or_scheduled(self) -> bool:
         return self.status in [

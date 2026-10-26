@@ -64,6 +64,7 @@ class BroadcastModel(Base):
     scheduled_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     delivery_results = Column(Text, nullable=True)  # JSON encoded (#31)
+    edit_locked_until = Column(DateTime(timezone=True), nullable=True)  # (#15)
 
 # Repositórios SQLAlchemy com aiosqlite
 class SqlAlchemyProfileRepository(IProfileRepository):
@@ -252,6 +253,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                     existing.button_text = b_text
                     existing.button_url = b_url
                     existing.delivery_results = results_json
+                    existing.edit_locked_until = broadcast.edit_locked_until
                 else:
                     db_obj = BroadcastModel(
                         id=broadcast.id,
@@ -271,6 +273,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                         scheduled_at=broadcast.scheduled_at,
                         created_at=broadcast.created_at,
                         delivery_results=results_json,
+                        edit_locked_until=broadcast.edit_locked_until,
                     )
                     session.add(db_obj)
 
@@ -346,6 +349,10 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
         if created_dt is not None and created_dt.tzinfo is None:
             created_dt = created_dt.replace(tzinfo=timezone.utc)
 
+        locked_dt = getattr(obj, "edit_locked_until", None)
+        if locked_dt is not None and locked_dt.tzinfo is None:
+            locked_dt = locked_dt.replace(tzinfo=timezone.utc)
+
         delivery_results: List[ChannelDeliveryResult] = []
         raw_results = getattr(obj, "delivery_results", None)
         if raw_results:
@@ -374,4 +381,5 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             scheduled_at=scheduled_dt,
             created_at=created_dt,
             delivery_results=delivery_results,
+            edit_locked_until=locked_dt,
         )

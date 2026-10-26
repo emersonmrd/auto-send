@@ -1879,3 +1879,121 @@ async def test_broadcast_escapes_plain_symbols_and_rejects_unsupported_html_or_h
         assert bad_patch.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_broadcast_edit_lock_workflow_routes_and_scheduler_suppression(monkeypatch, tmp_path):
+    """
+    Issue #15:
+    - POST /api/v1/broadcasts/{id}/edit-lock trava o agendamento;
+    - O job do scheduler no horário NÃO posta enquanto a trava estiver ativa;
+    - Com a trava expirada depois do horário, vira CANCELLED, remove job e apaga mídia;
+    - PATCH atualiza target_channel_ids e texto sem duplicar, liberando a trava;
+    - DELETE /api/v1/broadcasts/{id}/edit-lock antes do horário libera a trava sem cancelar;
+    - DELETE /api/v1/broadcasts/{id}/edit-lock depois do horário cancela o agendamento.
+    """
+    from datetime import datetime, timedelta, timezone
+    from src.presentation.main import broadcast_repo, profile_repo, scheduler_service, telegram_gateway
+    from src.domain.profiles.profile import Profile
+    from src.domain.profiles.bot_credentials import BotCredentials
+
+    await profile_repo.save(
+        Profile(
+            id="p-15",
+            name="Acme 15",
+            credentials=BotCredentials(
+                token="123456789:ABCdefGhIJKlmNoPQRstuVWXyz",
+                bot_username="acme15_bot",
+            ),
+        )
+    )
+
+    dispatched: list[str] = []
+
+    async def fake_send_broadcast(*, bot_token: str, chat_id: str, message, **kwargs) -> bool:
+        dispatched.append(chat_id)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", fake_send_broadcast)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        # 1. Cria agendamento futuro dentro da janela da trava (90s)
+        sched_time = datetime.now(timezone.utc) + timedelta(seconds=30)
+        resp = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-15",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": "Agendamento original",
+                "scheduled_at": sched_time.isoformat(),
+            },
+        )
+        assert resp.status_code == 201
+        b_id = resp.json()["broadcast_id"]
+
+        # 2. Adquire a trava de edição (POST /edit-lock com TTL de 90s)
+        lock_resp = await client.post(f"/api/v1/broadcasts/{b_id}/edit-lock")
+        assert lock_resp.status_code == 200
+        lock_data = lock_resp.json()
+        assert lock_data["id"] == b_id
+        assert lock_data["edit_locked_until"] is not None
+        assert lock_data["cancelled"] is False
+
+        # 3. No horário (30s depois, ainda dentro dos 90s da trava), o scheduler NÃO posta
+        clock_at_schedule = sched_time + timedelta(seconds=1)
+        monkeypatch.setattr(scheduler_service, "_clock", lambda: clock_at_schedule)
+        await scheduler_service.execute_scheduled_broadcast(b_id)
+        assert dispatched == []
+        b_locked = await broadcast_repo.get_by_id(b_id)
+        assert b_locked.status.value == "SCHEDULED"
+
+        # 4. PATCH atualiza texto e target_channel_ids (salva o mesmo item sem duplicar)
+        new_future = datetime.now(timezone.utc) + timedelta(hours=1)
+        patch_resp = await client.patch(
+            f"/api/v1/broadcasts/{b_id}",
+            json={
+                "text": "Texto atualizado via PATCH",
+                "scheduled_at": new_future.isoformat(),
+                "target_channel_ids": ["-1002222222222", "-1003333333333"],
+            },
+        )
+        assert patch_resp.status_code == 200
+        b_patched = await broadcast_repo.get_by_id(b_id)
+        assert b_patched.text == "Texto atualizado via PATCH"
+        assert b_patched.target_channel_ids == ["-1002222222222", "-1003333333333"]
+        assert b_patched.edit_locked_until is None
+
+        # 5. Sai sem salvar antes do horário: continua igual
+        lock_resp2 = await client.post(f"/api/v1/broadcasts/{b_id}/edit-lock")
+        assert lock_resp2.status_code == 200
+        rel_resp = await client.delete(f"/api/v1/broadcasts/{b_id}/edit-lock")
+        assert rel_resp.status_code == 200
+        assert rel_resp.json()["cancelled"] is False
+        b_rel = await broadcast_repo.get_by_id(b_id)
+        assert b_rel.status.value == "SCHEDULED"
+        assert b_rel.edit_locked_until is None
+
+        # 6. Trava ativa cujo horário já passou: liberar ou expirar cancela
+        past_sched = datetime.now(timezone.utc) + timedelta(minutes=5)
+        resp_past = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": "p-15",
+                "target_channel_ids": json.dumps(["-1001111111111"]),
+                "text": "Agendamento para expirar em edicao",
+                "scheduled_at": past_sched.isoformat(),
+            },
+        )
+        assert resp_past.status_code == 201
+        b_past_id = resp_past.json()["broadcast_id"]
+
+        await client.post(f"/api/v1/broadcasts/{b_past_id}/edit-lock")
+        # Simula tempo após past_sched
+        monkeypatch.setattr(scheduler_service, "_clock", lambda: past_sched + timedelta(minutes=2))
+        rel_past = await client.delete(f"/api/v1/broadcasts/{b_past_id}/edit-lock")
+        assert rel_past.status_code == 200
+        assert rel_past.json()["cancelled"] is True
+        b_cancelled = await broadcast_repo.get_by_id(b_past_id)
+        assert b_cancelled.status.value == "CANCELLED"
+
+
+

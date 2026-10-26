@@ -633,3 +633,124 @@ def test_validate_and_escape_telegram_html_rejects_unsupported_tags_broken_marku
             text=invalid_html,
         )
 
+
+
+def _locked_candidate(status=BroadcastStatus.SCHEDULED, scheduled_at=None):
+    from datetime import timedelta as _td
+    return BroadcastMessage(
+        id="b-lock",
+        profile_id="p-1",
+        target_channel_ids=["-1001111111111"],
+        text="Lock",
+        status=status,
+        scheduled_at=scheduled_at or datetime(2026, 10, 26, 15, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_edit_lock_acquire_renew_expire_and_release_before_schedule_keeps_broadcast():
+    from datetime import timedelta
+    from src.domain.broadcast.broadcast_message import DEFAULT_EDIT_LOCK_SECONDS
+
+    assert DEFAULT_EDIT_LOCK_SECONDS == 90
+    now = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)
+    for status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = _locked_candidate(status=status)
+        assert msg.edit_locked_until is None
+        assert msg.is_edit_locked(now) is False
+
+        msg.acquire_edit_lock(now)
+        assert msg.edit_locked_until == now + timedelta(seconds=90)
+        assert msg.is_edit_locked(now) is True
+        assert msg.is_edit_locked(now + timedelta(seconds=89)) is True
+        assert msg.is_edit_locked(now + timedelta(seconds=90)) is False
+
+        # Renovação estende a trava
+        msg.acquire_edit_lock(now + timedelta(seconds=30), ttl=timedelta(seconds=60))
+        assert msg.edit_locked_until == now + timedelta(seconds=90)
+
+        # Antes de expirar, expire_overdue_edit_lock não faz nada
+        assert msg.expire_overdue_edit_lock(now + timedelta(seconds=89)) is False
+        assert msg.edit_locked_until is not None
+
+        # Saiu sem salvar antes do horário: nada muda
+        assert msg.release_edit_lock(now) is False
+        assert msg.edit_locked_until is None
+        assert msg.status is status
+
+    # Sem trava, expire_overdue_edit_lock não faz nada
+    msg = _locked_candidate()
+    assert msg.expire_overdue_edit_lock(now) is False
+    assert msg.status is BroadcastStatus.SCHEDULED
+
+
+def test_edit_lock_release_or_expiry_after_schedule_cancels_and_reschedule_clears_lock():
+    from datetime import timedelta
+
+    sched = datetime(2026, 10, 26, 15, 0, tzinfo=timezone.utc)
+
+    msg = _locked_candidate(scheduled_at=sched)
+    msg.acquire_edit_lock(sched - timedelta(seconds=10))
+    assert msg.release_edit_lock(sched) is True
+    assert msg.status is BroadcastStatus.CANCELLED
+    assert msg.edit_locked_until is None
+
+    msg = _locked_candidate(scheduled_at=sched)
+    msg.acquire_edit_lock(sched - timedelta(seconds=10), ttl=timedelta(seconds=30))
+    assert msg.expire_overdue_edit_lock(sched + timedelta(seconds=20)) is True
+    assert msg.status is BroadcastStatus.CANCELLED
+
+    # Sem scheduled_at, liberar nunca cancela
+    msg = BroadcastMessage(id="b", profile_id="p", target_channel_ids=["-1001111111111"], status=BroadcastStatus.PENDING)
+    msg.acquire_edit_lock(sched)
+    assert msg.release_edit_lock(sched + timedelta(days=1)) is False
+    assert msg.status is BroadcastStatus.PENDING
+
+    # Reagendar (salvar com horário novo) libera a trava
+    msg = _locked_candidate(scheduled_at=sched)
+    msg.acquire_edit_lock(sched - timedelta(seconds=10))
+    msg.reschedule(sched + timedelta(hours=1))
+    assert msg.edit_locked_until is None
+    assert msg.scheduled_at == sched + timedelta(hours=1)
+
+
+def test_edit_lock_rejects_terminal_states_and_non_positive_ttl():
+    from datetime import timedelta
+
+    now = datetime(2026, 10, 26, 14, 0, tzinfo=timezone.utc)
+    for status in (
+        BroadcastStatus.DISPATCHING,
+        BroadcastStatus.COMPLETED,
+        BroadcastStatus.PARTIALLY_COMPLETED,
+        BroadcastStatus.FAILED,
+        BroadcastStatus.CANCELLED,
+    ):
+        msg = _locked_candidate(status=status)
+        with pytest.raises(ValueError, match=r"^Cannot lock an in-flight, completed, failed, or cancelled broadcast$"):
+            msg.acquire_edit_lock(now)
+        with pytest.raises(ValueError, match=r"^Cannot lock an in-flight, completed, failed, or cancelled broadcast$"):
+            msg.release_edit_lock(now)
+
+    msg = _locked_candidate()
+    for bad_ttl in (timedelta(0), timedelta(seconds=-1)):
+        with pytest.raises(ValueError, match=r"^ttl must be positive$"):
+            msg.acquire_edit_lock(now, ttl=bad_ttl)
+    assert msg.edit_locked_until is None
+    msg.acquire_edit_lock(now, ttl=timedelta(microseconds=1))
+    assert msg.edit_locked_until == now + timedelta(microseconds=1)
+
+
+def test_update_target_channels_only_for_active_broadcasts_and_non_empty():
+    for status in (BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED, BroadcastStatus.MISFIRED):
+        msg = _locked_candidate(status=status)
+        new_ids = ["-1002222222222", "-1003333333333"]
+        msg.update_target_channels(new_ids)
+        assert msg.target_channel_ids == new_ids
+        assert msg.target_channel_ids is not new_ids
+        with pytest.raises(ValueError, match=r"^target_channel_ids must be a non-empty list$"):
+            msg.update_target_channels([])
+        assert msg.target_channel_ids == new_ids
+
+    for status in (BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED, BroadcastStatus.FAILED, BroadcastStatus.CANCELLED):
+        msg = _locked_candidate(status=status)
+        with pytest.raises(ValueError, match=r"^Cannot modify target channels of a completed, failed, or cancelled broadcast$"):
+            msg.update_target_channels(["-1002222222222"])

@@ -28,6 +28,7 @@ from src.presentation.main import (  # noqa: E402
     DiscoverChatsResponse,
     DiscoveredChatListItem,
     DiscoveredChatResponse,
+    EditLockResponse,
     HealthResponse,
     ImmediateBroadcastCreateResponse,
     OpenDataDirResponse,
@@ -66,6 +67,7 @@ _MODEL_TO_FRONTEND_INTERFACE = {
     BroadcastButtonResponse: "BroadcastButton",
     ScheduledBroadcastResponse: "ScheduledBroadcast",
     CancelBroadcastResponse: "CancelBroadcastResponse",
+    EditLockResponse: "EditLockResponse",
     AffectedBroadcastItemResponse: "AffectedBroadcastItem",
     AffectedBroadcastsResponse: "AffectedBroadcastsResponse",
 }

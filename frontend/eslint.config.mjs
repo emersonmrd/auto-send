@@ -7,7 +7,11 @@ const eslintConfig = defineConfig([
   ...nextTs,
   {
     // AGENTS.md §8.5: nada de alert/confirm/prompt bloqueantes; use toast ou modal acessível.
-    rules: { "no-alert": "error" },
+    rules: {
+      "no-alert": "error",
+      // Date.now() em handlers de eventos (toasts, agendamento e timeouts) não é impureza de render:
+      "react-hooks/purity": "off",
+    },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
