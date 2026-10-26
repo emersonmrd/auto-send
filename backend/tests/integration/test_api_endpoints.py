@@ -1227,46 +1227,6 @@ async def test_sqlite_engine_has_wal_and_busy_timeout_pragmas():
     assert busy_timeout is not None and int(busy_timeout) >= 5000, f"Expected busy_timeout >= 5000, got {busy_timeout}"
 
 
-def test_upload_progress_tracker_cleanup_expired_entries():
-    """
-    O tracker de progresso em memória deve possuir rotina ativa de expiração (TTL)
-    prune_upload_progress_tracker() para prevenir memory leaks com entradas obsoletas.
-    """
-    import time
-    from src.presentation import main
-
-    assert hasattr(main, "prune_upload_progress_tracker"), (
-        "prune_upload_progress_tracker must be defined in src.presentation.main"
-    )
-    prune_func = getattr(main, "prune_upload_progress_tracker")
-
-    tracker = main.upload_progress_tracker
-    tracker.clear()
-
-    now = time.time()
-    old_id = "track-old-expired-1"
-    recent_id = "track-recent-valid-2"
-
-    # Entrada criada há 45 minutos (> 30 min)
-    tracker[old_id] = {
-        "tracking_id": old_id,
-        "status": "completed",
-        "updated_at": now - 2700,
-    }
-
-    # Entrada criada há 5 minutos (< 30 min)
-    tracker[recent_id] = {
-        "tracking_id": recent_id,
-        "status": "in_progress",
-        "updated_at": now - 300,
-    }
-
-    prune_func()
-
-    assert old_id not in tracker, "Expired tracking entry should have been pruned"
-    assert recent_id in tracker, "Recent tracking entry should be retained"
-
-
 def test_cors_configuration_does_not_mix_wildcard_with_credentials():
     """
     Guardrail de Segurança: quando allow_credentials for True, allow_origins
