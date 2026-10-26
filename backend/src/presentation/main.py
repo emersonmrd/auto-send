@@ -456,9 +456,15 @@ async def create_profile(req: ProfileCreateRequest):
             "is_active": profile.is_active,
         }
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=redact_bot_token(str(e), bot_token=req.bot_token),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=redact_bot_token(str(e), bot_token=req.bot_token),
+        )
 
 @app.put(
     "/api/v1/profiles/{profile_id}",
@@ -491,9 +497,15 @@ async def update_profile(profile_id: str, req: ProfileCreateRequest):
             "is_active": profile.is_active,
         }
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=redact_bot_token(str(e), bot_token=req.bot_token),
+        )
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=redact_bot_token(str(e), bot_token=req.bot_token),
+        )
 
 @app.get(
     "/api/v1/profiles/{profile_id}/affected-broadcasts",

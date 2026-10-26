@@ -106,6 +106,20 @@ test.describe("Buscar canais do bot", () => {
     await expect(page.getByLabel("Link de um post, ID ou @username do canal")).toBeFocused();
   });
 
+  test("bot em uso por outro programa: mostra mensagem de bot em uso e não de webhook (issue #32)", async ({ page }) => {
+    await page.route("**/api/v1/profiles/profile-1/discover-chats", (route) =>
+      json(route, 400, { detail: "Bot is currently in use by another program" }),
+    );
+
+    await page.getByRole("button", { name: "Buscar canais do bot" }).click();
+
+    const alert = page.getByRole("region", { name: "Buscar canais do bot" }).getByRole("alert");
+    await expect(alert).toContainText(
+      "Este bot está sendo usado por outro programa agora. Feche o outro programa ou use outro bot."
+    );
+    await expect(alert).not.toContainText("webhook");
+  });
+
   test("resolve um canal privado pelo link de um post (issue #12)", async ({ page }) => {
     let identifier: unknown;
     await page.route("**/api/v1/profiles/profile-1/resolve-chat", (route) => {

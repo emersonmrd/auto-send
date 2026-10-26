@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
 from src.domain.ports.chat_discovery_gateway import (
+    BotInUseError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
     IChatDiscoveryGateway,
@@ -476,8 +477,20 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             logger.error("Network error calling Telegram %s: %s", method, type(exc).__name__)
             raise ChatDiscoveryError(f"Telegram unreachable ({type(exc).__name__})") from None
         if resp.status_code == 409:
-            # Outro sistema recebe os updates por webhook. É configuração do bot, não falha: não abre o circuito,
-            # e o webhook nunca é apagado daqui (quebraria o sistema de quem usa o bot).
+            # 409 no getUpdates ocorre em dois casos distintos (#32):
+            # 1) "terminated by other getUpdates request" -> outro programa lendo updates do mesmo bot;
+            # 2) "can't use getUpdates method while webhook is active" -> webhook ativo.
+            # Nenhum dos dois é falha de servidor do Telegram (não abre o circuit breaker).
+            desc_409 = ""
+            try:
+                body_409 = resp.json()
+                if isinstance(body_409, dict):
+                    desc_409 = str(body_409.get("description") or "")
+            except Exception:
+                desc_409 = ""
+            lower_409 = desc_409.lower()
+            if "terminated by other getupdates" in lower_409 or "other getupdates request" in lower_409:
+                raise BotInUseError("Bot is currently in use by another program")
             raise WebhookActiveError("Bot webhook is active: automatic discovery is unavailable")
         data = await self._handle_response(resp)
         if not data.get("ok"):

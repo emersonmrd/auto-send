@@ -11,6 +11,10 @@ class WebhookActiveError(ChatDiscoveryError):
     """O bot tem webhook ativo (outro sistema recebe os updates): a descoberta automática não funciona, o getChat sim."""
 
 
+class BotInUseError(ChatDiscoveryError):
+    """Outro programa está lendo os updates deste bot em paralelo (409 'terminated by other getUpdates request', #32)."""
+
+
 class BotNotChannelAdminError(ChatDiscoveryError):
     """O bot não está no canal ou não é administrador com permissão de publicar (getChatMember, #2)."""
 

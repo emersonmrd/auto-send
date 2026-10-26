@@ -2,6 +2,7 @@ import pytest
 import httpx
 from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
 from src.domain.ports.chat_discovery_gateway import (
+    BotInUseError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
     TelegramUnavailableError,
@@ -144,6 +145,29 @@ async def test_discover_with_active_webhook_raises_a_typed_error_without_token(m
     # Webhook ativo é configuração do bot, não falha do Telegram: não conta para o circuit breaker.
     assert gateway.circuit_breaker.state == CircuitState.CLOSED
     assert gateway.circuit_breaker.failure_count == 0
+
+
+async def test_discover_with_other_get_updates_409_raises_bot_in_use_error_and_not_webhook(monkeypatch):
+    use_transport(
+        monkeypatch,
+        lambda r: httpx.Response(
+            409,
+            json={
+                "ok": False,
+                "error_code": 409,
+                "description": "Conflict: terminated by other getUpdates request; make sure that only one bot instance is running",
+            },
+        ),
+    )
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+
+    with pytest.raises(BotInUseError) as exc:
+        await gateway.discover_chats(TOKEN)
+    assert isinstance(exc.value, ChatDiscoveryError)
+    assert not isinstance(exc.value, WebhookActiveError)
+    assert str(exc.value) == "Bot is currently in use by another program"
+    assert TOKEN not in str(exc.value)
+    assert gateway.circuit_breaker.state == CircuitState.CLOSED
 
 
 async def test_resolve_rejects_a_private_chat(monkeypatch):
@@ -320,4 +344,26 @@ async def test_ensure_bot_can_post_maps_timeout_to_telegram_unavailable_without_
     assert TOKEN not in str(exc.value)
     assert "SecretToken" not in str(exc.value)
     assert cb.state == CircuitState.OPEN
+
+
+def test_every_backend_http_exception_detail_has_a_portuguese_translation_in_frontend_catalog():
+    import ast
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[3]
+    catalog_text = (repo_root / "frontend" / "src" / "lib" / "apiError.ts").read_text(encoding="utf-8")
+
+    missing: list[str] = []
+    for py_file in (repo_root / "backend" / "src").rglob("*.py"):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "HTTPException":
+                for kw in node.keywords:
+                    if kw.arg == "detail" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                        detail_str = kw.value.value
+                        if detail_str not in catalog_text:
+                            missing.append(f"{py_file.name}:{node.lineno}: {detail_str!r}")
+
+    assert missing == [], f"Backend HTTPException detail strings missing in frontend/src/lib/apiError.ts: {missing}"
+
 

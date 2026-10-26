@@ -47,6 +47,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - A aba do navegador mostra "Auto-Send" em vez de "Create Next App", o título padrão do template do Next.js (#5).
 - Compositor: anexar um arquivo de nome muito longo não empurra mais o campo de mensagem e os botões Enviar/Agendar para fora da tela; o nome aparece truncado, com o nome completo no `title` (#17).
 - Acessibilidade: os campos dos formulários (perfil, canal, botão inline, link de texto, agendamento e edição) têm o rótulo visível associado (`<label htmlFor>`), e o campo de mensagem tem `aria-label`; leitores de tela anunciam o rótulo, não o placeholder (#6).
+- Mensagens de erro em português e separação entre webhook ativo e bot em uso por outro programa (#32):
+  - No `getUpdates` da busca de canais, o `409` por leitura concorrente (`"terminated by other getUpdates request"`) passa a levantar `BotInUseError("Bot is currently in use by another program")` em vez de `WebhookActiveError`, exibindo na tela que o bot está em uso em outro programa.
+  - Catálogo centralizado em `frontend/src/lib/apiError.ts` traduz todos os `detail` da API e listas `422` do Pydantic (`"Campo <campo> inválido"`) para português, remove eventuais tokens de bot e usa mensagem genérica em português com o original entre parênteses quando não houver tradução cadastrada.
 
 ### Security
 - `docker-compose.yml`: a API (que não tem autenticação) e a tela passam a ser publicadas só em `127.0.0.1` (`127.0.0.1:8000`, `127.0.0.1:3000`), e o servidor local do Telegram deixa de ser publicado no host: só o backend o usa, pela rede do Compose. Antes, as três portas abriam em todas as interfaces, e numa rede compartilhada ou num VPS qualquer um podia usar a API. Para acessar de outra máquina, ponha um proxy reverso com autenticação na frente (#35).

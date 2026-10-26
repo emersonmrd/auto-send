@@ -1,14 +1,139 @@
-// Corpo de erro da API (AGENTS.md §12): `detail` é string, ou a lista de um 422 de validação do Pydantic.
-type ValidationIssue = { msg?: unknown };
+// Corpo de erro da API (AGENTS.md §12): `detail` é string em inglês no contrato HTTP,
+// ou a lista de um 422 de validação do Pydantic. Este módulo é o catálogo único de tradução
+// para mensagens em português exibidas ao usuário (Issue #32).
 
-const CHANNEL_REGISTRATION_ERRORS: Record<string, string> = {
+type ValidationIssue = { loc?: unknown; msg?: unknown };
+
+export const WEBHOOK_ACTIVE_DETAIL =
+  "Bot webhook is active: automatic discovery is unavailable";
+
+export const BOT_IN_USE_DETAIL =
+  "Bot is currently in use by another program";
+
+const BARE_BOT_TOKEN_RE = /\b\d{6,}:[A-Za-z0-9_-]{10,}\b/g;
+const URL_BOT_TOKEN_RE = /\/bot[^/\s]+/g;
+
+export function redactBotTokens(text: string): string {
+  return text
+    .replace(URL_BOT_TOKEN_RE, "/bot[REDACTED]")
+    .replace(BARE_BOT_TOKEN_RE, "[REDACTED_TOKEN]");
+}
+
+export const API_ERROR_CATALOG: Record<string, string> = {
+  // Perfis e autenticação do bot
+  "Profile not found": "Perfil não encontrado.",
+  "Invalid Telegram Bot Token format":
+    "Formato de token do bot inválido. Use o token gerado pelo @BotFather (ex.: 123456789:ABC...).",
+
+  // Canais e descoberta
+  "Channel not found": "Canal não encontrado.",
+  "Invalid Telegram Channel Chat ID format (must start with -100 followed by digits)":
+    "Formato de ID do canal inválido. O ID deve começar com -100 seguido de números.",
   "Bot is not administrator in the channel":
     "O bot não é administrador deste canal. Adicione-o como administrador com permissão de publicar e tente de novo.",
   "Could not reach Telegram, try again":
     "Não foi possível falar com o Telegram agora. Tente de novo em instantes.",
+  [WEBHOOK_ACTIVE_DETAIL]:
+    "Este bot está ligado a outro sistema (webhook), por isso a busca automática não funciona. Vincule o canal pelo link de um post, pelo ID ou pelo @username.",
+  [BOT_IN_USE_DETAIL]:
+    "Este bot está sendo usado por outro programa agora. Feche o outro programa ou use outro bot.",
+  "Invite links (t.me/+...) cannot be resolved by a bot: use the link of a post in the channel or the -100... chat ID":
+    'Link de convite não serve. No canal, toque numa mensagem e use "Copiar link", ou informe o ID -100...',
+  "Invalid chat identifier (use @username, t.me/username, a post link t.me/c/... or the -100... chat ID)":
+    "Identificador de canal inválido. Use @username, t.me/username, o link de um post (t.me/c/...) ou o ID -100...",
+  "Invalid discovered chat (expected a channel or group with a negative numeric id)":
+    "Esse chat não é um canal nem supergrupo válido do Telegram.",
+
+  // Broadcasts, fila e agendamento
+  "Broadcast not found": "Agendamento não encontrado.",
+  "Tracking ID not found": "Identificador de progresso não encontrado.",
   "There is a broadcast currently dispatching. Wait for it to finish and try again.":
     "Há um envio em andamento. Aguarde terminar e tente de novo.",
+  "scheduled_at must include a timezone":
+    "A data e hora do agendamento precisam incluir o fuso horário.",
+  "scheduled_at cannot be in the past":
+    "A data e hora do agendamento não podem estar no passado.",
+  "Invalid scheduled_at ISO-8601 format":
+    "Formato de data e hora do agendamento inválido.",
+  "Cannot edit an in-flight, completed, or cancelled broadcast":
+    "Não é possível editar um agendamento em envio, concluído ou cancelado.",
+  "Cannot cancel an in-flight or completed broadcast":
+    "Não é possível cancelar um agendamento em envio ou já concluído.",
+  "Cannot reschedule an in-flight, completed, or cancelled broadcast":
+    "Não é possível reagendar um envio em andamento, concluído ou cancelado.",
+  "Cannot update content of an in-flight, completed, or cancelled broadcast":
+    "Não é possível alterar o conteúdo de um envio em andamento, concluído ou cancelado.",
+  "Cannot dispatch an in-flight, completed, failed, or cancelled broadcast":
+    "Não é possível disparar um envio em andamento, concluído, com falha ou cancelado.",
+  "Only pending or scheduled broadcasts can become misfired":
+    "Apenas agendamentos pendentes podem ser marcados como expirados.",
+  "Cannot modify target channels of a completed, failed, or cancelled broadcast":
+    "Não é possível alterar os canais de um agendamento concluído, com falha ou cancelado.",
+  "Cannot lock an in-flight, completed, failed, or cancelled broadcast":
+    "Não é possível editar um agendamento em envio, concluído, com falha ou cancelado.",
+  "Cannot modify media of an in-flight, completed, failed, or cancelled broadcast":
+    "Não é possível alterar a mídia de um agendamento em envio, concluído, com falha ou cancelado.",
+  "Broadcast does not have media": "Este agendamento não possui mídia.",
+  "Media not found": "Arquivo de mídia do agendamento não encontrado.",
+
+  // Destinos, mídia, botões e HTML
+  "Invalid target_channel_ids format":
+    "Formato da lista de canais de destino inválido.",
+  "target_channel_ids must be a non-empty list":
+    "Selecione pelo menos um canal de destino.",
+  "Unsupported media format":
+    "Formato de mídia não suportado. Envie uma imagem (PNG, JPG, WEBP, GIF) ou vídeo (MP4).",
+  "Both button_text and button_url are required when defining an inline button":
+    "Informe tanto o texto quanto a URL ao adicionar um botão de link.",
+  "Insecure or invalid URL scheme. Only https:// allowed.":
+    "Use um endereço https:// válido.",
+  "Insecure or invalid URL scheme: Private network prohibited.":
+    "Endereço de rede local ou privada não é permitido no link.",
+  "Insecure or invalid URL scheme: Private IP prohibited.":
+    "Endereço de IP privado não é permitido no link.",
+  "Unsupported HTML tag in message":
+    "Formatação HTML não suportada pelo Telegram na mensagem.",
+  "Invalid HTML formatting in message":
+    "Formatação HTML inválida na mensagem.",
+  "Invalid link URL in message: only https:// with a public host is allowed":
+    "Use um endereço https:// válido no link do texto.",
+
+  // Sistema
+  "Unable to open the local data directory on this system":
+    "Não foi possível abrir a pasta de dados neste sistema.",
 };
+
+const API_ERROR_PATTERNS: Array<{
+  pattern: RegExp;
+  format: (match: RegExpExecArray) => string;
+}> = [
+  {
+    pattern: /^Profile with ID '.*' not found\.$/,
+    format: () => "Perfil não encontrado.",
+  },
+  {
+    pattern: /^Telegram Bot Token validation failed:\s*(.+)$/i,
+    format: (m) =>
+      `Não foi possível validar o token do bot no Telegram (${m[1]}). Confira o token no @BotFather.`,
+  },
+  {
+    pattern: /^Media file too large \(limit:\s*(\d+)\s*MB\)$/i,
+    format: (m) => `Arquivo de mídia muito grande (limite: ${m[1]} MB).`,
+  },
+  {
+    pattern: /^(.+) is not a channel or group$/i,
+    format: (m) => `O endereço informado (${m[1]}) não é um canal nem supergrupo.`,
+  },
+  {
+    pattern: /^Telegram unreachable \((.+)\)$/i,
+    format: (m) =>
+      `Não foi possível falar com o Telegram agora (${m[1]}). Tente de novo em instantes.`,
+  },
+  {
+    pattern: /^Telegram API error(?:\s*\(\d+\))?:\s*(.+)$/i,
+    format: (m) => `O Telegram recusou a operação (${m[1]}).`,
+  },
+];
 
 const DELIVERY_FAILURE_MESSAGES: Record<string, string> = {
   BOT_NOT_IN_CHAT: "O bot não está no canal",
@@ -26,21 +151,45 @@ export function formatDeliveryFailureReason(
     return DELIVERY_FAILURE_MESSAGES[category];
   }
   if (detail && detail.trim()) {
-    return detail.trim();
+    return redactBotTokens(detail.trim());
   }
   return "Falha ao enviar para o canal";
+}
+
+export function translateApiDetail(rawDetail: string): string {
+  const safeDetail = redactBotTokens(rawDetail.trim());
+  const exact = API_ERROR_CATALOG[safeDetail];
+  if (exact) {
+    return exact;
+  }
+  for (const { pattern, format } of API_ERROR_PATTERNS) {
+    const match = pattern.exec(safeDetail);
+    if (match) {
+      return format(match);
+    }
+  }
+  return `Não foi possível concluir a operação (${safeDetail})`;
 }
 
 export function extractApiError(body: unknown, fallback: string): string {
   const detail = (body as { detail?: unknown } | null | undefined)?.detail;
 
   if (typeof detail === "string" && detail.trim()) {
-    const trimmed = detail.trim();
-    return CHANNEL_REGISTRATION_ERRORS[trimmed] ?? trimmed;
+    return translateApiDetail(detail);
   }
   if (Array.isArray(detail)) {
     const messages = detail
-      .map((issue: ValidationIssue) => (typeof issue?.msg === "string" ? issue.msg : ""))
+      .map((issue: ValidationIssue) => {
+        if (typeof issue?.msg !== "string" || !issue.msg.trim()) {
+          return "";
+        }
+        const loc = Array.isArray(issue.loc) ? issue.loc : [];
+        const field = loc.length > 0 ? String(loc[loc.length - 1]).trim() : "";
+        if (field) {
+          return `Campo ${field} inválido`;
+        }
+        return translateApiDetail(issue.msg);
+      })
       .filter(Boolean);
     if (messages.length) {
       return messages.join("; ");
