@@ -89,7 +89,7 @@ test.describe("Buscar canais do bot", () => {
 
     await page.getByRole("button", { name: "Buscar canais do bot" }).click();
 
-    await expect(page.getByRole("alert").filter({ hasText: "Unauthorized" })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "Token do bot inválido" })).toBeVisible();
   });
 
   test("bot com webhook ativo: explica em português e leva para a entrada manual (issue #12)", async ({ page }) => {

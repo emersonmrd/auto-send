@@ -108,6 +108,89 @@ export const API_ERROR_CATALOG: Record<string, string> = {
     "Não foi possível abrir a pasta de dados neste sistema.",
 };
 
+export const TELEGRAM_ERROR_CATALOG: Array<{
+  pattern: RegExp;
+  translation: string;
+}> = [
+  {
+    pattern: /chat not found/i,
+    translation:
+      "Canal ou grupo não encontrado. Verifique se o ID ou @username está correto e se o bot é membro.",
+  },
+  {
+    pattern: /group chat was upgraded to a supergroup/i,
+    translation:
+      "O grupo foi promovido para supergrupo e o identificador mudou. Atualize o canal com o novo ID (-100...).",
+  },
+  {
+    pattern: /(?:not enough rights|have no rights|chat_write_forbidden|need administrator rights)/i,
+    translation:
+      "O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar.",
+  },
+  {
+    pattern: /bot was blocked by the user/i,
+    translation: "O bot foi bloqueado pelo usuário.",
+  },
+  {
+    pattern: /(?:bot was kicked|bot is not a member)/i,
+    translation:
+      "O bot não é membro ou foi removido deste canal. Adicione-o novamente como administrador.",
+  },
+  {
+    pattern: /message is too long/i,
+    translation:
+      "A mensagem excede o limite de caracteres permitido pelo Telegram (máximo 4.096 caracteres).",
+  },
+  {
+    pattern: /message caption is too long/i,
+    translation:
+      "A legenda da mídia excede o limite de 1.024 caracteres do Telegram.",
+  },
+  {
+    pattern: /message text is empty/i,
+    translation: "O texto da mensagem não pode estar vazio.",
+  },
+  {
+    pattern: /BUTTON_URL_INVALID/i,
+    translation: "A URL informada para o botão é inválida.",
+  },
+  {
+    pattern: /can'?t parse entities/i,
+    translation:
+      "A formatação HTML ou Markdown contém erros ou tags não suportadas pelo Telegram.",
+  },
+  {
+    pattern: /(?:wrong file identifier|failed to get HTTP URL content)/i,
+    translation:
+      "Não foi possível carregar ou processar o arquivo de mídia enviado.",
+  },
+  {
+    pattern: /user is deactivated/i,
+    translation:
+      "O canal ou usuário de destino foi desativado pelo Telegram.",
+  },
+  {
+    pattern: /unauthorized/i,
+    translation:
+      "Token do bot inválido, revogado ou expirado. Confira o token no @BotFather.",
+  },
+  {
+    pattern: /too many requests/i,
+    translation:
+      "Limite de requisições do Telegram excedido. Aguarde alguns instantes antes de tentar novamente.",
+  },
+];
+
+export function translateTelegramError(desc: string): string | null {
+  const clean = redactBotTokens(desc.trim());
+  for (const { pattern, translation } of TELEGRAM_ERROR_CATALOG) {
+    if (pattern.test(clean)) {
+      return translation;
+    }
+  }
+  return null;
+}
+
 const API_ERROR_PATTERNS: Array<{
   pattern: RegExp;
   format: (match: RegExpExecArray) => string;
@@ -136,7 +219,13 @@ const API_ERROR_PATTERNS: Array<{
   },
   {
     pattern: /^Telegram API error(?:\s*\(\d+\))?:\s*(.+)$/i,
-    format: (m) => `O Telegram recusou a operação (${m[1]}).`,
+    format: (m) => {
+      const tg = translateTelegramError(m[1]);
+      if (tg) {
+        return tg;
+      }
+      return `O Telegram recusou a operação (${m[1]}).`;
+    },
   },
 ];
 
@@ -152,6 +241,12 @@ export function formatDeliveryFailureReason(
   category?: string | null,
   detail?: string | null
 ): string {
+  if (detail && detail.trim()) {
+    const tg = translateTelegramError(detail.trim());
+    if (tg) {
+      return tg;
+    }
+  }
   if (category && DELIVERY_FAILURE_MESSAGES[category]) {
     return DELIVERY_FAILURE_MESSAGES[category];
   }
@@ -172,6 +267,10 @@ export function translateApiDetail(rawDetail: string): string {
     if (match) {
       return format(match);
     }
+  }
+  const tgDirect = translateTelegramError(safeDetail);
+  if (tgDirect) {
+    return tgDirect;
   }
   return `Não foi possível concluir a operação (${safeDetail})`;
 }

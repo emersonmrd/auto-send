@@ -46,6 +46,34 @@ def redact_bot_token(text: str, bot_token: Optional[str] = None) -> str:
     return sanitized
 
 
+TELEGRAM_ERROR_TRANSLATIONS_PT: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"chat not found", re.I), "Canal ou grupo não encontrado. Verifique se o ID ou @username está correto e se o bot é membro."),
+    (re.compile(r"group chat was upgraded to a supergroup", re.I), "O grupo foi promovido para supergrupo e o identificador mudou. Atualize o canal com o novo ID (-100...)."),
+    (re.compile(r"not enough rights|have no rights|chat_write_forbidden|need administrator rights", re.I), "O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar."),
+    (re.compile(r"bot was blocked by the user", re.I), "O bot foi bloqueado pelo usuário."),
+    (re.compile(r"bot was kicked|bot is not a member", re.I), "O bot não é membro ou foi removido deste canal. Adicione-o novamente como administrador."),
+    (re.compile(r"message is too long", re.I), "A mensagem excede o limite de caracteres permitido pelo Telegram (máximo 4.096 caracteres)."),
+    (re.compile(r"message caption is too long", re.I), "A legenda da mídia excede o limite de 1.024 caracteres do Telegram."),
+    (re.compile(r"message text is empty", re.I), "O texto da mensagem não pode estar vazio."),
+    (re.compile(r"BUTTON_URL_INVALID", re.I), "A URL informada para o botão é inválida."),
+    (re.compile(r"can'?t parse entities", re.I), "A formatação HTML ou Markdown contém erros ou tags não suportadas pelo Telegram."),
+    (re.compile(r"wrong file identifier|failed to get HTTP URL content", re.I), "Não foi possível carregar ou processar o arquivo de mídia enviado."),
+    (re.compile(r"user is deactivated", re.I), "O canal ou usuário de destino foi desativado pelo Telegram."),
+    (re.compile(r"unauthorized", re.I), "Token do bot inválido, revogado ou expirado. Confira o token no @BotFather."),
+    (re.compile(r"too many requests", re.I), "Limite de requisições do Telegram excedido. Aguarde alguns instantes antes de tentar novamente."),
+]
+
+
+def translate_telegram_error_pt(description: Optional[str]) -> Optional[str]:
+    """Traduz descrições e erros comuns da API do Telegram para mensagens claras em português (Issue #57)."""
+    if not description or not description.strip():
+        return None
+    for pattern, translation in TELEGRAM_ERROR_TRANSLATIONS_PT:
+        if pattern.search(description):
+            return translation
+    return None
+
+
 def classify_telegram_error(
     status_code: Optional[int],
     description: Optional[str],
@@ -70,6 +98,7 @@ def classify_telegram_error(
             "bot is not a member",
             "user is deactivated",
             "channel_private",
+            "group chat was upgraded",
         )
     ):
         return DeliveryFailureCategory.BOT_NOT_IN_CHAT, clean_desc
