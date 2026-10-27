@@ -12,6 +12,7 @@ import {
   ChannelDeliveryResult,
   EditLockResponse,
   TelegramApiConfigResponse,
+  MessageTemplate,
 } from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
@@ -76,6 +77,8 @@ import {
   RefreshCw,
   Info,
   Server,
+  Bookmark,
+  BookmarkPlus,
 } from "lucide-react";
 
 export default function Home() {
@@ -154,6 +157,14 @@ export default function Home() {
   const [broadcastHistory, setBroadcastHistory] = useState<BroadcastHistoryItem[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
   const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
+
+  // Modelos e Presets de Mensagens (#63)
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [showTemplatesDrawer, setShowTemplatesDrawer] = useState(false);
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
 
   // Status de envio e Upload Progress
   const [isSending, setIsSending] = useState(false);
@@ -449,6 +460,113 @@ export default function Home() {
     }
   }, [selectedProfile?.id]);
 
+  // Carregar Modelos de Mensagens do Perfil Selecionado (#63)
+  const fetchTemplates = useCallback(async (profileId?: string) => {
+    const targetProfileId = profileId || selectedProfile?.id;
+    if (!targetProfileId) return;
+    setIsLoadingTemplates(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/profiles/${targetProfileId}/templates`);
+      if (res.ok) {
+        const data = await res.json();
+        setTemplates(Array.isArray(data) ? data : []);
+      } else {
+        setTemplates([]);
+      }
+    } catch {
+      setTemplates([]);
+    } finally {
+      setIsLoadingTemplates(false);
+    }
+  }, [selectedProfile?.id]);
+
+  const handleApplyTemplate = (template: MessageTemplate) => {
+    setText(template.text);
+    if (template.button_text && template.button_url) {
+      setButtonText(template.button_text);
+      setButtonUrl(template.button_url);
+    } else {
+      setButtonText("");
+      setButtonUrl("");
+    }
+    setShowTemplatesDrawer(false);
+    showToast(`Modelo "${template.name}" carregado no compositor!`, "success");
+  };
+
+  const handleSaveCurrentAsTemplate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfile) return;
+    if (!newTemplateName.trim()) {
+      showToast("Informe o nome do modelo", "error");
+      return;
+    }
+    if (!text.trim()) {
+      showToast("Digite uma mensagem no compositor antes de salvar como modelo", "error");
+      return;
+    }
+
+    setIsSavingTemplate(true);
+    try {
+      const payload = {
+        name: newTemplateName.trim(),
+        text,
+        button_text: buttonText ? buttonText.trim() : null,
+        button_url: buttonUrl ? buttonUrl.trim() : null,
+      };
+
+      const res = await fetch(`${API_BASE_URL}/api/v1/profiles/${selectedProfile.id}/templates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const created: MessageTemplate = await res.json();
+        setTemplates((prev) => [created, ...prev.filter((t) => t.id !== created.id)]);
+        setShowSaveTemplateModal(false);
+        setNewTemplateName("");
+        showToast(`Modelo "${created.name}" salvo com sucesso!`, "success");
+      } else {
+        const err = await res.json().catch(() => null);
+        showToast(extractApiError(err, "Erro ao salvar modelo"), "error");
+      }
+    } catch {
+      showToast("Erro ao conectar ao servidor para salvar modelo", "error");
+    } finally {
+      setIsSavingTemplate(false);
+    }
+  };
+
+  const handleDeleteTemplate = (template: MessageTemplate) => {
+    if (!selectedProfile) return;
+    setPendingConfirm({
+      title: "Excluir Modelo",
+      message: `Tem certeza que deseja remover o modelo "${template.name}"? Esta ação não pode ser desfeita.`,
+      confirmLabel: "Excluir",
+      cancelLabel: "Voltar",
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          const res = await fetch(
+            `${API_BASE_URL}/api/v1/profiles/${selectedProfile.id}/templates/${template.id}`,
+            { method: "DELETE" }
+          );
+          if (res.ok) {
+            setTemplates((prev) => prev.filter((t) => t.id !== template.id));
+            showToast("Modelo excluído com sucesso!", "success");
+          } else {
+            const err = await res.json().catch(() => null);
+            showToast(extractApiError(err, "Erro ao excluir modelo"), "error");
+          }
+        } catch {
+          showToast("Erro ao conectar ao servidor para excluir modelo", "error");
+        } finally {
+          setPendingConfirm(null);
+        }
+      },
+    });
+  };
+
   // Carregar Canais e Fila do Perfil Selecionado
   useEffect(() => {
     let ignore = false;
@@ -457,6 +575,7 @@ export default function Home() {
         if (!ignore) {
           setChannels([]);
           setScheduledQueue([]);
+          setTemplates([]);
         }
         return;
       }
@@ -477,13 +596,14 @@ export default function Home() {
 
       if (!ignore) {
         await fetchScheduledQueue(selectedProfile.id);
+        await fetchTemplates(selectedProfile.id);
       }
     }
     loadChannelsAndQueue();
     return () => {
       ignore = true;
     };
-  }, [selectedProfile, fetchScheduledQueue]);
+  }, [selectedProfile, fetchScheduledQueue, fetchTemplates]);
 
   // Cleanup de Blob URL de prévia de mídia para evitar memory leaks
   useEffect(() => {
@@ -1937,6 +2057,25 @@ export default function Home() {
                     </span>
                   )}
                 </button>
+
+                {/* Botão de Modelos de Mensagens (#63) */}
+                <div className="h-4 w-px bg-gray-700 mx-1" />
+                <button
+                  onClick={() => {
+                    fetchTemplates();
+                    setShowTemplatesDrawer(true);
+                  }}
+                  className="relative text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#5288c1] hover:text-white px-3 py-1.5 rounded-full transition flex items-center gap-1.5 font-medium border border-[#3b6694]/40"
+                  title="Abrir Modelos de Mensagens"
+                >
+                  <Bookmark className="w-3.5 h-3.5" />
+                  <span>Modelos</span>
+                  {templates.length > 0 && (
+                    <span className="ml-1 bg-[#5288c1] text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full">
+                      {templates.length}
+                    </span>
+                  )}
+                </button>
               </div>
             </div>
 
@@ -2190,6 +2329,37 @@ export default function Home() {
                   aria-label="Adicionar Botão Abaixo da Mensagem"
                 >
                   <SquarePlus className="w-5 h-5" />
+                </button>
+
+                {/* RECURSO: Modelos de Mensagens Salvos (#63) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchTemplates();
+                    setShowTemplatesDrawer(true);
+                  }}
+                  className="p-2.5 rounded-full hover:bg-[#242f3d] text-gray-400 hover:text-[#5288c1] transition"
+                  title="Abrir Modelos de Mensagens"
+                  aria-label="Abrir Modelos de Mensagens"
+                >
+                  <Bookmark className="w-5 h-5" />
+                </button>
+
+                {/* RECURSO: Salvar Mensagem Atual como Modelo (#63) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!text.trim()) {
+                      showToast("Digite uma mensagem no compositor antes de salvar como modelo", "error");
+                      return;
+                    }
+                    setShowSaveTemplateModal(true);
+                  }}
+                  className="p-2.5 rounded-full hover:bg-[#242f3d] text-gray-400 hover:text-[#5288c1] transition"
+                  title="Salvar como Modelo"
+                  aria-label="Salvar como Modelo"
+                >
+                  <BookmarkPlus className="w-5 h-5" />
                 </button>
 
                 {/* Área de Texto Expansível */}
@@ -3260,6 +3430,201 @@ export default function Home() {
               )}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* DRAWER / PAINEL: MODELOS DE MENSAGENS (#63) */}
+      {showTemplatesDrawer && (
+        <div
+          role="dialog"
+          aria-label="Modelos de Mensagens"
+          className="fixed inset-0 bg-black/60 flex justify-end z-50 animate-in fade-in duration-200"
+        >
+          <div data-testid="templates-drawer" className="bg-[#17212b] border-l border-[#242f3d] w-full max-w-lg h-full flex flex-col shadow-2xl">
+            {/* Header do Drawer */}
+            <div className="p-4 border-b border-[#242f3d] flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <Bookmark className="w-5 h-5 text-[#5288c1]" />
+                <div>
+                  <h3 className="font-semibold text-base text-gray-100">Modelos de Mensagens</h3>
+                  <p className="text-xs text-gray-400">
+                    {selectedProfile ? `Perfil: ${selectedProfile.name}` : "Selecione um perfil"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-1">
+                <button
+                  onClick={() => fetchTemplates()}
+                  disabled={isLoadingTemplates}
+                  className="p-1.5 rounded-full hover:bg-[#242f3d] text-gray-400 hover:text-white transition disabled:opacity-50"
+                  title="Atualizar Modelos"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isLoadingTemplates ? "animate-spin text-[#5288c1]" : ""}`} />
+                </button>
+                <button
+                  onClick={() => setShowTemplatesDrawer(false)}
+                  className="p-1.5 rounded-full hover:bg-[#242f3d] text-gray-400 hover:text-white transition"
+                  title="Fechar"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Ação rápida no topo do drawer para salvar mensagem atual */}
+            <div className="p-3 bg-[#1e2a38] border-b border-[#242f3d] flex items-center justify-between">
+              <span className="text-xs text-gray-300">
+                Reutilize comunicados e formatações com 1 clique.
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!text.trim()) {
+                    showToast("Digite uma mensagem no compositor antes de salvar como modelo", "error");
+                    return;
+                  }
+                  setShowSaveTemplateModal(true);
+                }}
+                className="text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white px-2.5 py-1 rounded-lg transition flex items-center gap-1 font-medium shadow"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" /> Salvar Mensagem Atual
+              </button>
+            </div>
+
+            {/* Lista de Modelos */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {templates.length === 0 ? (
+                <div className="p-8 text-center text-gray-400 text-sm">
+                  <Bookmark className="w-10 h-10 mx-auto mb-3 text-gray-600" />
+                  <p className="font-medium text-gray-300">Nenhum modelo salvo para este perfil.</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Escreva uma mensagem no compositor e salve como modelo para reutilizá-la quando quiser.
+                  </p>
+                </div>
+              ) : (
+                templates.map((tmpl) => (
+                  <div
+                    key={tmpl.id}
+                    data-testid="template-item"
+                    className="bg-[#1e2a38] border border-[#3b6694]/30 rounded-xl p-3.5 space-y-2.5 shadow hover:border-[#5288c1]/60 transition"
+                  >
+                    <div className="flex items-center justify-between">
+                      <h4 className="font-semibold text-sm text-gray-100 flex items-center gap-1.5">
+                        <Bookmark className="w-4 h-4 text-[#5288c1] shrink-0" />
+                        <span className="truncate">{tmpl.name}</span>
+                      </h4>
+                      <div className="flex items-center space-x-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteTemplate(tmpl)}
+                          className="p-1 text-gray-400 hover:text-red-400 transition rounded"
+                          title="Excluir modelo"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {tmpl.button_text && (
+                      <div className="text-[11px] text-[#71aaeb] flex items-center gap-1 bg-[#17212b] px-2 py-0.5 rounded border border-[#3b6694]/30 w-fit">
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Botão: <strong>{tmpl.button_text}</strong></span>
+                      </div>
+                    )}
+
+                    <div className="text-xs text-gray-300 line-clamp-3 bg-[#17212b]/60 p-2.5 rounded-lg border border-gray-800 whitespace-pre-wrap font-sans">
+                      {renderFormattedMessage(tmpl.text)}
+                    </div>
+
+                    <div className="pt-1 flex items-center justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleApplyTemplate(tmpl)}
+                        className="text-xs px-3 py-1.5 bg-[#5288c1] hover:bg-[#4374a5] text-white font-medium rounded-lg transition flex items-center gap-1.5 shadow"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Usar Modelo</span>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: SALVAR MENSAGEM COMO MODELO (#63) */}
+      {showSaveTemplateModal && (
+        <div
+          role="dialog"
+          aria-label="Salvar como Modelo"
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+        >
+          <form
+            onSubmit={handleSaveCurrentAsTemplate}
+            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-md w-full p-5 shadow-2xl"
+          >
+            <h3 className="text-base font-semibold text-gray-100 mb-1 flex items-center gap-2">
+              <BookmarkPlus className="w-4 h-4 text-[#5288c1]" /> Salvar como Modelo
+            </h3>
+            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+              Salve o texto e botões configurados atualmente no compositor para disparos recorrentes.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="field-template-name" className="text-xs text-gray-400 block mb-1">
+                  Nome do Modelo
+                </label>
+                <input
+                  id="field-template-name"
+                  type="text"
+                  placeholder="Ex: Comunicado de Manutenção"
+                  value={newTemplateName}
+                  onChange={(e) => setNewTemplateName(e.target.value)}
+                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              {/* Prévia do que está sendo salvo */}
+              <div className="bg-[#1e2a38] p-3 rounded-lg border border-gray-800 space-y-1.5">
+                <span className="text-[11px] uppercase tracking-wider text-gray-400 font-semibold block">
+                  Conteúdo do Modelo
+                </span>
+                <div className="text-xs text-gray-200 line-clamp-2">
+                  {text ? renderFormattedMessage(text) : <span className="italic text-gray-500">Sem texto</span>}
+                </div>
+                {buttonText && (
+                  <div className="text-[11px] text-[#71aaeb] pt-1">
+                    Botão: <strong>{buttonText}</strong> ({buttonUrl})
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2 pt-2 border-t border-gray-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSaveTemplateModal(false);
+                  setNewTemplateName("");
+                }}
+                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition rounded-lg"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingTemplate}
+                className="px-4 py-1.5 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition shadow disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {isSavingTemplate && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                Salvar Modelo
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

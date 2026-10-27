@@ -190,3 +190,21 @@ export interface DiscoveredChatListItem extends DiscoveredChat {
 export interface DiscoverChatsResponse {
   chats: DiscoveredChatListItem[];
 }
+
+export interface MessageTemplate {
+  id: string;
+  profile_id: string;
+  name: string;
+  text: string;
+  button_text?: string | null;
+  button_url?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateMessageTemplateRequest {
+  name: string;
+  text: string;
+  button_text?: string | null;
+  button_url?: string | null;
+}

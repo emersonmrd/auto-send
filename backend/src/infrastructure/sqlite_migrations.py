@@ -104,6 +104,27 @@ def _migration_005_broadcast_edit_locked_until(cursor: sqlite3.Cursor) -> None:
     _add_column_if_missing(cursor, "broadcasts", "edit_locked_until", "DATETIME")
 
 
+def _migration_006_message_templates(cursor: sqlite3.Cursor) -> None:
+    if not _table_exists(cursor, "message_templates"):
+        cursor.execute(
+            """
+            CREATE TABLE message_templates (
+                id VARCHAR PRIMARY KEY,
+                profile_id VARCHAR NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                name VARCHAR NOT NULL,
+                text TEXT NOT NULL,
+                button_text VARCHAR,
+                button_url VARCHAR,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_templates_profile_id ON message_templates(profile_id)"
+        )
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -129,6 +150,11 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         version=5,
         description="Trava de edição em broadcasts (#15)",
         apply=_migration_005_broadcast_edit_locked_until,
+    ),
+    MigrationStep(
+        version=6,
+        description="Tabela de modelos de mensagens reutilizáveis por perfil (#63)",
+        apply=_migration_006_message_templates,
     ),
 )
 

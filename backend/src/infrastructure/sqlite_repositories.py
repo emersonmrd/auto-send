@@ -13,11 +13,13 @@ from src.domain.broadcast.broadcast_message import (
     MediaAttachment,
     MediaType,
 )
+from src.domain.broadcast.message_template import MessageTemplate
 from src.domain.channels.channel import Channel
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.profiles.profile import Profile
 from src.domain.ports.broadcast_repository import IBroadcastRepository
 from src.domain.ports.channel_repository import IChannelRepository
+from src.domain.ports.message_template_repository import IMessageTemplateRepository
 from src.domain.ports.profile_repository import IProfileRepository
 
 Base = declarative_base()
@@ -65,6 +67,18 @@ class BroadcastModel(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     delivery_results = Column(Text, nullable=True)  # JSON encoded (#31)
     edit_locked_until = Column(DateTime(timezone=True), nullable=True)  # (#15)
+
+class MessageTemplateModel(Base):
+    __tablename__ = "message_templates"
+
+    id = Column(String, primary_key=True)
+    profile_id = Column(String, ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)
+    text = Column(Text, nullable=False)
+    button_text = Column(String, nullable=True)
+    button_url = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
 # Repositórios SQLAlchemy com aiosqlite
 class SqlAlchemyProfileRepository(IProfileRepository):
@@ -376,3 +390,79 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             delivery_results=delivery_results,
             edit_locked_until=locked_dt,
         )
+
+
+class SqlAlchemyMessageTemplateRepository(IMessageTemplateRepository):
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
+        self.session_factory = session_factory
+
+    @staticmethod
+    def _to_entity(obj: MessageTemplateModel) -> MessageTemplate:
+        created_dt = obj.created_at or datetime.now(timezone.utc)
+        if created_dt.tzinfo is None:
+            created_dt = created_dt.replace(tzinfo=timezone.utc)
+        updated_dt = obj.updated_at or datetime.now(timezone.utc)
+        if updated_dt.tzinfo is None:
+            updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+
+        return MessageTemplate(
+            id=obj.id,
+            profile_id=obj.profile_id,
+            name=obj.name,
+            text=obj.text,
+            button_text=obj.button_text,
+            button_url=obj.button_url,
+            created_at=created_dt,
+            updated_at=updated_dt,
+        )
+
+    async def save(self, template: MessageTemplate) -> None:
+        async with self.session_factory() as session:
+            async with session.begin():
+                existing = await session.get(MessageTemplateModel, template.id)
+                if existing:
+                    existing.name = template.name
+                    existing.text = template.text
+                    existing.button_text = template.button_text
+                    existing.button_url = template.button_url
+                    existing.updated_at = template.updated_at
+                else:
+                    db_obj = MessageTemplateModel(
+                        id=template.id,
+                        profile_id=template.profile_id,
+                        name=template.name,
+                        text=template.text,
+                        button_text=template.button_text,
+                        button_url=template.button_url,
+                        created_at=template.created_at,
+                        updated_at=template.updated_at,
+                    )
+                    session.add(db_obj)
+
+    async def get_by_id(self, template_id: str) -> Optional[MessageTemplate]:
+        async with self.session_factory() as session:
+            obj = await session.get(MessageTemplateModel, template_id)
+            if not obj:
+                return None
+            return self._to_entity(obj)
+
+    async def list_by_profile(self, profile_id: str) -> List[MessageTemplate]:
+        from sqlalchemy import select
+
+        async with self.session_factory() as session:
+            res = await session.execute(
+                select(MessageTemplateModel)
+                .where(MessageTemplateModel.profile_id == profile_id)
+                .order_by(MessageTemplateModel.created_at.desc())
+            )
+            return [self._to_entity(item) for item in res.scalars().all()]
+
+    async def delete(self, template_id: str) -> bool:
+        async with self.session_factory() as session:
+            async with session.begin():
+                obj = await session.get(MessageTemplateModel, template_id)
+                if not obj:
+                    return False
+                await session.delete(obj)
+                return True
+

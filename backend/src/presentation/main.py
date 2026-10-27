@@ -94,7 +94,14 @@ from src.infrastructure.sqlite_repositories import (
     SqlAlchemyProfileRepository,
     SqlAlchemyChannelRepository,
     SqlAlchemyBroadcastRepository,
+    SqlAlchemyMessageTemplateRepository,
 )
+from src.application.create_message_template_use_case import (
+    CreateMessageTemplateDTO,
+    CreateMessageTemplateUseCase,
+)
+from src.application.list_message_templates_use_case import ListMessageTemplatesUseCase
+from src.application.delete_message_template_use_case import DeleteMessageTemplateUseCase
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
@@ -159,6 +166,7 @@ session_factory = async_sessionmaker(engine, expire_on_commit=False)
 profile_repo = SqlAlchemyProfileRepository(session_factory)
 channel_repo = SqlAlchemyChannelRepository(session_factory)
 broadcast_repo = SqlAlchemyBroadcastRepository(session_factory)
+message_template_repo = SqlAlchemyMessageTemplateRepository(session_factory)
 telegram_gateway = TelegramGatewayHttp()
 
 scheduler_service = AutomationSchedulerService(
@@ -300,6 +308,29 @@ class ProfileListItemResponse(ProfileResponse):
 class DeleteResourceResponse(BaseModel):
     message: str
     id: str
+
+class MessageTemplateCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    text: str = Field(..., min_length=1, max_length=4096)
+    button_text: Optional[str] = Field(None, max_length=100)
+    button_url: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("name", "text", "button_text", "button_url")
+    @classmethod
+    def reject_null_bytes(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and "\x00" in v:
+            raise ValueError("Null bytes are not allowed")
+        return v
+
+class MessageTemplateResponse(BaseModel):
+    id: str
+    profile_id: str
+    name: str
+    text: str
+    button_text: Optional[str] = None
+    button_url: Optional[str] = None
+    created_at: str
+    updated_at: str
 
 class ChannelCreateRequest(BaseModel):
     title: str
@@ -835,6 +866,83 @@ async def delete_channel(channel_id: str):
 
     await channel_repo.delete(channel_id)
     return {"message": "Channel deleted successfully", "id": channel_id}
+
+
+@app.post(
+    "/api/v1/profiles/{profile_id}/templates",
+    response_model=MessageTemplateResponse,
+    status_code=status.HTTP_201_CREATED,
+    responses={**_ERR_400, **_ERR_404, **_ERR_422},
+)
+async def create_message_template(profile_id: str, req: MessageTemplateCreateRequest):
+    try:
+        dto = CreateMessageTemplateDTO(
+            profile_id=profile_id,
+            name=req.name,
+            text=req.text,
+            button_text=req.button_text,
+            button_url=req.button_url,
+        )
+        use_case = CreateMessageTemplateUseCase(message_template_repo, profile_repo)
+        template = await use_case.execute(dto)
+        return {
+            "id": template.id,
+            "profile_id": template.profile_id,
+            "name": template.name,
+            "text": template.text,
+            "button_text": template.button_text,
+            "button_url": template.button_url,
+            "created_at": template.created_at.isoformat(),
+            "updated_at": template.updated_at.isoformat(),
+        }
+    except ProfileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+
+
+@app.get(
+    "/api/v1/profiles/{profile_id}/templates",
+    response_model=List[MessageTemplateResponse],
+    responses=_ERR_404,
+)
+async def list_message_templates(profile_id: str):
+    try:
+        use_case = ListMessageTemplatesUseCase(message_template_repo, profile_repo)
+        templates = await use_case.execute(profile_id)
+        return [
+            {
+                "id": t.id,
+                "profile_id": t.profile_id,
+                "name": t.name,
+                "text": t.text,
+                "button_text": t.button_text,
+                "button_url": t.button_url,
+                "created_at": t.created_at.isoformat(),
+                "updated_at": t.updated_at.isoformat(),
+            }
+            for t in templates
+        ]
+    except ProfileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+
+
+@app.delete(
+    "/api/v1/profiles/{profile_id}/templates/{template_id}",
+    response_model=DeleteResourceResponse,
+    responses=_ERR_404,
+)
+async def delete_message_template(profile_id: str, template_id: str):
+    profile = await profile_repo.get_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Profile not found")
+
+    use_case = DeleteMessageTemplateUseCase(message_template_repo)
+    deleted = await use_case.execute(template_id)
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Template not found")
+
+    return {"message": "Template deleted successfully", "id": template_id}
 
 class DiscoveredChatResponse(BaseModel):
     chat_id: str
