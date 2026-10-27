@@ -5,6 +5,10 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Fixed
+- Prevenção de cadastro de canais duplicados por perfil no backend (`409 Conflict`) e debounce com feedback de loading em botões de ação do frontend (#54).
+
+
 ## [0.5.0] - 2026-10-26
 
 ### Added

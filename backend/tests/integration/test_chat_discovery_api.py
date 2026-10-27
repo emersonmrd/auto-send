@@ -235,3 +235,35 @@ async def test_update_channel_checks_telegram_only_when_chat_id_changes(client):
     assert resp_unavailable.status_code == 503
     assert resp_unavailable.json() == {"detail": "Could not reach Telegram, try again"}
     assert (await channel_repo.get_by_id("c-edit")).chat_id == "-1001111111111"
+
+
+async def test_create_channel_returns_409_when_chat_id_already_registered_for_profile(client):
+    use_gateway(StubGateway())
+    resp1 = await client.post(
+        "/api/v1/profiles/p-1/channels",
+        json={"title": "Canal Original", "chat_id": "-1001234567890"},
+    )
+    assert resp1.status_code == 201
+
+    # Segunda tentativa com o mesmo chat_id para o mesmo perfil deve retornar 409 Conflict
+    resp2 = await client.post(
+        "/api/v1/profiles/p-1/channels",
+        json={"title": "Canal Duplicado", "chat_id": "-1001234567890"},
+    )
+    assert resp2.status_code == 409
+    assert resp2.json() == {"detail": "Channel already registered for this profile"}
+
+
+async def test_update_channel_returns_409_when_target_chat_id_already_used_in_same_profile(client):
+    use_gateway(StubGateway())
+    await channel_repo.save(Channel(id="c-dup-1", profile_id="p-1", title="Canal 1", chat_id="-1001111111111"))
+    await channel_repo.save(Channel(id="c-dup-2", profile_id="p-1", title="Canal 2", chat_id="-1002222222222"))
+
+    # Tenta mudar c-dup-2 para o chat_id de c-dup-1
+    resp = await client.put(
+        "/api/v1/channels/c-dup-2",
+        json={"name": "Canal 2 Alterado", "telegram_channel_id": "-1001111111111"},
+    )
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": "Channel already registered for this profile"}
+    assert (await channel_repo.get_by_id("c-dup-2")).chat_id == "-1002222222222"

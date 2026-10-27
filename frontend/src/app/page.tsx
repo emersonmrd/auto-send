@@ -166,6 +166,7 @@ export default function Home() {
   const [showAddProfileModal, setShowAddProfileModal] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
   const [newBotToken, setNewBotToken] = useState("");
+  const [isCreatingProfile, setIsCreatingProfile] = useState(false);
 
   // Modal de Editar Perfil
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
@@ -217,6 +218,8 @@ export default function Home() {
   const [showAddChannelModal, setShowAddChannelModal] = useState(false);
   const [newChannelTitle, setNewChannelTitle] = useState("");
   const [newChannelChatId, setNewChannelChatId] = useState("");
+  const [isCreatingChannel, setIsCreatingChannel] = useState(false);
+  const pendingChannelChatIdsRef = useRef<Set<string>>(new Set());
 
   // Modal de Editar Canal
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
@@ -1299,6 +1302,8 @@ export default function Home() {
   // Criar Perfil
   const handleCreateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreatingProfile) return;
+    setIsCreatingProfile(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/v1/profiles`, {
         method: "POST",
@@ -1316,6 +1321,8 @@ export default function Home() {
       }
     } catch {
       showToast("Falha de conexão com a API", "error");
+    } finally {
+      setIsCreatingProfile(false);
     }
   };
 
@@ -1459,13 +1466,21 @@ export default function Home() {
   // Vincula um canal à perfil selecionado e recarrega a lista; usado pelo formulário e pela busca de canais do bot.
   const addChannel = async (title: string, chatId: string): Promise<boolean> => {
     if (!selectedProfile) return false;
+    const cleanId = chatId.trim();
+    if (!cleanId) return false;
+    if (pendingChannelChatIdsRef.current.has(cleanId)) return false;
+    pendingChannelChatIdsRef.current.add(cleanId);
     try {
       const res = await fetch(`${API_BASE_URL}/api/v1/profiles/${selectedProfile.id}/channels`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, chat_id: chatId }),
+        body: JSON.stringify({ title: title.trim(), chat_id: cleanId }),
       });
       if (!res.ok) {
+        if (res.status === 409) {
+          showToast("Este canal já está cadastrado para este perfil.", "error");
+          return false;
+        }
         const err = await res.json();
         showToast(extractApiError(err, "Erro ao adicionar canal"), "error");
         return false;
@@ -1478,15 +1493,23 @@ export default function Home() {
     } catch {
       showToast("Falha de conexão com a API", "error");
       return false;
+    } finally {
+      pendingChannelChatIdsRef.current.delete(cleanId);
     }
   };
 
   const handleCreateChannel = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (await addChannel(newChannelTitle, newChannelChatId)) {
-      setShowAddChannelModal(false);
-      setNewChannelTitle("");
-      setNewChannelChatId("");
+    if (isCreatingChannel) return;
+    setIsCreatingChannel(true);
+    try {
+      if (await addChannel(newChannelTitle, newChannelChatId)) {
+        setShowAddChannelModal(false);
+        setNewChannelTitle("");
+        setNewChannelChatId("");
+      }
+    } finally {
+      setIsCreatingChannel(false);
     }
   };
 
@@ -2774,9 +2797,11 @@ export default function Home() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium"
+                disabled={isCreatingProfile}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Cadastrar Perfil
+                {isCreatingProfile && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                {isCreatingProfile ? "Cadastrando..." : "Cadastrar Perfil"}
               </button>
             </div>
           </form>
@@ -2842,9 +2867,11 @@ export default function Home() {
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium"
+                disabled={isCreatingChannel}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Vincular Canal
+                {isCreatingChannel && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                {isCreatingChannel ? "Vinculando..." : "Vincular Canal"}
               </button>
             </div>
           </form>

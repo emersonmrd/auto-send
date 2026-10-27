@@ -418,6 +418,7 @@ def _to_affected_item(b: BroadcastMessage) -> dict:
 
 _ERR_400 = {400: {"model": ErrorResponse, "description": "External rule or Telegram validation failed"}}
 _ERR_404 = {404: {"model": ErrorResponse, "description": "Resource not found"}}
+_ERR_409 = {409: {"model": ErrorResponse, "description": "Resource conflict (e.g. channel already registered)"}}
 _ERR_413 = {413: {"model": ErrorResponse, "description": "Media file exceeds upload limit"}}
 _ERR_422 = {422: {"model": ErrorResponse, "description": "Invalid payload or forbidden state transition"}}
 _ERR_503 = {503: {"model": ErrorResponse, "description": "Could not reach Telegram, try again"}}
@@ -596,7 +597,7 @@ async def list_channels(profile_id: str):
     "/api/v1/profiles/{profile_id}/channels",
     status_code=status.HTTP_201_CREATED,
     response_model=ChannelCreateResponse,
-    responses={**_ERR_400, **_ERR_404, **_ERR_422, **_ERR_503},
+    responses={**_ERR_400, **_ERR_404, **_ERR_409, **_ERR_422, **_ERR_503},
 )
 async def create_channel(
     profile_id: str,
@@ -606,6 +607,13 @@ async def create_channel(
     profile = await profile_repo.get_by_id(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
+
+    existing_channels = await channel_repo.list_by_profile(profile_id)
+    if any(c.chat_id == req.chat_id for c in existing_channels):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Channel already registered for this profile",
+        )
 
     try:
         channel = Channel(
@@ -675,7 +683,7 @@ async def get_channel_affected_broadcasts(channel_id: str):
 @app.put(
     "/api/v1/channels/{channel_id}",
     response_model=ChannelUpdateResponse,
-    responses={**_ERR_400, **_ERR_404, **_ERR_422, **_ERR_503},
+    responses={**_ERR_400, **_ERR_404, **_ERR_409, **_ERR_422, **_ERR_503},
 )
 async def update_channel(
     channel_id: str,
@@ -696,6 +704,12 @@ async def update_channel(
 
     old_chat_id = channel.chat_id
     if req.telegram_channel_id != old_chat_id:
+        existing_channels = await channel_repo.list_by_profile(channel.profile_id)
+        if any(c.id != channel_id and c.chat_id == req.telegram_channel_id for c in existing_channels):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Channel already registered for this profile",
+            )
         all_broadcasts = await broadcast_repo.list_by_profile(channel.profile_id)
         if any(
             b.status == BroadcastStatus.DISPATCHING and old_chat_id in b.target_channel_ids

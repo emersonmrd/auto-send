@@ -29,6 +29,18 @@ function ChatRow({
   alreadyRegistered: boolean;
   onAdd: (chat: DiscoveredChat) => Promise<boolean>;
 }) {
+  const [isAdding, setIsAdding] = useState(false);
+
+  const handleAdd = async () => {
+    if (isAdding) return;
+    setIsAdding(true);
+    try {
+      await onAdd(chat);
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
   return (
     <li className="flex items-center justify-between gap-2 rounded-lg bg-[#242f3d] px-3 py-2">
       <div className="min-w-0">
@@ -42,10 +54,12 @@ function ChatRow({
       ) : chat.registrable ? (
         <button
           type="button"
-          onClick={() => onAdd(chat)}
-          className="shrink-0 rounded-lg bg-[#5288c1] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#4374a5]"
+          onClick={handleAdd}
+          disabled={isAdding}
+          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#5288c1] px-2.5 py-1 text-xs font-medium text-white hover:bg-[#4374a5] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Adicionar canal
+          {isAdding && <RefreshCw className="h-3 w-3 animate-spin" />}
+          {isAdding ? "Adicionando..." : "Adicionar canal"}
         </button>
       ) : (
         <span className="shrink-0 text-[11px] text-gray-400" title="Converta o grupo em supergrupo no Telegram">
