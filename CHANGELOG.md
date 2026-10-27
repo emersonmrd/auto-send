@@ -5,6 +5,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Changed
+- Remoção do botão externo redundante de inserção de link no compositor, centralizando a formatação de hiperlinks exclusivamente na barra do editor e diferenciando a seção de botão físico abaixo da mensagem (Inline Keyboard) (#59).
+
 ### Fixed
 - Prevenção de cadastro de canais duplicados por perfil no backend (`409 Conflict`) e debounce com feedback de loading em botões de ação do frontend (#54).
 
