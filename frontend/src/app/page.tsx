@@ -22,6 +22,7 @@ import {
   TelegramRichEditorHandle,
   renderTelegramHtmlPreview,
 } from "@/components/TelegramRichEditor";
+import { RobotMailIcon } from "@/components/RobotMailIcon";
 
 type PendingConfirm = Omit<ConfirmDialogProps, "onCancel">;
 
@@ -1712,7 +1713,7 @@ export default function Home() {
         {/* Header da Sidebar */}
         <div className="p-4 border-b border-[#242f3d] flex items-center justify-between">
           <div className="flex items-center space-x-2">
-            <Users className="w-6 h-6 text-[#5288c1]" />
+            <RobotMailIcon className="w-6 h-6 text-[#5288c1]" />
             <h1 className="font-semibold text-lg tracking-wide">Auto-Send Profiles</h1>
           </div>
           <button
