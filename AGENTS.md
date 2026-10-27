@@ -125,7 +125,7 @@ Invariantes do projeto. Todo agente e toda sessão devem respeitá-los; um PR qu
 
 ## 1. Pirâmide de Testes e Código Fora do DDD
 O isolamento e pureza do domínio (DDD) com 100% de cobertura e testes de mutação é mandatário, mas **NUNCA** suficiente para garantir que o software não quebre na borda:
-- **Domínio Puro (`tests/unit/test_*_domain.py`):** Lógica pura, 100% testada e auditada por mutação (`mutmut`).
+- **Domínio Puro (`tests/unit/test_*_domain.py`):** Lógica pura, 100% testada e auditada por mutação (`mutmut`). Todo novo arquivo de teste de domínio deve ser obrigatoriamente incluído no parâmetro `runner` em `backend/pyproject.toml` (auditado por `test_mutation_audit.py`). Em entidades/Value Objects com campos opcionais normalizados no `__post_init__` (ex: `button_text: Optional[str] = None`), os testes de domínio devem testar explicitamente o valor default via `dataclasses.fields(...)` e ancorar asserções de erro com regex exato (`match=r"^...$"`) para garantir 0 mutantes sobreviventes no mutmut (kaizen de 2026-10-27: PR #75).
 - **Adaptadores Secundários/Infraestrutura (`tests/unit/test_*_gateway*.py`):** Todo adapter que interage com I/O externo (ex: Telegram Bot API, S3, SMTP) **DEVE** ter testes dedicados de adaptador testando:
   - Verbos HTTP corretos, endpoints reais e payloads multipart/json específicos (ex: `/sendPhoto` com campo `"photo"` vs `/sendVideo` com campo `"video"`).
   - Respostas de erro da API de terceiros (400, 401, 429, 500).
@@ -143,7 +143,7 @@ Chamadas para APIs de terceiros que impõem limites de taxa (como o Telegram API
 - **Circuit Breaker:** Se falhas consecutivas ou erros `5xx/429` excederem o limiar de tolerância, o circuito é aberto para evitar saturação, bloqueio de conta e exaustão de conexões.
 
 ## 4. Contract Testing & Schemathesis
-A conformidade da API com o OpenAPI gerado pelo FastAPI é verificada por `backend/tests/contract/test_openapi_contract.py` (Schemathesis). Toda nova rota ou alteração de contrato deve garantir que payloads inválidos nunca resultem em `500 Internal Server Error`, e sim em códigos de cliente estruturados (400 / 422). Rotas que persistem valores em arquivos de ambiente ou variáveis de sistema (`os.environ`) devem sanitizar e validar caracteres de controle e bytes nulos (`\x00`, `\r`, `\n`) via `@field_validator` no Pydantic, pois a atribuição direta levanta `ValueError` nativo do Python (kaizen de 2026-10-26: o fuzzer do Schemathesis provocou 500 no PR #67).
+A conformidade da API com o OpenAPI gerado pelo FastAPI é verificada por `backend/tests/contract/test_openapi_contract.py` (Schemathesis). Toda nova rota ou alteração de contrato deve garantir que payloads inválidos nunca resultem em `500 Internal Server Error`, e sim em códigos de cliente estruturados (400 / 422). Rotas que persistem valores em arquivos de ambiente ou variáveis de sistema (`os.environ`) devem sanitizar e validar caracteres de controle e bytes nulos (`\x00`, `\r`, `\n`) via `@field_validator` no Pydantic, pois a atribuição direta levanta `ValueError` nativo do Python (kaizen de 2026-10-26: o fuzzer do Schemathesis provocou 500 no PR #67). Além disso, toda nova exceção `HTTPException(detail="...")` lançada pelo backend exige compulsoriamente uma entrada de tradução no catálogo `API_ERROR_CATALOG` em `frontend/src/lib/apiError.ts`. A conformidade é verificada por varredura AST em `tests/unit/test_chat_discovery_gateway_http.py` (`test_every_backend_http_exception_detail_has_a_portuguese_translation_in_frontend_catalog`) para garantir que nenhuma mensagem técnica em inglês chegue crua ao usuário da UI desktop (kaizen de 2026-10-27: PR #75).
 
 ## 5. Gerenciamento de Dependências com `uv`
 O backend utiliza estritamente o `uv` como gerenciador de pacotes e ambientes virtuais:
@@ -186,7 +186,7 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
    - Todas as chamadas de API devem consumir uma constante centralizada parametrizada via variável de ambiente (ex: `process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"`).
 5. **Proibição de Diálogos Bloqueantes na UI (`alert`, `confirm`, `prompt`):**
    - O uso de `window.alert()`, `confirm()` ou `prompt()` síncronos é terminantemente proibido.
-   - Feedbacks ao usuário devem ser exibidos via componentes visuais não bloqueantes (toasts, banners ou modais acessíveis).
+   - Feedbacks ao usuário devem ser exibidos via componentes visuais não bloqueantes (toasts, banners ou modais acessíveis). Ao invocar modais de confirmação (`ConfirmDialog`), respeite estritamente o contrato tipado de props (`confirmLabel`, `cancelLabel` e `destructive: boolean`); nomes informais como `confirmText` renderizam botões sem texto acessível e quebram testes E2E (kaizen de 2026-10-27: PR #75).
 6. **Concorrência e Integridade do Banco de Dados (SQLite WAL Mode e Migrações):**
    - Ambientes assíncronos com SQLite devem configurar obrigatoriamente `PRAGMA journal_mode=WAL;` e `PRAGMA busy_timeout=5000;` para evitar bloqueios de concorrência (`database is locked`).
    - Nenhuma release pode perder ou corromper o banco de quem atualiza. Toda mudança de esquema vem com migração numerada e passa no teste de atualização.
