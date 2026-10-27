@@ -143,7 +143,7 @@ Chamadas para APIs de terceiros que impõem limites de taxa (como o Telegram API
 - **Circuit Breaker:** Se falhas consecutivas ou erros `5xx/429` excederem o limiar de tolerância, o circuito é aberto para evitar saturação, bloqueio de conta e exaustão de conexões.
 
 ## 4. Contract Testing & Schemathesis
-A conformidade da API com o OpenAPI gerado pelo FastAPI é verificada por `backend/tests/contract/test_openapi_contract.py` (Schemathesis). Toda nova rota ou alteração de contrato deve garantir que payloads inválidos nunca resultem em `500 Internal Server Error`, e sim em códigos de cliente estruturados (400 / 422).
+A conformidade da API com o OpenAPI gerado pelo FastAPI é verificada por `backend/tests/contract/test_openapi_contract.py` (Schemathesis). Toda nova rota ou alteração de contrato deve garantir que payloads inválidos nunca resultem em `500 Internal Server Error`, e sim em códigos de cliente estruturados (400 / 422). Rotas que persistem valores em arquivos de ambiente ou variáveis de sistema (`os.environ`) devem sanitizar e validar caracteres de controle e bytes nulos (`\x00`, `\r`, `\n`) via `@field_validator` no Pydantic, pois a atribuição direta levanta `ValueError` nativo do Python (kaizen de 2026-10-26: o fuzzer do Schemathesis provocou 500 no PR #67).
 
 ## 5. Gerenciamento de Dependências com `uv`
 O backend utiliza estritamente o `uv` como gerenciador de pacotes e ambientes virtuais:
@@ -194,6 +194,8 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
    - Dicionários em memória utilizados para rastreamento de progresso ou cache devem ter rotinas ativas de expiração (TTL) ou limite máximo de itens (LRU).
 8. **Segurança de CORS:**
    - Nunca configurar `allow_origins=["*"]` concomitantemente com `allow_credentials=True`. As origens permitidas devem ser explicitamente listadas e parametrizáveis por ambiente.
+9. **Debounce e Feedback Visual em Ações de I/O na UI:**
+   - Ações de formulário e botões de chamada à API no frontend devem obrigatoriamente implementar estado de carregamento (`isLoading`/`disabled`) com feedback visual (spinner), prevenindo submissões duplicadas e condições de corrida por múltiplos cliques acidentais (kaizen de 2026-10-26: issue #54 gerava conflitos 409 por duplo clique).
 
 
 ## 9. Checklist de Segurança do Domínio
@@ -207,7 +209,7 @@ O checklist:
 - XSS: markdown/HTML sanitizado antes de ir para o Telegram. SSRF: URLs dos botões de link inline validadas (apenas `https`, sem hosts privados).
 - Sem path traversal no upload e na remoção de mídia temporária; MIME type e extensão validados.
 - Dependências, actions e imagens fixadas (seção 8 e CI); o job `security-scan` do CI precisa passar.
-- O repositório é público: fixtures, exemplos e textos usam dados genéricos ("Acme", "Canal de Novidades", IDs falsos como `-1001234567890`), nunca nomes, canais, IDs ou tokens reais. Contexto de negócio de quem usa o app não entra no repositório (kaizen de 2026-10-23: a abertura do código exigiu neutralizar fixtures e documentos).
+- O repositório é público: fixtures, exemplos e textos usam dados genéricos ("Acme", "Canal de Novidades", IDs falsos como `-1001234567890`), nunca nomes, canais, IDs ou tokens reais. Contexto de negócio de quem usa o app não entra no repositório (kaizen de 2026-10-23: a abertura do código exigiu neutralizar fixtures e documentos). Em fixtures de teste de API, use identificadores expressivos de baixa entropia (ex.: `"test-fake-api-hash"`), nunca cadeias hexadecimais de 32 ou 64 caracteres que acionem o `gitleaks` (kaizen de 2026-10-26: o scanner varre todos os commits do PR `origin/main..HEAD` e falha se qualquer commit histórico contiver a cadeia, exigindo fingerprint em `.gitleaksignore`).
 
 ## 10. Arquitetura e Domínio
 Monólito modular em Clean Architecture. **Regra de dependência:** as setas apontam para o domínio, nunca para fora.
