@@ -1286,6 +1286,102 @@ def test_translate_telegram_error_pt_catalog():
     assert translate_telegram_error_pt("An unknown upstream custom error") is None
 
 
+@pytest.mark.asyncio
+async def test_send_broadcast_captures_file_id_from_telegram_video_response(sample_video_file, monkeypatch):
+    recorded_requests = []
+
+    def mock_handler(request: httpx.Request):
+        recorded_requests.append(request)
+        return httpx.Response(200, json={
+            "ok": True,
+            "result": {
+                "message_id": 201,
+                "video": {
+                    "file_id": "telegram_video_file_id_123",
+                    "file_unique_id": "uniq_123",
+                    "width": 1920,
+                    "height": 1080,
+                }
+            }
+        })
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    message = BroadcastMessage(
+        id="broadcast-vid-1",
+        profile_id="profile-1",
+        target_channel_ids=["-1001234567890"],
+        text="Video caption",
+        media=MediaAttachment(
+            file_path=sample_video_file,
+            media_type=MediaType.VIDEO,
+            file_size=os.path.getsize(sample_video_file),
+        ),
+    )
+
+    ok = await gateway.send_broadcast(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="-1001234567890",
+        message=message,
+    )
+    assert ok is True
+    assert getattr(gateway, "last_uploaded_file_id", None) == "telegram_video_file_id_123"
+
+
+@pytest.mark.asyncio
+async def test_send_broadcast_with_file_id_sends_file_id_string_without_reading_disk(monkeypatch):
+    recorded_requests = []
+
+    def mock_handler(request: httpx.Request):
+        recorded_requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 202}})
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    # Note that file_path does not exist on disk!
+    message = BroadcastMessage(
+        id="broadcast-vid-reuse",
+        profile_id="profile-1",
+        target_channel_ids=["-1009999999999"],
+        text="Caption for second channel",
+        media=MediaAttachment(
+            file_path="/non_existent_path/video.mp4",
+            media_type=MediaType.VIDEO,
+            file_size=50000000,
+        ),
+    )
+
+    ok = await gateway.send_broadcast(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="-1009999999999",
+        message=message,
+        file_id="telegram_video_file_id_123",
+    )
+    assert ok is True
+    assert len(recorded_requests) == 1
+    req = recorded_requests[0]
+    assert req.method == "POST"
+    assert req.url.path == "/bot123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11/sendVideo"
+    content = req.read()
+    # Deve conter o file_id como string no corpo
+    assert b"telegram_video_file_id_123" in content
+
+
+
 
 
 

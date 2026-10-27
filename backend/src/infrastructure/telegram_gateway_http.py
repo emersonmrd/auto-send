@@ -130,6 +130,7 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         self.last_error: Optional[str] = None
         self.last_failure_category: Optional[DeliveryFailureCategory] = None
         self.last_failure_detail: Optional[str] = None
+        self.last_uploaded_file_id: Optional[str] = None
 
     async def resolve_effective_base_url(self) -> str:
         """
@@ -270,12 +271,29 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             else:
                 self.last_failure_detail = hint
 
+    def _extract_and_store_file_id(self, res_data: dict, is_photo: bool) -> None:
+        """Captura o file_id do arquivo no retorno de sucesso do Telegram para reuso sem re-upload."""
+        result = res_data.get("result", {})
+        if not isinstance(result, dict):
+            return
+        if is_photo:
+            photos = result.get("photo", [])
+            if isinstance(photos, list) and photos:
+                last_photo = photos[-1]
+                if isinstance(last_photo, dict) and "file_id" in last_photo:
+                    self.last_uploaded_file_id = last_photo["file_id"]
+        else:
+            vid = result.get("video", {})
+            if isinstance(vid, dict) and "file_id" in vid:
+                self.last_uploaded_file_id = vid["file_id"]
+
     async def send_broadcast(
         self,
         bot_token: str,
         chat_id: str,
         message: BroadcastMessage,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        file_id: Optional[str] = None,
     ) -> bool:
         self.last_error = None
         self.last_failure_category = None
@@ -336,6 +354,16 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                     if reply_markup:
                         data["reply_markup"] = json.dumps(reply_markup)
 
+                    # Reutilização instantânea de file_id (sem re-upload de binário)
+                    if file_id:
+                        data[media_field] = file_id
+                        resp = await client.post(send_url, data=data)
+                        res_data = await self._handle_response(resp)
+                        ok = bool(res_data.get("ok"))
+                        if not ok:
+                            self._enrich_large_file_error(message, effective_url)
+                        return ok
+
                     # Envio do arquivo
                     if message.media and os.path.exists(message.media.file_path):
                         media_f = ProgressFileReader(message.media.file_path, callback=progress_callback)
@@ -349,7 +377,9 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                             resp = await client.post(send_url, data=data, files=files)
                             res_data = await self._handle_response(resp)
                             ok = bool(res_data.get("ok"))
-                            if not ok:
+                            if ok:
+                                self._extract_and_store_file_id(res_data, is_photo)
+                            else:
                                 self._enrich_large_file_error(message, effective_url)
                             return ok
                         finally:
@@ -381,21 +411,32 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
                     # 2. Envia a mídia (foto ou vídeo) logo em seguida
                     media_url = f"{effective_url}/bot{bot_token}/{media_endpoint}"
+                    media_data = {"chat_id": chat_id}
+                    if reply_markup:
+                        media_data["reply_markup"] = json.dumps(reply_markup)
+                    if not is_photo:
+                        media_data["supports_streaming"] = "true"
+                        if message.media and message.media.duration and message.media.duration > 0:
+                            media_data["duration"] = str(int(message.media.duration))
+                        if message.media and message.media.width and message.media.width > 0:
+                            media_data["width"] = str(int(message.media.width))
+                        if message.media and message.media.height and message.media.height > 0:
+                            media_data["height"] = str(int(message.media.height))
+                        if message.media and message.media.thumbnail_path and os.path.exists(message.media.thumbnail_path):
+                            media_data["thumbnail"] = "attach://thumbnail"
+                            media_data["thumb"] = "attach://thumbnail"
+
+                    # Reutilização instantânea de file_id
+                    if file_id:
+                        media_data[media_field] = file_id
+                        resp2 = await client.post(media_url, data=media_data)
+                        data2 = await self._handle_response(resp2)
+                        ok2 = bool(data2.get("ok"))
+                        if not ok2:
+                            self._enrich_large_file_error(message, effective_url)
+                        return ok1 and ok2
+
                     if message.media and os.path.exists(message.media.file_path):
-                        media_data = {"chat_id": chat_id}
-                        if reply_markup:
-                            media_data["reply_markup"] = json.dumps(reply_markup)
-                        if not is_photo:
-                            media_data["supports_streaming"] = "true"
-                            if message.media.duration and message.media.duration > 0:
-                                media_data["duration"] = str(int(message.media.duration))
-                            if message.media.width and message.media.width > 0:
-                                media_data["width"] = str(int(message.media.width))
-                            if message.media.height and message.media.height > 0:
-                                media_data["height"] = str(int(message.media.height))
-                            if message.media.thumbnail_path and os.path.exists(message.media.thumbnail_path):
-                                media_data["thumbnail"] = "attach://thumbnail"
-                                media_data["thumb"] = "attach://thumbnail"
                         media_f = ProgressFileReader(message.media.file_path, callback=progress_callback)
                         thumb_f = None
                         try:
@@ -407,7 +448,9 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                             resp2 = await client.post(media_url, data=media_data, files=files)
                             data2 = await self._handle_response(resp2)
                             ok2 = bool(data2.get("ok"))
-                            if not ok2:
+                            if ok2:
+                                self._extract_and_store_file_id(data2, is_photo)
+                            else:
                                 self._enrich_large_file_error(message, effective_url)
                             return ok1 and ok2
                         finally:
@@ -546,11 +589,14 @@ async def dispatch_broadcast_to_channel(
     chat_id: str,
     message: BroadcastMessage,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    file_id: Optional[str] = None,
 ) -> ChannelDeliveryResult:
     """Despacha para um canal e retorna o resultado estruturado por canal sem vazar o token (§2, §9)."""
     send_kwargs: Dict[str, Any] = {}
     if progress_callback is not None:
         send_kwargs["progress_callback"] = progress_callback
+    if file_id is not None:
+        send_kwargs["file_id"] = file_id
     try:
         ok = await gateway.send_broadcast(
             bot_token=bot_token,

@@ -5,6 +5,13 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Performance
+- Reutilização instantânea de `file_id` do Telegram em disparos de mídias (vídeos e fotos) para múltiplos canais, realizando o upload físico do binário uma única vez e despachando para os canais subsequentes por referência, reduzindo drasticamente o tempo de envio e consumo de rede (#83).
+
+### Fixed
+- Correção da oscilação e saltos para 100% na barra de progresso durante o envio de vídeos para múltiplos canais, mantendo cálculo contínuo e sincronizado com o arquivo real (#83).
+- Suporte a aliases de credenciais no runner E2E real (`E2E_BOT_TOKEN_ALFA`, `E2E_CHANNEL_TEST`, etc.) para testes com bots e canais reais (#83).
+
 
 ## [0.6.0] - 2026-10-27
 
