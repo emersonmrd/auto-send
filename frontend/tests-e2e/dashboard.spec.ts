@@ -98,18 +98,20 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
 
   test("deve abrir modal de link inline e renderizar o botão no live preview", async ({ page }) => {
     await page.goto("/");
-    
-    // Clica no botão de configurar botão abaixo da mensagem
-    const linkBtn = page.getByRole("button", { name: "Adicionar Botão Abaixo da Mensagem" });
-    if (await linkBtn.count() > 0) {
-      await linkBtn.first().click();
-      await page.fill('input[placeholder*="Saiba mais"]', "Acesse Aqui");
-      await page.fill('input[placeholder*="https://"]', "https://t.me/+promo");
-      await page.getByRole("button", { name: "Salvar" }).click();
+    await expect(page.locator("text=Acme").first()).toBeVisible();
 
-      // Verifica se o botão inline aparece no preview
-      await expect(page.locator('text=Acesse Aqui').first()).toBeVisible();
-    }
+    const linkBtn = page.getByRole("button", { name: "Adicionar Botão Abaixo da Mensagem" }).first();
+    await linkBtn.click();
+
+    const dialog = page.getByRole("dialog", { name: "Adicionar Botão Abaixo da Mensagem" });
+    await expect(dialog).toBeVisible();
+    await dialog.locator('input[placeholder*="Saiba mais"]').fill("Acesse Aqui");
+    await dialog.locator('input[placeholder*="https://"]').fill("https://t.me/+promo");
+    await dialog.getByRole("button", { name: "Salvar", exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    // Verifica se o botão inline aparece no preview
+    await expect(page.locator('text=Acesse Aqui').first()).toBeVisible();
   });
 
   async function sendBroadcast(page: import("@playwright/test").Page) {

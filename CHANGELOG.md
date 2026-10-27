@@ -13,6 +13,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ### Fixed
 - Prevenção de cadastro de canais duplicados por perfil no backend (`409 Conflict`) e debounce com feedback de loading em botões de ação do frontend (#54).
+- Resolução de violação de strict mode no seletor do botão 'Salvar' da suíte Playwright no modal de link inline do dashboard (#77).
 
 
 ## [0.5.0] - 2026-10-26
