@@ -5,6 +5,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Added
+- Modal interativo e persistência de credenciais da Telegram API (`TELEGRAM_API_ID` e `TELEGRAM_API_HASH`) em `%LOCALAPPDATA%\Auto-Send\.env` (mantido entre versões e pastas no Windows), permitindo configurar ou alterar credenciais a qualquer momento e ativando o servidor local para uploads de até 2 GB (#56).
+
 ### Changed
 - Remoção do botão externo redundante de inserção de link no compositor, centralizando a formatação de hiperlinks exclusivamente na barra do editor e diferenciando a seção de botão físico abaixo da mensagem (Inline Keyboard) (#59).
 

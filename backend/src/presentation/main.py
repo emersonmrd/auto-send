@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import parse_host_header
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.domain.broadcast.media_format import classify_media
 from src.domain.broadcast.broadcast_message import (
@@ -81,6 +81,11 @@ from src.infrastructure.telegram_process_manager import (
     find_available_port,
     telegram_process_manager,
 )
+from src.infrastructure.telegram_api_credentials import (
+    get_env_file_path,
+    load_telegram_credentials_from_data_dir,
+    save_telegram_credentials_to_data_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +114,11 @@ DEFAULT_DB_URL = f"sqlite+aiosqlite:///{BASE_DIR / 'auto_send.db'}"
 
 TEMP_MEDIA_DIR = os.getenv("TEMP_MEDIA_DIR", DEFAULT_TEMP_DIR)
 os.makedirs(TEMP_MEDIA_DIR, exist_ok=True)
+
+try:
+    load_telegram_credentials_from_data_dir()
+except Exception as exc:
+    logger.warning(f"Erro ao inicializar credenciais da Telegram API: {exc}")
 
 # O servidor local do Telegram aceita até 2.000 MB; a API pública, 50 MB.
 LOCAL_API_MAX_BYTES = 2000 * 1024 * 1024
@@ -253,6 +263,17 @@ class HealthResponse(BaseModel):
 class OpenDataDirResponse(BaseModel):
     path: str
     opened: bool
+
+class TelegramApiConfigResponse(BaseModel):
+    configured: bool
+    api_id: str
+    has_api_hash: bool
+    max_upload_mb: int
+    env_file_path: str
+
+class UpdateTelegramApiConfigRequest(BaseModel):
+    api_id: str = Field(..., description="API ID from my.telegram.org")
+    api_hash: str = Field(..., description="API Hash from my.telegram.org")
 
 class ProfileCreateRequest(BaseModel):
     name: str
@@ -435,6 +456,38 @@ async def open_system_data_dir():
     data_dir = resolve_data_dir(default_db_url=DB_PATH)
     opened = open_data_directory(data_dir)
     return {"path": str(data_dir), "opened": opened}
+
+@app.get("/api/v1/system/telegram-api-config", response_model=TelegramApiConfigResponse)
+async def get_system_telegram_api_config():
+    api_id = os.getenv("TELEGRAM_API_ID", "").strip()
+    api_hash = os.getenv("TELEGRAM_API_HASH", "").strip()
+    configured = bool(api_id and api_hash)
+    max_mb = media_upload_limit_bytes() // (1024 * 1024)
+    env_path = str(get_env_file_path())
+    return TelegramApiConfigResponse(
+        configured=configured,
+        api_id=api_id,
+        has_api_hash=bool(api_hash),
+        max_upload_mb=max_mb,
+        env_file_path=env_path,
+    )
+
+@app.post(
+    "/api/v1/system/telegram-api-config",
+    response_model=TelegramApiConfigResponse,
+    responses={**_ERR_422},
+)
+async def update_system_telegram_api_config(req: UpdateTelegramApiConfigRequest):
+    save_telegram_credentials_to_data_dir(req.api_id, req.api_hash)
+    try:
+        telegram_process_manager.stop()
+        if req.api_id.strip() and req.api_hash.strip():
+            if telegram_process_manager.start(gateway=telegram_gateway):
+                telegram_gateway.base_url = f"http://127.0.0.1:{telegram_process_manager.port}"
+    except Exception as exc:
+        logger.warning(f"Erro ao reiniciar Telegram Bot API local: {exc}")
+
+    return await get_system_telegram_api_config()
 
 @app.get("/api/v1/profiles", response_model=List[ProfileListItemResponse])
 async def list_profiles():
