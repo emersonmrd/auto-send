@@ -152,15 +152,6 @@ export default function Home() {
   const [scheduledQueue, setScheduledQueue] = useState<ScheduledBroadcast[]>([]);
   const [broadcastHistory, setBroadcastHistory] = useState<BroadcastHistoryItem[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(false);
-  const [editingBroadcast, setEditingBroadcast] = useState<ScheduledBroadcast | null>(null);
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [editText, setEditText] = useState("");
-  const [editButtonText, setEditButtonText] = useState("");
-  const [editButtonUrl, setEditButtonUrl] = useState("");
-  const [editScheduledAtInput, setEditScheduledAtInput] = useState("");
-  const [editScheduleConfirmedPreview, setEditScheduleConfirmedPreview] = useState<string | null>(null);
-  const editDateTimeInputRef = useRef<HTMLInputElement>(null);
-  const [isUpdatingScheduled, setIsUpdatingScheduled] = useState(false);
   const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
 
   // Status de envio e Upload Progress
@@ -264,20 +255,14 @@ export default function Home() {
     return { datePart, timePart, combined, formatted };
   };
 
-  const applyScheduleDateTime = (d: Date, isEdit = false) => {
+  const applyScheduleDateTime = (d: Date) => {
     const { combined, formatted } = toLocalDateTimeParts(d);
-    if (isEdit) {
-      setEditScheduledAtInput(combined);
-      setEditScheduleConfirmedPreview(formatted);
-      editDateTimeInputRef.current?.blur();
-    } else {
-      setScheduledAtInput(combined);
-      setScheduleConfirmedPreview(formatted);
-      scheduleDateTimeInputRef.current?.blur();
-    }
+    setScheduledAtInput(combined);
+    setScheduleConfirmedPreview(formatted);
+    scheduleDateTimeInputRef.current?.blur();
   };
 
-  const handleQuickPreset = (preset: "5m" | "15m" | "1h" | "tomorrow12", isEdit = false) => {
+  const handleQuickPreset = (preset: "5m" | "15m" | "1h" | "tomorrow12") => {
     const now = new Date();
     let target: Date;
     if (preset === "5m") {
@@ -289,18 +274,18 @@ export default function Home() {
     } else {
       target = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 12, 0, 0);
     }
-    applyScheduleDateTime(target, isEdit);
+    applyScheduleDateTime(target);
   };
 
-  const handleConfirmDateTimeSelection = (isEdit = false) => {
-    const raw = isEdit ? editScheduledAtInput : scheduledAtInput;
+  const handleConfirmDateTimeSelection = () => {
+    const raw = scheduledAtInput;
     if (!raw) {
-      applyScheduleDateTime(new Date(Date.now() + 10 * 60 * 1000), isEdit);
+      applyScheduleDateTime(new Date(Date.now() + 10 * 60 * 1000));
       return;
     }
     const parsed = new Date(raw);
     if (!isNaN(parsed.getTime())) {
-      applyScheduleDateTime(parsed, isEdit);
+      applyScheduleDateTime(parsed);
     }
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
@@ -1088,27 +1073,6 @@ export default function Home() {
     }
   };
 
-  // Abrir Modal de Edição de Agendamento
-  const handleOpenEditScheduled = (item: ScheduledBroadcast) => {
-    setEditingBroadcast(item);
-    setEditText(item.text || "");
-    setEditButtonText(item.button?.text || "");
-    setEditButtonUrl(item.button?.url || "");
-    // Formatar ISO para o input datetime-local e campos de data/hora no fuso local
-    if (item.scheduled_at) {
-      const d = new Date(item.scheduled_at);
-      if (!isNaN(d.getTime()) && d.getTime() > Date.now()) {
-        applyScheduleDateTime(d, true);
-      } else {
-        applyScheduleDateTime(new Date(Date.now() + 15 * 60 * 1000), true);
-      }
-    } else {
-      setEditScheduledAtInput("");
-      setEditScheduleConfirmedPreview(null);
-    }
-    setShowEditModal(true);
-  };
-
   // Carregar Agendamento de Volta para o Compositor
   const handleLoadIntoComposer = (item: ScheduledBroadcast) => {
     if (text.trim() || mediaFile) {
@@ -1149,7 +1113,7 @@ export default function Home() {
     }
     if (item.scheduled_at) {
       const d = new Date(item.scheduled_at);
-      if (!isNaN(d.getTime())) applyScheduleDateTime(d, false);
+      if (!isNaN(d.getTime())) applyScheduleDateTime(d);
     }
     // Mídia do agendamento (#18)
     if (item.media) {
@@ -1284,70 +1248,7 @@ export default function Home() {
     }
   };
 
-  // Salvar Edição do Agendamento
-  const handleSaveEditScheduled = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingBroadcast) return;
 
-    if (!editScheduledAtInput) {
-      showToast("Selecione uma data e hora para o agendamento.", "error");
-      return;
-    }
-    const selectedDate = new Date(editScheduledAtInput);
-    if (isNaN(selectedDate.getTime())) {
-      showToast("Data e hora inválidas.", "error");
-      return;
-    }
-    if (selectedDate.getTime() <= Date.now() - 60000) {
-      showToast("A data de reagendamento deve ser no futuro.", "error");
-      return;
-    }
-
-    if ((editButtonText && !editButtonUrl) || (!editButtonText && editButtonUrl)) {
-      showToast("Informe tanto o texto quanto a URL do botão, ou deixe ambos vazios.", "error");
-      return;
-    }
-
-    setIsUpdatingScheduled(true);
-    try {
-      const payload: Record<string, string> = {
-        text: editText,
-        scheduled_at: selectedDate.toISOString(),
-      };
-      if (editButtonText && editButtonUrl) {
-        payload.button_text = editButtonText;
-        payload.button_url = editButtonUrl;
-      } else {
-        payload.button_text = "";
-        payload.button_url = "";
-      }
-
-      const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/${editingBroadcast.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        setShowEditModal(false);
-        setEditingBroadcast(null);
-        setFeedback({
-          type: "success",
-          message: "Agendamento atualizado com sucesso!",
-        });
-        if (selectedProfile) {
-          fetchScheduledQueue(selectedProfile.id);
-        }
-      } else {
-        const err = await res.json().catch(() => null);
-        showToast(extractApiError(err, "Erro ao atualizar agendamento"), "error");
-      }
-    } catch {
-      showToast("Falha de conexão com o servidor", "error");
-    } finally {
-      setIsUpdatingScheduled(false);
-    }
-  };
 
   // Criar Perfil
   const handleCreateProfile = async (e: React.FormEvent) => {
@@ -2380,7 +2281,7 @@ export default function Home() {
                   disabled={isSending}
                   onClick={() => {
                     if (!scheduledAtInput) {
-                      applyScheduleDateTime(new Date(Date.now() + 15 * 60 * 1000), false);
+                      applyScheduleDateTime(new Date(Date.now() + 15 * 60 * 1000));
                     }
                     setShowScheduleModal(true);
                   }}
@@ -2570,28 +2471,28 @@ export default function Home() {
                 <div className="grid grid-cols-4 gap-1.5">
                   <button
                     type="button"
-                    onClick={() => handleQuickPreset("5m", false)}
+                    onClick={() => handleQuickPreset("5m")}
                     className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
                   >
                     +5 min
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleQuickPreset("15m", false)}
+                    onClick={() => handleQuickPreset("15m")}
                     className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
                   >
                     +15 min
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleQuickPreset("1h", false)}
+                    onClick={() => handleQuickPreset("1h")}
                     className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
                   >
                     +1 hora
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleQuickPreset("tomorrow12", false)}
+                    onClick={() => handleQuickPreset("tomorrow12")}
                     className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
                   >
                     Amanhã 12:00
@@ -2623,7 +2524,7 @@ export default function Home() {
                   />
                   <button
                     type="button"
-                    onClick={() => handleConfirmDateTimeSelection(false)}
+                    onClick={() => handleConfirmDateTimeSelection()}
                     className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition shrink-0 shadow flex items-center gap-1"
                     title="Confirmar data e hora e fechar seletor"
                   >
@@ -3122,7 +3023,7 @@ export default function Home() {
       {/* DRAWER / MODAL: FILA DE AGENDAMENTOS */}
       {showQueueDrawer && (
         <div className="fixed inset-0 bg-black/60 flex justify-end z-50 animate-in fade-in duration-200">
-          <div className="bg-[#17212b] border-l border-[#242f3d] w-full max-w-lg h-full flex flex-col shadow-2xl">
+          <div data-testid="queue-drawer" className="bg-[#17212b] border-l border-[#242f3d] w-full max-w-lg h-full flex flex-col shadow-2xl">
             {/* Header do Drawer */}
             <div className="p-4 border-b border-[#242f3d] flex items-center justify-between">
               <div className="flex items-center space-x-2">
@@ -3254,10 +3155,10 @@ export default function Home() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleOpenEditScheduled(item)}
+                              onClick={() => handleLoadIntoComposer(item)}
                               disabled={isProcessing}
                               className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1 disabled:opacity-50"
-                              title="Escolher novo horário para reagendar"
+                              title="Carregar mensagem no compositor para reagendar"
                             >
                               <Calendar className="w-3 h-3" />
                               Reagendar
@@ -3282,16 +3183,6 @@ export default function Home() {
                               title="Carregar mensagem de volta para o compositor principal"
                             >
                               Carregar no Editor
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditScheduled(item)}
-                              disabled={isProcessing}
-                              className="text-xs px-2.5 py-1 text-[#71aaeb] hover:text-white bg-[#203a56] hover:bg-[#2b5278] rounded transition flex items-center gap-1"
-                              title="Editar mensagem e horário de agendamento"
-                            >
-                              <Edit className="w-3 h-3" />
-                              Editar
                             </button>
                             <button
                               type="button"
@@ -3371,160 +3262,7 @@ export default function Home() {
         </div>
       )}
 
-      {/* MODAL: EDITAR AGENDAMENTO */}
-      {showEditModal && editingBroadcast && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <form
-            onSubmit={handleSaveEditScheduled}
-            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-lg w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto"
-          >
-            <h3 className="text-base font-semibold text-gray-100 mb-2 flex items-center gap-2">
-              <Edit className="w-4 h-4 text-[#5288c1]" /> Editar Broadcast Agendado
-            </h3>
-            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-              Altere o texto, o botão inline ou reprograme o horário de disparo no APScheduler.
-            </p>
 
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="field-edit-text" className="text-xs text-gray-400 block mb-1">Texto da Mensagem</label>
-                <div className="w-full bg-[#242f3d] rounded-lg px-3 py-2 border border-transparent focus-within:border-[#5288c1]">
-                  <TelegramRichEditor
-                    id="field-edit-text"
-                    ariaLabel="Texto da Mensagem"
-                    value={editText}
-                    onChange={setEditText}
-                    placeholder="Escreva a mensagem..."
-                    minRows={3}
-                  />
-                </div>
-              </div>
-
-              {/* Atalhos rápidos na Edição */}
-              <div>
-                <span className="text-[11px] text-gray-400 block mb-1.5">Atalhos Rápidos de Reagendamento:</span>
-                <div className="grid grid-cols-4 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleQuickPreset("5m", true)}
-                    className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
-                  >
-                    +5 min
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickPreset("15m", true)}
-                    className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
-                  >
-                    +15 min
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickPreset("1h", true)}
-                    className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
-                  >
-                    +1 hora
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickPreset("tomorrow12", true)}
-                    className="px-2 py-1.5 text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#71aaeb] hover:text-white rounded-lg border border-[#3b6694]/30 transition font-medium"
-                  >
-                    Amanhã 12:00
-                  </button>
-                </div>
-              </div>
-
-              {/* Seletor unificado de Data e Hora na Edição */}
-              <div>
-                <label htmlFor="field-edit-scheduled-at-input" className="text-xs text-gray-400 block mb-1">
-                  Data e Hora de Disparo (Horário Local)
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    id="field-edit-scheduled-at-input"
-                    ref={editDateTimeInputRef}
-                    type="datetime-local"
-                    required
-                    value={editScheduledAtInput}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setEditScheduledAtInput(val);
-                      const parsed = new Date(val);
-                      if (!isNaN(parsed.getTime())) {
-                        setEditScheduleConfirmedPreview(toLocalDateTimeParts(parsed).formatted);
-                      }
-                    }}
-                    className="flex-1 bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1] [color-scheme:dark]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleConfirmDateTimeSelection(true)}
-                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition shrink-0 shadow flex items-center gap-1"
-                    title="Confirmar data e hora e fechar seletor"
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    OK / Definir Data e Hora
-                  </button>
-                </div>
-              </div>
-
-              {editScheduleConfirmedPreview && (
-                <div className="bg-emerald-950/60 border border-emerald-600/60 text-emerald-200 rounded-lg px-3 py-2 text-xs font-medium flex items-center gap-2">
-                  <span>✅ Horário selecionado: {editScheduleConfirmedPreview}</span>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="field-edit-button-text" className="text-xs text-gray-400 block mb-1">Texto do Botão Inline</label>
-                  <input
-                    id="field-edit-button-text"
-                    type="text"
-                    placeholder="Ex: Ver Link"
-                    value={editButtonText}
-                    onChange={(e) => setEditButtonText(e.target.value)}
-                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="field-edit-button-url" className="text-xs text-gray-400 block mb-1">URL (https://)</label>
-                  <input
-                    id="field-edit-button-url"
-                    type="url"
-                    placeholder="https://exemplo.com"
-                    value={editButtonUrl}
-                    onChange={(e) => setEditButtonUrl(e.target.value)}
-                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 pt-3 border-t border-[#242f3d] flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowEditModal(false);
-                  setEditingBroadcast(null);
-                  setEditScheduleConfirmedPreview(null);
-                }}
-                className="px-3 py-2 text-xs text-gray-400 hover:text-white"
-              >
-                Cancelar
-              </button>
-              <button
-                type="submit"
-                disabled={isUpdatingScheduled}
-                className="px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-semibold transition disabled:opacity-50 shadow-md flex items-center gap-1.5"
-              >
-                <Check className="w-4 h-4" />
-                {isUpdatingScheduled ? "Salvando..." : "OK — Confirmar Agendamento"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
 
       {/* MODAL: CONFIGURAÇÃO TELEGRAM API (UPLOAD ATÉ 2 GB) (#56) */}
       {showTelegramApiModal && (
