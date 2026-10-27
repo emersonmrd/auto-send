@@ -9,7 +9,11 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from scripts.bundle_portable_windows import COMO_USAR_TXT, LAUNCHER_BAT  # noqa: E402
-from src.infrastructure.portable_data import import_legacy_data_if_needed, resolve_data_dir  # noqa: E402
+from src.infrastructure.portable_data import (  # noqa: E402
+    import_legacy_data_if_needed,
+    open_data_directory,
+    resolve_data_dir,
+)
 from src.presentation.main import app  # noqa: E402
 
 
@@ -123,3 +127,107 @@ async def test_open_data_dir_endpoint_returns_resolved_path(tmp_path: Path, monk
     body = resp.json()
     assert body["path"] == str(resolved)
     assert isinstance(body["opened"], bool)
+
+
+def test_subsequent_release_preserves_existing_data_in_localappdata(tmp_path: Path):
+    """Quando o usuário extrai uma nova release em outra pasta mas já possui dados em %LOCALAPPDATA%\\Auto-Send,
+    a inicialização não pergunta nada e preserva os dados existentes sem alteração."""
+    target_data_dir = tmp_path / "localappdata" / "Auto-Send"
+    target_data_dir.mkdir(parents=True)
+    existing_db = target_data_dir / "autosend.db"
+    existing_db.write_bytes(b"existing-production-data")
+
+    # Nova release extraída em outra pasta
+    new_release_dir = tmp_path / "Downloads" / "Auto-Send-v0.5.1"
+    new_release_dir.mkdir(parents=True)
+    (new_release_dir / "data").mkdir()
+    (new_release_dir / "data" / "autosend.db").write_bytes(b"stale-v040-db")
+
+    input_called = False
+
+    def _unexpected_input(_prompt: str) -> str:
+        nonlocal input_called
+        input_called = True
+        return "S"
+
+    imported = import_legacy_data_if_needed(
+        target_data_dir,
+        new_release_dir,
+        user_home=tmp_path,
+        input_fn=_unexpected_input,
+    )
+
+    assert imported is None
+    assert not input_called
+    assert existing_db.read_bytes() == b"existing-production-data"
+
+
+def test_resolve_data_dir_creates_missing_directory(tmp_path: Path, monkeypatch):
+    custom_dir = tmp_path / "non_existent_yet" / "Auto-Send"
+    assert not custom_dir.exists()
+    monkeypatch.setenv("AUTOSEND_DATA_DIR", str(custom_dir))
+
+    resolved = resolve_data_dir()
+    assert resolved == custom_dir.resolve()
+    assert custom_dir.is_dir()
+
+
+def test_open_data_directory_windows(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    calls: list[str] = []
+
+    def fake_startfile(path: str):
+        calls.append(path)
+
+    monkeypatch.setattr("os.startfile", fake_startfile, raising=False)
+    assert open_data_directory(tmp_path) is True
+    assert calls == [str(tmp_path)]
+
+    def failing_startfile(_path: str):
+        raise OSError("Permission denied")
+
+    monkeypatch.setattr("os.startfile", failing_startfile, raising=False)
+    assert open_data_directory(tmp_path) is False
+
+
+def test_open_data_directory_darwin(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls: list[list[str]] = []
+
+    def fake_popen(cmd: list[str]):
+        calls.append(cmd)
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    assert open_data_directory(tmp_path) is True
+    assert calls == [["open", str(tmp_path)]]
+
+    def failing_popen(_cmd: list[str]):
+        raise OSError("Executable not found")
+
+    monkeypatch.setattr("subprocess.Popen", failing_popen)
+    assert open_data_directory(tmp_path) is False
+
+
+def test_open_data_directory_linux_fallback(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert open_data_directory(tmp_path) is False
+
+
+@pytest.mark.asyncio
+async def test_open_data_dir_endpoint_reports_opened_status(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("AUTOSEND_DATA_DIR", str(tmp_path / "data"))
+
+    # Cenário 1: open_data_directory retorna True
+    monkeypatch.setattr("src.presentation.main.open_data_directory", lambda _p: True)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        resp = await client.post("/api/v1/system/open-data-dir")
+    assert resp.status_code == 200
+    assert resp.json()["opened"] is True
+
+    # Cenário 2: open_data_directory retorna False
+    monkeypatch.setattr("src.presentation.main.open_data_directory", lambda _p: False)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        resp = await client.post("/api/v1/system/open-data-dir")
+    assert resp.status_code == 200
+    assert resp.json()["opened"] is False
