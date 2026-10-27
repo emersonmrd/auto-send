@@ -67,7 +67,6 @@ import {
   Clock,
   ExternalLink,
   ListOrdered,
-  Link2,
   SquarePlus,
   X,
   Trash2,
@@ -598,11 +597,6 @@ export default function Home() {
       "tif",
     ];
     return imageExtensions.includes(ext || "");
-  };
-
-  // Handlers do Recurso 2: Inserção de Link no Texto da Mensagem (Inline Hyperlink na Palavra)
-  const handleOpenTextLinkModal = () => {
-    composerEditorRef.current?.openLinkModal();
   };
 
   // Handlers do Recurso 1: Botão Físico Abaixo da Mensagem (Inline Keyboard)
@@ -2203,17 +2197,6 @@ export default function Home() {
                   <Paperclip className="w-5 h-5" />
                 </button>
 
-                {/* RECURSO 2: Inserir Link em Palavra do Texto (Inline Hyperlink) */}
-                <button
-                  type="button"
-                  onClick={handleOpenTextLinkModal}
-                  className="p-2.5 rounded-full hover:bg-[#242f3d] text-gray-400 hover:text-[#5288c1] transition"
-                  title="Inserir Link em Palavra do Texto"
-                  aria-label="Inserir Link em Palavra do Texto"
-                >
-                  <Link2 className="w-5 h-5" />
-                </button>
-
                 {/* RECURSO 1: Adicionar Botão Abaixo da Mensagem (Inline Keyboard) */}
                 <button
                   type="button"
@@ -2373,7 +2356,11 @@ export default function Home() {
 
       {/* RECURSO 1: MODAL CONFIGURAR BOTÃO ABAIXO DA MENSAGEM */}
       {showButtonModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+        <div
+          role="dialog"
+          aria-label="Adicionar Botão Abaixo da Mensagem"
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+        >
           <form
             onSubmit={handleSaveButtonModal}
             className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-sm w-full p-5 shadow-2xl"
@@ -2417,7 +2404,7 @@ export default function Home() {
                   className="text-xs text-red-400 hover:text-red-300 font-medium transition"
                   title="Remover o botão inline configurado"
                 >
-                  Remover Link
+                  Remover Botão
                 </button>
               ) : (
                 <div />
