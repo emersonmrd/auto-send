@@ -154,7 +154,7 @@ O backend utiliza estritamente o `uv` como gerenciador de pacotes e ambientes vi
 
 ## 6. Rotina Obrigatória de Cleanup e Higiene do Repositório (Zero Clutter Policy)
 Todo agente, ao concluir uma tarefa ou ciclo de trabalho, é **estritamente obrigado** a limpar qualquer lixo residual deixado no projeto antes de solicitar aprovação de gate ou finalizar a sessão:
-- **Arquivos Temporários e Mídias:** Nenhuma mídia de teste (`/tmp/*.mp4`, `media_temp/*`, uploads mockados) pode permanecer no repositório.
+- **Arquivos Temporários e Mídias:** Nenhuma mídia de teste (`/tmp/*.mp4`, `media_temp/*`, uploads mockados) pode permanecer no repositório. Testes de integração de pipelines de mídia (`tests/integration/test_video_pipeline.py`) devem garantir que diretórios de mídias de teste (ex: `tests_media/`, `temp_media/`) estejam compulsoriamente listados no `.gitignore`, sejam excluídos após os testes (`teardown`/`try...finally`) e utilizem geradores sintéticos mínimos (via `ffmpeg` ou estruturas binárias MP4 simuladas em Python), garantindo zero arquivos pesados versionados ou órfãos no repositório (kaizen de 2026-10-27: issue #64 e PR #80).
 - **Artefatos de Execução e Cache:** Remover scripts temporários de debug, arquivos `.pyc`, logs de teste descartáveis, relatórios parciais não versionados ou diretórios temporários gerados por ferramentas.
 - **Verificação via Git:** Antes de commitar ou encerrar o turno, o agente deve rodar `git status` e garantir que não existem arquivos órfãos (untracked files acidentais). Arquivos não intencionais devem ser excluídos com `rm` ou adicionados ao `.gitignore` se forem artefatos locais.
 - **Higiene de Dependências e Imports:** Eliminar imports não utilizados, variáveis mortas, prints ou `console.log` de debug deixados no código de produção.
@@ -184,9 +184,11 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
 4. **Zero URLs Hardcoded no Frontend:**
    - É estritamente proibido incluir URLs literais como `"http://localhost:8000"` no código do frontend.
    - Todas as chamadas de API devem consumir uma constante centralizada parametrizada via variável de ambiente (ex: `process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"`).
-5. **Proibição de Diálogos Bloqueantes na UI (`alert`, `confirm`, `prompt`):**
+5. **Proibição de Diálogos Bloqueantes na UI (`alert`, `confirm`, `prompt`) e Resiliência em Testes E2E:**
    - O uso de `window.alert()`, `confirm()` ou `prompt()` síncronos é terminantemente proibido.
    - Feedbacks ao usuário devem ser exibidos via componentes visuais não bloqueantes (toasts, banners ou modais acessíveis). Ao invocar modais de confirmação (`ConfirmDialog`), respeite estritamente o contrato tipado de props (`confirmLabel`, `cancelLabel` e `destructive: boolean`); nomes informais como `confirmText` renderizam botões sem texto acessível e quebram testes E2E (kaizen de 2026-10-27: PR #75).
+   - **Seletores Playwright:** em testes E2E Playwright (`frontend/tests-e2e/*.spec.ts`), seletores de botões ou ações com rótulos genéricos (ex: `"Salvar"`, `"Excluir"`, `"Cancelar"`) devem obrigatoriamente especificar `{ exact: true }` (ex: `getByRole('button', { name: 'Salvar', exact: true })`) e preferencialmente serem escopados ao diálogo/container correspondente (`dialog.getByRole(...)`), prevenindo colisões de strict mode violation quando novas ações com rótulos derivados forem adicionadas (kaizen de 2026-10-27: issue #77 gerou strict mode violation após PR #75).
+   - **Mocks E2E e Contratos de Dados:** testes E2E com interceptação/mock de rotas da API devem utilizar estritamente as propriedades tipadas do contrato TypeScript (`frontend/src/types/index.ts`), prevenindo campos divergentes (ex.: `text_preview` vs `text` em `AffectedBroadcastItem`) que resultem em fallbacks silenciosos na UI (kaizen de 2026-10-27: PR #79).
 6. **Concorrência e Integridade do Banco de Dados (SQLite WAL Mode e Migrações):**
    - Ambientes assíncronos com SQLite devem configurar obrigatoriamente `PRAGMA journal_mode=WAL;` e `PRAGMA busy_timeout=5000;` para evitar bloqueios de concorrência (`database is locked`).
    - Nenhuma release pode perder ou corromper o banco de quem atualiza. Toda mudança de esquema vem com migração numerada e passa no teste de atualização.
