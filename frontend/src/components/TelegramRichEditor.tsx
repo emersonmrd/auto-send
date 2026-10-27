@@ -554,8 +554,16 @@ export function TelegramRichEditor({
       newRange.selectNodeContents(wrapper);
       sel.addRange(newRange);
     } else {
-      // Sem seleção: se houver texto no editor todo (ex.: clique no botão após preencher), aplica ou insere placeholder
-      if (el.textContent && el.textContent.trim()) {
+      if (tagName === "pre") {
+        // Sem seleção: insere bloco de código no ponto do cursor com quebra de linha inicial para digitação
+        wrapper.appendChild(document.createElement("br"));
+        range.insertNode(wrapper);
+        sel.removeAllRanges();
+        const newRange = document.createRange();
+        newRange.setStart(wrapper, 0);
+        newRange.collapse(true);
+        sel.addRange(newRange);
+      } else if (el.textContent && el.textContent.trim()) {
         const allRange = document.createRange();
         allRange.selectNodeContents(el);
         const contents = allRange.extractContents();
@@ -688,18 +696,251 @@ export function TelegramRichEditor({
     savedRangeRef.current = null;
   };
 
+  const isCursorAtEndOfPre = (pre: HTMLElement, range: Range): boolean => {
+    const testRange = document.createRange();
+    testRange.setStart(range.endContainer, range.endOffset);
+    testRange.setEndAfter(pre.lastChild || pre);
+    const remaining = testRange.toString();
+    return remaining === "" || remaining === "\n";
+  };
+
+  const isCursorAtStartOfPre = (pre: HTMLElement, range: Range): boolean => {
+    const beforeRange = document.createRange();
+    beforeRange.setStartBefore(pre.firstChild || pre);
+    beforeRange.setEnd(range.startContainer, range.startOffset);
+    return beforeRange.toString() === "";
+  };
+
+  const isCursorOnEmptyLineAtEndOfPre = (pre: HTMLElement, range: Range): boolean => {
+    // 1. Verifica se não há texto substantivo após o cursor no pre
+    const testRange = document.createRange();
+    testRange.setStart(range.endContainer, range.endOffset);
+    testRange.setEndAfter(pre.lastChild || pre);
+    if (testRange.toString().trim() !== "") {
+      return false;
+    }
+
+    // 2. Se o pre está completamente vazio
+    const preText = pre.textContent || "";
+    if (preText.trim() === "") {
+      return true;
+    }
+
+    // 3. Caso o cursor esteja no container pre (ex.: Chromium insere <br> e coloca o cursor entre BRs)
+    if (range.startContainer === pre) {
+      const prevChild = range.startOffset > 0 ? pre.childNodes[range.startOffset - 1] : null;
+      if (!prevChild || (prevChild.nodeType === Node.ELEMENT_NODE && (prevChild as HTMLElement).tagName.toLowerCase() === "br")) {
+        return true;
+      }
+    }
+
+    // 4. Caso o cursor esteja em um nó de texto
+    if (range.startContainer.nodeType === Node.TEXT_NODE) {
+      const val = range.startContainer.nodeValue || "";
+      const textBefore = val.slice(0, range.startOffset);
+      if (textBefore.endsWith("\n")) {
+        return true;
+      }
+      if (range.startOffset === 0) {
+        let prev = range.startContainer.previousSibling;
+        while (prev && prev.nodeType === Node.TEXT_NODE && prev.nodeValue === "") {
+          prev = prev.previousSibling;
+        }
+        if (!prev || (prev.nodeType === Node.ELEMENT_NODE && (prev as HTMLElement).tagName.toLowerCase() === "br")) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  const exitPreBlock = (pre: HTMLElement, removeTrailingNewline: boolean) => {
+    const root = editorRef.current;
+    if (!root) return;
+
+    const sel = window.getSelection();
+    if (!sel) return;
+
+    if (removeTrailingNewline) {
+      // Remove elementos <br> residuais no final do pre
+      while (
+        pre.lastChild &&
+        pre.lastChild.nodeType === Node.ELEMENT_NODE &&
+        (pre.lastChild as HTMLElement).tagName.toLowerCase() === "br"
+      ) {
+        pre.removeChild(pre.lastChild);
+      }
+
+      // Remove \n no final do último nó de texto
+      const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+      let lastTextNode: Text | null = null;
+      while (walker.nextNode()) {
+        lastTextNode = walker.currentNode as Text;
+      }
+      if (lastTextNode && lastTextNode.nodeValue) {
+        while (lastTextNode.nodeValue.endsWith("\n")) {
+          lastTextNode.nodeValue = lastTextNode.nodeValue.slice(0, -1);
+        }
+        if (lastTextNode.nodeValue === "" && pre.childNodes.length > 1) {
+          lastTextNode.parentNode?.removeChild(lastTextNode);
+        }
+      }
+    }
+
+    let targetNode = pre.nextSibling as HTMLElement | null;
+    if (!targetNode) {
+      const newLine = document.createElement("div");
+      newLine.appendChild(document.createElement("br"));
+      pre.parentNode?.insertBefore(newLine, pre.nextSibling);
+      targetNode = newLine;
+    } else if (targetNode.tagName && targetNode.tagName.toLowerCase() === "br") {
+      const next = targetNode.nextSibling;
+      if (!next) {
+        const newLine = document.createElement("div");
+        newLine.appendChild(document.createElement("br"));
+        pre.parentNode?.replaceChild(newLine, targetNode);
+        targetNode = newLine;
+      } else {
+        const newRange = document.createRange();
+        newRange.setStart(next, 0);
+        newRange.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+        emitChangeFromDom();
+        return;
+      }
+    }
+
+    const newRange = document.createRange();
+    if (targetNode.nodeType === Node.TEXT_NODE) {
+      newRange.setStart(targetNode, 0);
+    } else if (targetNode.firstChild) {
+      newRange.setStart(targetNode, 0);
+    } else {
+      newRange.selectNodeContents(targetNode);
+    }
+    newRange.collapse(true);
+
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+    emitChangeFromDom();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey) {
       const key = e.key.toLowerCase();
       if (key === "b") {
         e.preventDefault();
         applyWrapTag("b");
+        return;
       } else if (key === "i") {
         e.preventDefault();
         applyWrapTag("i");
+        return;
       } else if (key === "u") {
         e.preventDefault();
         applyWrapTag("u");
+        return;
+      } else if (e.key === "Enter") {
+        // Atalho Ctrl+Enter / Cmd+Enter: sai do bloco de código imediatamente
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) {
+          const range = sel.getRangeAt(0);
+          const pre = findClosestTag(range.commonAncestorContainer, "pre");
+          if (pre) {
+            e.preventDefault();
+            exitPreBlock(pre, false);
+            return;
+          }
+        }
+      }
+    }
+
+    if (e.key === "Enter") {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const pre = findClosestTag(range.commonAncestorContainer, "pre");
+        if (pre) {
+          if (isCursorOnEmptyLineAtEndOfPre(pre, range)) {
+            // Enter duplo em linha vazia no final do bloco: sai do bloco de código
+            e.preventDefault();
+            exitPreBlock(pre, true);
+            return;
+          }
+        }
+      }
+    }
+
+    if (e.key === "ArrowDown") {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const pre = findClosestTag(range.commonAncestorContainer, "pre");
+        if (pre && range.collapsed && isCursorAtEndOfPre(pre, range)) {
+          e.preventDefault();
+          exitPreBlock(pre, false);
+          return;
+        }
+      }
+    }
+
+    if (e.key === "ArrowUp") {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const pre = findClosestTag(range.commonAncestorContainer, "pre");
+        if (pre && range.collapsed && isCursorAtStartOfPre(pre, range)) {
+          e.preventDefault();
+          const root = editorRef.current;
+          if (pre.previousSibling) {
+            const prev = pre.previousSibling as HTMLElement;
+            const newRange = document.createRange();
+            newRange.selectNodeContents(prev);
+            newRange.collapse(false);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+          } else if (root) {
+            const lineAbove = document.createElement("div");
+            lineAbove.appendChild(document.createElement("br"));
+            root.insertBefore(lineAbove, pre);
+            const newRange = document.createRange();
+            newRange.setStart(lineAbove, 0);
+            newRange.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(newRange);
+            emitChangeFromDom();
+          }
+          return;
+        }
+      }
+    }
+
+    if (e.key === "Backspace") {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const pre = findClosestTag(range.commonAncestorContainer, "pre");
+        if (pre && range.collapsed) {
+          const preText = pre.textContent || "";
+          if (preText.trim() === "" || preText === "\n") {
+            e.preventDefault();
+            const parent = pre.parentNode;
+            if (parent) {
+              const replacement = document.createElement("div");
+              replacement.appendChild(document.createElement("br"));
+              parent.replaceChild(replacement, pre);
+              const newRange = document.createRange();
+              newRange.setStart(replacement, 0);
+              newRange.collapse(true);
+              sel.removeAllRanges();
+              sel.addRange(newRange);
+              emitChangeFromDom();
+            }
+            return;
+          }
+        }
       }
     }
   };
