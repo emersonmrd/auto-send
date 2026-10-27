@@ -27,6 +27,8 @@ export const API_ERROR_CATALOG: Record<string, string> = {
 
   // Canais e descoberta
   "Channel not found": "Canal não encontrado.",
+  "Channel already registered for this profile":
+    "Este canal já está cadastrado para este perfil.",
   "Invalid Telegram Channel Chat ID format (must start with -100 followed by digits)":
     "Formato de ID do canal inválido. O ID deve começar com -100 seguido de números.",
   "Bot is not administrator in the channel":
