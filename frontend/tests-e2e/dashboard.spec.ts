@@ -182,6 +182,19 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
       }),
     );
 
+    await page.route("**/api/v1/broadcasts/b-link-1/edit-lock", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "b-link-1",
+          status: "SCHEDULED",
+          edit_locked_until: new Date(Date.now() + 90000).toISOString(),
+          cancelled: false,
+        }),
+      }),
+    );
+
     await page.route("**/api/v1/broadcasts/b-link-1", async (route) => {
       if (route.request().method() === "PATCH") {
         patchedBody = route.request().postDataJSON();
@@ -202,9 +215,16 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
 
     await page.goto("/");
     await page.getByTitle("Abrir Fila de Agendamentos").click();
-    await page.getByTitle("Editar mensagem e horário de agendamento").click();
 
-    const editField = page.getByRole("textbox", { name: "Texto da Mensagem" });
+    // Issue #58: Não deve existir botão ou ação redundante "Editar" na fila
+    const queueDrawer = page.getByTestId("queue-drawer");
+    await expect(queueDrawer.getByRole("button", { name: "Editar", exact: true })).toHaveCount(0);
+    await expect(page.getByTitle("Editar mensagem e horário de agendamento")).toHaveCount(0);
+
+    // Carrega no compositor via fluxo unificado
+    await page.getByRole("button", { name: "Carregar no Editor" }).click();
+
+    const editField = page.getByRole("textbox", { name: "Mensagem do canal" });
     await expect(editField).toBeVisible();
     // Aparece formatado, sem mostrar tags HTML cruas
     await expect(editField).toContainText("Oferta teste");
@@ -228,6 +248,8 @@ test.describe("Auto-Send E2E Dashboard Flows", () => {
     await linkDialog.getByRole("button", { name: "Salvar Link" }).click();
     await expect(linkDialog).toHaveCount(0);
 
+    // Abre o modal de agendamento do compositor e confirma
+    await page.getByRole("button", { name: "Agendar Mensagem" }).click();
     await page.getByRole("button", { name: "OK — Confirmar Agendamento" }).click();
     expect(patchedBody).toMatchObject({
       text: '<b>Oferta</b> <a href="https://example.com/nova">novo link</a>',
