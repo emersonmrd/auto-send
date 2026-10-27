@@ -249,3 +249,59 @@ def test_telegram_gateway_enriches_large_file_error():
     telegram_gateway.last_error = "Erro original da API local"
     telegram_gateway._enrich_large_file_error(fake_msg, "http://127.0.0.1:8081")
     assert telegram_gateway.last_error == "Erro original da API local"
+
+
+# ============================================================================
+# 6. Reutilização de file_id e Progresso Linear em Multi-Canal
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_multi_channel_video_broadcast_reuses_file_id_and_tracks_progress_linearly(client, monkeypatch):
+    """Garante que o 1º canal faz upload e os canais seguintes reutilizam file_id sem oscilar o progresso."""
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="multi_bot")
+    profile = Profile(id="profile-multi-vid", name="Multi Video Profile", credentials=creds)
+    await profile_repo.save(profile)
+
+    c1 = Channel(id="c-multi-1", profile_id=profile.id, title="Canal 1", chat_id="-1001111111111")
+    c2 = Channel(id="c-multi-2", profile_id=profile.id, title="Canal 2", chat_id="-1002222222222")
+    await channel_repo.save(c1)
+    await channel_repo.save(c2)
+
+    recorded_calls = []
+
+    async def mock_send(bot_token, chat_id, message, progress_callback=None, file_id=None, **kwargs):
+        recorded_calls.append({"chat_id": chat_id, "file_id": file_id})
+        if file_id is None:
+            # Simula progresso do upload físico para o 1º canal
+            if progress_callback:
+                progress_callback(500, 1000)
+                progress_callback(1000, 1000)
+            telegram_gateway.last_uploaded_file_id = "cached_telegram_vid_id"
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", mock_send)
+
+    video_bytes = build_synthetic_mp4(width=720, height=1280, duration=10)
+    data = {
+        "profile_id": profile.id,
+        "target_channel_ids": json.dumps([c1.chat_id, c2.chat_id]),
+        "text": "Multi canal video",
+        "tracking_id": "track-multi-vid",
+    }
+    files = {
+        "media_file": ("video.mp4", video_bytes, "video/mp4"),
+    }
+
+    resp = await client.post("/api/v1/broadcasts", data=data, files=files)
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["status"] == "COMPLETED"
+    assert body["dispatched_count"] == 2
+
+    # Verifica que houve 2 chamadas: a 1ª sem file_id e a 2ª com file_id reaproveitado
+    assert len(recorded_calls) == 2
+    assert recorded_calls[0]["chat_id"] == c1.chat_id
+    assert recorded_calls[0]["file_id"] is None
+    assert recorded_calls[1]["chat_id"] == c2.chat_id
+    assert recorded_calls[1]["file_id"] == "cached_telegram_vid_id"
+

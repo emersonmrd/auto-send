@@ -218,6 +218,7 @@ class AutomationSchedulerService:
             await self.broadcast_repo.save(broadcast)
 
             results: list[ChannelDeliveryResult] = []
+            cached_file_id: Optional[str] = None
             try:
                 for chat_id in broadcast.target_channel_ids:
                     res = await dispatch_broadcast_to_channel(
@@ -225,8 +226,11 @@ class AutomationSchedulerService:
                         bot_token=profile.credentials.token,
                         chat_id=chat_id,
                         message=broadcast,
+                        file_id=cached_file_id,
                     )
                     results.append(res)
+                    if res.delivered and not cached_file_id:
+                        cached_file_id = getattr(self.telegram_gateway, "last_uploaded_file_id", None)
 
                 broadcast.finish_dispatch_with_results(results)
             except Exception as e:

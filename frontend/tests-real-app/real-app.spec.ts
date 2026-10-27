@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
-import { FAKE_TELEGRAM_PORT, RUN_DIR, USES_REAL_TELEGRAM } from "./env";
+import { FAKE_TELEGRAM_PORT, REAL_BOT_TOKEN, REAL_CHANNEL_ID, RUN_DIR, USES_REAL_TELEGRAM } from "./env";
 
 // Fluxos de quem usa o app, contra o backend real servindo o frontend exportado (playwright.real-app.config.ts).
 // Com a API falsa do Telegram, cada fluxo também confere o que chegou ao Telegram.
@@ -17,8 +17,8 @@ type TelegramCall = {
 const FAKE_TOKEN = "123456789:AAFakeTokenForTheRealAppSuite_0001";
 const REJECTED_TOKEN = "100000000:AAFakeTokenTheTelegramRejects_0001";
 const WEBHOOK_TOKEN = "200000000:AAFakeTokenWithAnActiveWebhook_0002";
-const botToken = process.env.E2E_BOT_TOKEN || FAKE_TOKEN;
-const channelId = process.env.E2E_CHANNEL_ID || "-1001234567890";
+const botToken = REAL_BOT_TOKEN || FAKE_TOKEN;
+const channelId = REAL_CHANNEL_ID || "-1001234567890";
 const profileName = `Perfil ${Date.now()}`;
 // PNG 1x1 válido.
 // O backend confere a assinatura (caixa ftyp de um MP4) antes de aceitar o vídeo (#39).

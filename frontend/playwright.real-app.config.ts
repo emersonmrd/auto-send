@@ -33,7 +33,10 @@ const backend = {
     // API falsa: o gateway só usa um TELEGRAM_API_BASE_URL próprio quando há credenciais (servidor local),
     // então a falsa entra no lugar do servidor local com credenciais de mentira.
     ...(USES_REAL_TELEGRAM
-      ? { TELEGRAM_API_ID: "", TELEGRAM_API_HASH: "" }
+      ? {
+          TELEGRAM_API_ID: process.env.TELEGRAM_API_ID || "",
+          TELEGRAM_API_HASH: process.env.TELEGRAM_API_HASH || "",
+        }
       : {
           TELEGRAM_API_ID: "1",
           TELEGRAM_API_HASH: "fake-api-hash",

@@ -1028,11 +1028,14 @@ async def _dispatch_and_record(
     chat_id: str,
     message: BroadcastMessage,
     progress_callback=None,
+    file_id: Optional[str] = None,
 ) -> tuple[ChannelDeliveryResult, Optional[str]]:
     raised_exc = False
     send_kwargs = {}
     if progress_callback is not None:
         send_kwargs["progress_callback"] = progress_callback
+    if file_id is not None:
+        send_kwargs["file_id"] = file_id
     try:
         ok = await gateway.send_broadcast(
             bot_token=bot_token,
@@ -1429,13 +1432,14 @@ async def create_broadcast(
         await broadcast_repo.save(broadcast)
 
         total_channels = len(channels_list)
+        cached_file_id: Optional[str] = None
         for idx, chat_id in enumerate(channels_list):
             channel_cb = None
-            if tracking_id and media_attachment:
-                def channel_progress_cb(sent_bytes: int, total_bytes: int, current_idx=idx):
+            if tracking_id and media_attachment and not cached_file_id:
+                def channel_progress_cb(sent_bytes: int, total_bytes: int):
                     if tracking_id in upload_progress_tracker:
                         ratio = (sent_bytes / total_bytes) if total_bytes > 0 else 0
-                        pct = int(((current_idx + ratio) / total_channels) * 100)
+                        pct = int(ratio * 100)
                         upload_progress_tracker[tracking_id]["percent"] = min(100, max(0, pct))
                         upload_progress_tracker[tracking_id]["sent_bytes"] = sent_bytes
                         upload_progress_tracker[tracking_id]["total_bytes"] = total_bytes
@@ -1452,10 +1456,13 @@ async def create_broadcast(
                 chat_id=chat_id,
                 message=broadcast,
                 progress_callback=channel_cb,
+                file_id=cached_file_id,
             )
             delivery_results.append(res)
             if res.delivered:
                 dispatched_count += 1
+                if not cached_file_id:
+                    cached_file_id = getattr(telegram_gateway, "last_uploaded_file_id", None)
             elif legacy_err:
                 errors.append(legacy_err)
 
