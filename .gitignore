@@ -67,6 +67,7 @@ uploads/
 temp/
 media_temp/
 temp_media/
+tests_media/
 *.mp4
 *.mov
 *.png
