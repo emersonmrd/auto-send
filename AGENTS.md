@@ -315,6 +315,7 @@ Referência: https://ailair.akitaonrails.com/pt-br/workflow/ — um agente faz a
 - **Com material para uma versão:** `... then run the release skill`
 - **Fila só de Dependabot:** `run pr-bump and release`
 - `pr-audit` e `iss-audit` terminam com uma recomendação. Quando o usuário pediu a linha completa, o agente segue a recomendação e a declara, sem perguntar; só pergunta se houver escolha de produto, mudança de contrato público ou risco irreversível (correção do usuário em 2026-10-22: "pode fazer, pq vc precisa de mim?"). `github-resolution` só trabalha nos itens recomendados ou aprovados; com mais de três tickets resolvidos na sessão, roda `pr-post-audit`; toda sessão fecha com `kaizen`.
+- **Sugestão proativa da linha de comando:** Ao concluir um ciclo/PR, apresentar handoff ou perguntar como prosseguir, o agente **deve sempre sugerir prontamente** a linha de comando padrão `run pr-audit and iss-audit, then run github-resolution`, permitindo ao usuário acionar a próxima etapa sem precisar memorizar ou redigitar a cadeia de skills (kaizen de 2026-10-26).
 
 ## 2. Quando perguntar ao usuário
 - Pergunte só o que for decisão de produto ou de risco: escopo ambíguo, mudança de contrato público, ação destrutiva ou irreversível fora da branch.
