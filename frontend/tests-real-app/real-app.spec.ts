@@ -113,20 +113,27 @@ test.describe.serial("aplicação real", () => {
   });
 
   test("envia vídeo pelo sendVideo com streaming", async ({ page }) => {
-    // Com o Telegram real, um .mp4 inválido seria recusado; o vídeo real fica para o exploratório.
-    test.skip(USES_REAL_TELEGRAM, "precisa de um vídeo válido para o Telegram real");
+    const realVideoPath = path.resolve(process.cwd(), "..", "tests_media", "WhatsApp Video 2026-10-19 at 23.00.07.mp4");
+    const hasRealVideo = fs.existsSync(realVideoPath);
+    if (USES_REAL_TELEGRAM && !hasRealVideo) {
+      test.skip(true, "precisa de um vídeo válido para o Telegram real");
+    }
+    const videoBuffer = USES_REAL_TELEGRAM && hasRealVideo ? fs.readFileSync(realVideoPath) : FAKE_MP4;
+
     await openProfile(page);
     await page
       .locator('input[type="file"]')
-      .setInputFiles({ name: "video.mp4", mimeType: "video/mp4", buffer: FAKE_MP4 });
+      .setInputFiles({ name: "video.mp4", mimeType: "video/mp4", buffer: videoBuffer });
     await page.getByPlaceholder("Escreva a mensagem do canal").fill("Legenda do vídeo");
     await page.getByLabel("Enviar Agora").click();
 
-    await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
-    const [call] = await telegramCalls(page);
-    expect(call.method).toBe("sendVideo");
-    expect(call.fields).toMatchObject({ chat_id: channelId, caption: "Legenda do vídeo", supports_streaming: "true" });
-    expect(Object.keys(call.files)).toEqual(["video"]);
+    await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 60_000 });
+    if (!USES_REAL_TELEGRAM) {
+      const [call] = await telegramCalls(page);
+      expect(call.method).toBe("sendVideo");
+      expect(call.fields).toMatchObject({ chat_id: channelId, caption: "Legenda do vídeo", supports_streaming: "true" });
+      expect(Object.keys(call.files)).toEqual(["video"]);
+    }
   });
 
   test("agenda e cancela sem nada chegar ao Telegram", async ({ page }) => {
