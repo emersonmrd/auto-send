@@ -61,13 +61,13 @@ test.describe("Modal de configuração da Telegram API para uploads até 2 GB (i
 
     // 3. Preenche credenciais e salva
     await dialog.getByLabel("API ID").fill("12345678");
-    await dialog.getByLabel("API Hash").fill("0123456789abcdef0123456789abcdef");
+    await dialog.getByLabel("API Hash").fill("test-fake-api-hash");
     await dialog.getByRole("button", { name: "Salvar Credenciais" }).click();
 
     await expect(dialog).toHaveCount(0);
     expect(savedPayload).toEqual({
       api_id: "12345678",
-      api_hash: "0123456789abcdef0123456789abcdef",
+      api_hash: "test-fake-api-hash",
     });
   });
 

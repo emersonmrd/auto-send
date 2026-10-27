@@ -23,18 +23,18 @@ def test_save_and_load_telegram_credentials_in_data_dir(tmp_path: Path, monkeypa
     assert not env_path.exists()
 
     # Salva credenciais
-    save_telegram_credentials_to_data_dir("9876543", "abcdef0123456789abcdef0123456789")
+    save_telegram_credentials_to_data_dir("9876543", "test-fake-api-hash")
     assert env_path.exists()
     content = env_path.read_text(encoding="utf-8")
     assert "TELEGRAM_API_ID=9876543" in content
-    assert "TELEGRAM_API_HASH=abcdef0123456789abcdef0123456789" in content
+    assert "TELEGRAM_API_HASH=test-fake-api-hash" in content
 
     # Carrega credenciais para o os.environ
     loaded_id, loaded_hash = load_telegram_credentials_from_data_dir()
     assert loaded_id == "9876543"
-    assert loaded_hash == "abcdef0123456789abcdef0123456789"
+    assert loaded_hash == "test-fake-api-hash"
     assert os.getenv("TELEGRAM_API_ID") == "9876543"
-    assert os.getenv("TELEGRAM_API_HASH") == "abcdef0123456789abcdef0123456789"
+    assert os.getenv("TELEGRAM_API_HASH") == "test-fake-api-hash"
 
 
 @pytest.mark.asyncio
@@ -70,7 +70,7 @@ async def test_post_telegram_api_config_endpoint_saves_and_updates_limit(tmp_pat
     async with AsyncClient(transport=transport, base_url="http://localhost") as client:
         resp = await client.post(
             "/api/v1/system/telegram-api-config",
-            json={"api_id": "11223344", "api_hash": "a1b2c3d4e5f60718293a4b5c6d7e8f90"},
+            json={"api_id": "11223344", "api_hash": "test-fake-api-hash"},
         )
 
     assert resp.status_code == 200
@@ -85,4 +85,16 @@ async def test_post_telegram_api_config_endpoint_saves_and_updates_limit(tmp_pat
     assert env_file.exists()
     assert "TELEGRAM_API_ID=11223344" in env_file.read_text(encoding="utf-8")
     assert os.getenv("TELEGRAM_API_ID") == "11223344"
-    assert os.getenv("TELEGRAM_API_HASH") == "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    assert os.getenv("TELEGRAM_API_HASH") == "test-fake-api-hash"
+
+
+@pytest.mark.asyncio
+async def test_post_telegram_api_config_endpoint_rejects_null_bytes_with_422():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
+        resp = await client.post(
+            "/api/v1/system/telegram-api-config",
+            json={"api_id": "\x00invalid", "api_hash": "valid-hash"},
+        )
+
+    assert resp.status_code == 422

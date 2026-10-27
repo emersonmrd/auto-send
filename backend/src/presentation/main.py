@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import parse_host_header
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.domain.broadcast.media_format import classify_media
 from src.domain.broadcast.broadcast_message import (
@@ -274,6 +274,13 @@ class TelegramApiConfigResponse(BaseModel):
 class UpdateTelegramApiConfigRequest(BaseModel):
     api_id: str = Field(..., description="API ID from my.telegram.org")
     api_hash: str = Field(..., description="API Hash from my.telegram.org")
+
+    @field_validator("api_id", "api_hash")
+    @classmethod
+    def validate_characters(cls, v: str) -> str:
+        if "\x00" in v or "\r" in v or "\n" in v:
+            raise ValueError("Value cannot contain null bytes or control characters")
+        return v.strip()
 
 class ProfileCreateRequest(BaseModel):
     name: str
