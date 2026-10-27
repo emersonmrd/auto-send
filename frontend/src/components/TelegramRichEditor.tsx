@@ -9,6 +9,7 @@ import {
   Italic,
   Link2,
   Quote,
+  RemoveFormatting,
   Strikethrough,
   Trash2,
   Underline,
@@ -164,7 +165,7 @@ export function serializeDomToTelegramHtml(root: Node): string {
 
   const serializeNode = (node: Node): string => {
     if (node.nodeType === Node.TEXT_NODE) {
-      return escapeHtmlText((node.nodeValue || "").replace(/\u00a0/g, " "));
+      return escapeHtmlText((node.nodeValue || "").replace(/\u00a0/g, " ").replace(/\u200b/gi, ""));
     }
     if (node.nodeType !== Node.ELEMENT_NODE) {
       return "";
@@ -459,6 +460,122 @@ export function TelegramRichEditor({
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isEditingExistingLink, setIsEditingExistingLink] = useState(false);
 
+  const [activeStyles, setActiveStyles] = useState({
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    code: false,
+    pre: false,
+    blockquote: false,
+    spoiler: false,
+    link: false,
+  });
+
+  const updateActiveStyles = () => {
+    const el = editorRef.current;
+    if (!el) return;
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) {
+      setActiveStyles({
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+        code: false,
+        pre: false,
+        blockquote: false,
+        spoiler: false,
+        link: false,
+      });
+      return;
+    }
+
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) {
+      setActiveStyles({
+        bold: false,
+        italic: false,
+        underline: false,
+        strike: false,
+        code: false,
+        pre: false,
+        blockquote: false,
+        spoiler: false,
+        link: false,
+      });
+      return;
+    }
+
+    const newStyles = {
+      bold: false,
+      italic: false,
+      underline: false,
+      strike: false,
+      code: false,
+      pre: false,
+      blockquote: false,
+      spoiler: false,
+      link: false,
+    };
+
+    let curr: Node | null = range.commonAncestorContainer;
+    if (curr === el && sel.anchorNode && el.contains(sel.anchorNode)) {
+      curr = sel.anchorNode;
+    }
+
+    while (curr && curr !== el) {
+      if (curr.nodeType === Node.ELEMENT_NODE) {
+        const elem = curr as HTMLElement;
+        const tag = elem.tagName.toLowerCase();
+        if (tag === "b" || tag === "strong") newStyles.bold = true;
+        if (tag === "i" || tag === "em") newStyles.italic = true;
+        if (tag === "u" || tag === "ins") newStyles.underline = true;
+        if (tag === "s" || tag === "strike" || tag === "del") newStyles.strike = true;
+        if (tag === "pre") newStyles.pre = true;
+        if (tag === "code" && !newStyles.pre) newStyles.code = true;
+        if (tag === "blockquote") newStyles.blockquote = true;
+        if (
+          tag === "tg-spoiler" ||
+          elem.getAttribute("data-tg-spoiler") === "true" ||
+          elem.classList.contains("tg-spoiler")
+        ) {
+          newStyles.spoiler = true;
+        }
+        if (tag === "a") newStyles.link = true;
+      }
+      curr = curr.parentNode;
+    }
+
+    setActiveStyles((prev) => {
+      if (
+        prev.bold === newStyles.bold &&
+        prev.italic === newStyles.italic &&
+        prev.underline === newStyles.underline &&
+        prev.strike === newStyles.strike &&
+        prev.code === newStyles.code &&
+        prev.pre === newStyles.pre &&
+        prev.blockquote === newStyles.blockquote &&
+        prev.spoiler === newStyles.spoiler &&
+        prev.link === newStyles.link
+      ) {
+        return prev;
+      }
+      return newStyles;
+    });
+  };
+
+  useEffect(() => {
+    const handleSelection = () => {
+      updateActiveStyles();
+    };
+    document.addEventListener("selectionchange", handleSelection);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelection);
+    };
+  }, []);
+
   // Sincroniza value externo com o DOM do contentEditable
   useEffect(() => {
     const el = editorRef.current;
@@ -466,6 +583,7 @@ export function TelegramRichEditor({
     if (value === lastSerializedRef.current) return;
     lastSerializedRef.current = value;
     el.innerHTML = telegramHtmlToEditableHtml(value);
+    updateActiveStyles();
   }, [value]);
 
   const emitChangeFromDom = () => {
@@ -474,6 +592,7 @@ export function TelegramRichEditor({
     const serialized = serializeDomToTelegramHtml(el);
     lastSerializedRef.current = serialized;
     onChange(serialized);
+    updateActiveStyles();
   };
 
   const findClosestTag = (
@@ -563,12 +682,16 @@ export function TelegramRichEditor({
         newRange.setStart(wrapper, 0);
         newRange.collapse(true);
         sel.addRange(newRange);
-      } else if (el.textContent && el.textContent.trim()) {
-        const allRange = document.createRange();
-        allRange.selectNodeContents(el);
-        const contents = allRange.extractContents();
-        wrapper.appendChild(contents);
-        el.appendChild(wrapper);
+      } else {
+        // Sem seleção: insere tag no ponto do cursor com nó de texto de largura zero para digitação imediata
+        const placeholder = document.createTextNode("\u200B");
+        wrapper.appendChild(placeholder);
+        range.insertNode(wrapper);
+        sel.removeAllRanges();
+        const newRange = document.createRange();
+        newRange.setStart(placeholder, 1);
+        newRange.collapse(true);
+        sel.addRange(newRange);
       }
     }
 
@@ -695,6 +818,117 @@ export function TelegramRichEditor({
     editingAnchorRef.current = null;
     savedRangeRef.current = null;
   };
+
+  const handleClearFormatting = () => {
+    const el = editorRef.current;
+    if (!el) return;
+    el.focus();
+
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return;
+
+    const formattingTagNames = new Set([
+      "b",
+      "strong",
+      "i",
+      "em",
+      "u",
+      "ins",
+      "s",
+      "strike",
+      "del",
+      "code",
+      "pre",
+      "blockquote",
+      "span",
+      "a",
+    ]);
+
+    if (!range.collapsed && range.toString()) {
+      const text = range.toString();
+      range.deleteContents();
+
+      const fragment = document.createDocumentFragment();
+      const lines = text.split("\n");
+      lines.forEach((line, idx) => {
+        if (line) {
+          fragment.appendChild(document.createTextNode(line));
+        }
+        if (idx < lines.length - 1) {
+          fragment.appendChild(document.createElement("br"));
+        }
+      });
+      range.insertNode(fragment);
+
+      let curr: Node | null = range.commonAncestorContainer;
+      while (curr && curr !== el) {
+        if (curr.nodeType === Node.ELEMENT_NODE) {
+          const elem = curr as HTMLElement;
+          const tag = elem.tagName.toLowerCase();
+          const isSpoiler =
+            tag === "span" && elem.getAttribute("data-tg-spoiler") === "true";
+          if (formattingTagNames.has(tag) || isSpoiler) {
+            const parent = elem.parentNode;
+            if (parent) {
+              while (elem.firstChild) {
+                parent.insertBefore(elem.firstChild, elem);
+              }
+              parent.removeChild(elem);
+            }
+          }
+        }
+        curr = curr.parentNode;
+      }
+
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_ELEMENT);
+      const toRemove: Element[] = [];
+      while (walker.nextNode()) {
+        const item = walker.currentNode as HTMLElement;
+        const tag = item.tagName.toLowerCase();
+        if (
+          formattingTagNames.has(tag) &&
+          !item.textContent?.trim() &&
+          !item.querySelector("br")
+        ) {
+          toRemove.push(item);
+        }
+      }
+      toRemove.forEach((item) => item.parentNode?.removeChild(item));
+    } else {
+      let curr: Node | null = range.commonAncestorContainer;
+      while (curr && curr !== el) {
+        if (curr.nodeType === Node.ELEMENT_NODE) {
+          const elem = curr as HTMLElement;
+          const tag = elem.tagName.toLowerCase();
+          const isSpoiler =
+            tag === "span" && elem.getAttribute("data-tg-spoiler") === "true";
+          if (formattingTagNames.has(tag) || isSpoiler) {
+            const parent = elem.parentNode;
+            if (parent) {
+              while (elem.firstChild) {
+                parent.insertBefore(elem.firstChild, elem);
+              }
+              parent.removeChild(elem);
+              break;
+            }
+          }
+        }
+        curr = curr.parentNode;
+      }
+    }
+
+    emitChangeFromDom();
+    updateActiveStyles();
+  };
+
+  const getToolbarButtonClass = (isActive: boolean) =>
+    `p-1 rounded transition border ${
+      isActive
+        ? "bg-[#5288c1]/30 text-[#90caf9] font-medium border-[#5288c1]/50 shadow-sm"
+        : "border-transparent text-gray-300 hover:text-white hover:bg-[#17212b]"
+    }`;
 
   const isCursorAtEndOfPre = (pre: HTMLElement, range: Range): boolean => {
     const testRange = document.createRange();
@@ -958,7 +1192,8 @@ export function TelegramRichEditor({
         <button
           type="button"
           onClick={() => applyWrapTag("b")}
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.bold)}
+          aria-pressed={activeStyles.bold ? "true" : "false"}
           title="Negrito (Ctrl+B)"
           aria-label="Negrito"
         >
@@ -967,7 +1202,8 @@ export function TelegramRichEditor({
         <button
           type="button"
           onClick={() => applyWrapTag("i")}
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.italic)}
+          aria-pressed={activeStyles.italic ? "true" : "false"}
           title="Itálico (Ctrl+I)"
           aria-label="Itálico"
         >
@@ -976,7 +1212,8 @@ export function TelegramRichEditor({
         <button
           type="button"
           onClick={() => applyWrapTag("u")}
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.underline)}
+          aria-pressed={activeStyles.underline ? "true" : "false"}
           title="Sublinhado (Ctrl+U)"
           aria-label="Sublinhado"
         >
@@ -985,7 +1222,8 @@ export function TelegramRichEditor({
         <button
           type="button"
           onClick={() => applyWrapTag("s")}
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.strike)}
+          aria-pressed={activeStyles.strike ? "true" : "false"}
           title="Riscado"
           aria-label="Riscado"
         >
@@ -998,7 +1236,8 @@ export function TelegramRichEditor({
               class: "font-mono bg-[#17212b] px-1 rounded text-[#90caf9]",
             })
           }
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.code)}
+          aria-pressed={activeStyles.code ? "true" : "false"}
           title="Código inline"
           aria-label="Código inline"
         >
@@ -1012,7 +1251,8 @@ export function TelegramRichEditor({
                 "font-mono bg-[#17212b] p-1.5 rounded text-xs text-[#90caf9] my-0.5",
             })
           }
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.pre)}
+          aria-pressed={activeStyles.pre ? "true" : "false"}
           title="Bloco de código"
           aria-label="Bloco de código"
         >
@@ -1026,7 +1266,8 @@ export function TelegramRichEditor({
                 "border-l-2 border-[#5288c1] pl-2 my-0.5 italic text-gray-200",
             })
           }
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.blockquote)}
+          aria-pressed={activeStyles.blockquote ? "true" : "false"}
           title="Citação"
           aria-label="Citação"
         >
@@ -1041,7 +1282,8 @@ export function TelegramRichEditor({
                 "bg-gray-600/50 border border-dashed border-gray-400/60 rounded px-1",
             })
           }
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-white transition"
+          className={getToolbarButtonClass(activeStyles.spoiler)}
+          aria-pressed={activeStyles.spoiler ? "true" : "false"}
           title="Spoiler"
           aria-label="Spoiler"
         >
@@ -1050,11 +1292,22 @@ export function TelegramRichEditor({
         <button
           type="button"
           onClick={openLinkModalFromSelection}
-          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-[#5288c1] transition"
+          className={getToolbarButtonClass(activeStyles.link)}
+          aria-pressed={activeStyles.link ? "true" : "false"}
           title="Inserir ou editar link no texto"
           aria-label="Inserir ou editar link no texto"
         >
           <Link2 className="w-3.5 h-3.5" />
+        </button>
+        <div className="h-3.5 w-px bg-gray-700/60 mx-1" aria-hidden="true" />
+        <button
+          type="button"
+          onClick={handleClearFormatting}
+          className="p-1 rounded hover:bg-[#17212b] text-gray-300 hover:text-rose-400 transition border border-transparent"
+          title="Limpar formatação"
+          aria-label="Limpar formatação"
+        >
+          <RemoveFormatting className="w-3.5 h-3.5" />
         </button>
       </div>
 
@@ -1079,7 +1332,13 @@ export function TelegramRichEditor({
           // Mantém o atributo placeholder para seletores getByPlaceholder existentes
           {...({ placeholder } as React.HTMLAttributes<HTMLDivElement>)}
           onInput={emitChangeFromDom}
-          onClick={handleEditorClick}
+          onClick={(e) => {
+            handleEditorClick(e);
+            updateActiveStyles();
+          }}
+          onKeyUp={updateActiveStyles}
+          onMouseUp={updateActiveStyles}
+          onFocus={updateActiveStyles}
           onKeyDown={handleKeyDown}
           style={{ minHeight: `${minRows * 1.5}rem` }}
           className="w-full bg-transparent outline-none text-sm text-gray-100 whitespace-pre-wrap break-words leading-relaxed"
