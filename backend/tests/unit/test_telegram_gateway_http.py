@@ -1243,5 +1243,49 @@ async def test_dispatch_broadcast_to_channel_maps_all_telegram_failure_categorie
     assert secret_token not in (gateway_net.last_error or "")
 
 
+def test_classify_telegram_error_upgraded_group():
+    from src.infrastructure.telegram_gateway_http import classify_telegram_error
+    from src.domain.broadcast.broadcast_message import DeliveryFailureCategory
+    cat, desc = classify_telegram_error(400, "Bad Request: group chat was upgraded to a supergroup, migrate to chat_id -1001234567890")
+    assert cat == DeliveryFailureCategory.BOT_NOT_IN_CHAT
+    assert "group chat was upgraded" in desc
+
+
+def test_translate_telegram_error_pt_catalog():
+    from src.infrastructure.telegram_gateway_http import translate_telegram_error_pt, TELEGRAM_ERROR_TRANSLATIONS_PT
+
+    assert len(TELEGRAM_ERROR_TRANSLATIONS_PT) >= 14
+    for pattern, text in TELEGRAM_ERROR_TRANSLATIONS_PT:
+        assert text and len(text) > 10
+
+    cases = [
+        ("Bad Request: chat not found", "Canal ou grupo não encontrado"),
+        ("Bad Request: group chat was upgraded to a supergroup", "O grupo foi promovido para supergrupo"),
+        ("Bad Request: have no rights to send a message", "não tem permissão"),
+        ("Bad Request: not enough rights to send text messages to the chat", "não tem permissão"),
+        ("Forbidden: bot was blocked by the user", "bloqueado pelo usuário"),
+        ("Forbidden: bot was kicked from the channel chat", "não é membro ou foi removido"),
+        ("Bad Request: message is too long", "limite de caracteres"),
+        ("Bad Request: message caption is too long", "legenda da mídia"),
+        ("Bad Request: message text is empty", "não pode estar vazio"),
+        ("Bad Request: BUTTON_URL_INVALID", "URL informada para o botão é inválida"),
+        ("Bad Request: can't parse entities: Character '(' is reserved", "formatação HTML ou Markdown"),
+        ("Bad Request: wrong file identifier/HTTP URL specified", "carregar ou processar o arquivo de mídia"),
+        ("Forbidden: user is deactivated", "desativado"),
+        ("Unauthorized", "Token do bot inválido"),
+        ("Too Many Requests: retry after 25", "Limite de requisições"),
+    ]
+
+    for raw, expected_substr in cases:
+        translated = translate_telegram_error_pt(raw)
+        assert translated is not None, f"Failed to translate: {raw}"
+        assert expected_substr.lower() in translated.lower()
+
+    assert translate_telegram_error_pt(None) is None
+    assert translate_telegram_error_pt("") is None
+    assert translate_telegram_error_pt("An unknown upstream custom error") is None
+
+
+
 
 
