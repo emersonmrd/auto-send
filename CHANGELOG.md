@@ -5,15 +5,24 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+
+## [0.6.0] - 2026-10-27
+
 ### Added
 - Modal interativo e persistência de credenciais da Telegram API (`TELEGRAM_API_ID` e `TELEGRAM_API_HASH`) em `%LOCALAPPDATA%\Auto-Send\.env` (mantido entre versões e pastas no Windows), permitindo configurar ou alterar credenciais a qualquer momento e ativando o servidor local para uploads de até 2 GB (#56).
+- Presets e modelos de mensagens reutilizáveis por perfil: criação, carregamento com um clique no compositor, exclusão com modal de confirmação acessível e listagem ordenada (#63).
+- Identidade visual proprietária: ícone SVG vetorial e favicon com tema do Robô Carteiro (#62).
+- Melhorias na barra do editor: destaque dos botões correspondentes aos estilos ativos sob o cursor e botão para limpar formatação (#61).
 - Testes automatizados permanentes para os 3 cenários do pacote Windows portátil: persistência de dados em `%LOCALAPPDATA%\Auto-Send` entre extrações de releases, endpoint `POST /api/v1/system/open-data-dir` e fluxo Playwright de impacto na exclusão de canal com agendamentos (#65).
 - Testes automatizados permanentes para o pipeline de envio de vídeos com streaming, leitura de metadados reais de 7 MB e 356 MB (duração e resolução vertical 4K) e ciclo de vida com descarte garantido de arquivos temporários em envio e cancelamento (#64).
 
 ### Changed
 - Remoção do botão externo redundante de inserção de link no compositor, centralizando a formatação de hiperlinks exclusivamente na barra do editor e diferenciando a seção de botão físico abaixo da mensagem (Inline Keyboard) (#59).
+- Remoção do modal redundante de edição na fila de agendamentos, unificando todo o fluxo de edição no compositor principal (#58).
 
 ### Fixed
+- Mensagens amigáveis em português para erros retornados pela API do Telegram no catálogo da interface desktop (#57).
+- Navegação em blocos de código do editor: suporte a teclas direcionais (ArrowUp / ArrowDown) e Enter / Ctrl+Enter para criar linhas e sair do bloco (#60).
 - Prevenção de cadastro de canais duplicados por perfil no backend (`409 Conflict`) e debounce com feedback de loading em botões de ação do frontend (#54).
 - Resolução de violação de strict mode no seletor do botão 'Salvar' da suíte Playwright no modal de link inline do dashboard (#77).
 
