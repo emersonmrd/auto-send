@@ -67,6 +67,13 @@ if not defined AUTOSEND_DATA_DIR (
 if not exist "%AUTOSEND_DATA_DIR%\media_temp" mkdir "%AUTOSEND_DATA_DIR%\media_temp"
 if not exist "%AUTOSEND_DATA_DIR%\telegram_bot_api" mkdir "%AUTOSEND_DATA_DIR%\telegram_bot_api"
 
+rem Carrega variaveis do .env persistido em %AUTOSEND_DATA_DIR%\.env se existir
+if exist "%AUTOSEND_DATA_DIR%\.env" (
+    for /f "usebackq tokens=1,* delims==" %%a in ("%AUTOSEND_DATA_DIR%\.env") do (
+        if not "%%a"=="" if not "%%b"=="" set "%%a=%%b"
+    )
+)
+
 set "TELEGRAM_BOT_API_BIN=%CD%\bin\telegram-bot-api.exe"
 set "TELEGRAM_BOT_API_DIR=%AUTOSEND_DATA_DIR%\telegram_bot_api"
 set "STATIC_DIR=%CD%\app\static"

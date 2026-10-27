@@ -11,6 +11,7 @@ import {
   BroadcastHistoryItem,
   ChannelDeliveryResult,
   EditLockResponse,
+  TelegramApiConfigResponse,
 } from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
@@ -73,6 +74,7 @@ import {
   Edit,
   RefreshCw,
   Info,
+  Server,
 } from "lucide-react";
 
 export default function Home() {
@@ -106,6 +108,13 @@ export default function Home() {
     url: string;
   } | null>(null);
   const [existingMediaRemoved, setExistingMediaRemoved] = useState(false);
+
+  // Configurações Telegram API (2 GB) (#56)
+  const [telegramApiConfig, setTelegramApiConfig] = useState<TelegramApiConfigResponse | null>(null);
+  const [showTelegramApiModal, setShowTelegramApiModal] = useState(false);
+  const [apiIdInput, setApiIdInput] = useState("");
+  const [apiHashInput, setApiHashInput] = useState("");
+  const [isSavingTelegramApi, setIsSavingTelegramApi] = useState(false);
 
   // Inserção de Link no Texto da Mensagem (Inline Hyperlink)
   const composerEditorRef = useRef<TelegramRichEditorHandle | null>(null);
@@ -339,12 +348,22 @@ export default function Home() {
     let ignore = false;
     async function load() {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/v1/profiles`);
-        if (res.ok && !ignore) {
+        const [res, configRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/v1/profiles`).catch(() => null),
+          fetch(`${API_BASE_URL}/api/v1/system/telegram-api-config`).catch(() => null),
+        ]);
+        if (res && res.ok && !ignore) {
           const data = await res.json();
           setProfiles(data);
           if (data.length > 0) {
             setSelectedProfile((prev) => prev || data[0]);
+          }
+        }
+        if (configRes && configRes.ok && !ignore) {
+          const configData: TelegramApiConfigResponse = await configRes.json();
+          setTelegramApiConfig(configData);
+          if (configData.api_id) {
+            setApiIdInput(configData.api_id);
           }
         }
       } catch {
@@ -356,6 +375,40 @@ export default function Home() {
       ignore = true;
     };
   }, []);
+
+  const handleSaveTelegramApiConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSavingTelegramApi) return;
+    setIsSavingTelegramApi(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/system/telegram-api-config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_id: apiIdInput.trim(),
+          api_hash: apiHashInput.trim(),
+        }),
+      });
+      if (res.ok) {
+        const data: TelegramApiConfigResponse = await res.json();
+        setTelegramApiConfig(data);
+        setShowTelegramApiModal(false);
+        showToast(
+          data.configured
+            ? "Credenciais salvas! Servidor local ativado (uploads até 2 GB)."
+            : "Configurações atualizadas.",
+          "success",
+        );
+      } else {
+        const err = await res.json().catch(() => null);
+        showToast(extractApiError(err, "Erro ao salvar credenciais"), "error");
+      }
+    } catch {
+      showToast("Falha de conexão com a API", "error");
+    } finally {
+      setIsSavingTelegramApi(false);
+    }
+  };
 
   const formatChannelDeliveryList = useCallback(
     (results?: ChannelDeliveryResult[] | null): string => {
@@ -459,6 +512,9 @@ export default function Home() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > TELEGRAM_MAX_STANDARD_SIZE_BYTES && !telegramApiConfig?.configured) {
+        setShowTelegramApiModal(true);
+      }
       if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
       setMediaFile(file);
       setMediaPreviewUrl(URL.createObjectURL(file));
@@ -1832,7 +1888,27 @@ export default function Home() {
             })
           )}
         </div>
-        <div className="p-3 border-t border-[#242f3d]">
+        <div className="p-3 border-t border-[#242f3d] flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={() => setShowTelegramApiModal(true)}
+            className="w-full text-xs text-gray-300 hover:text-white bg-[#202b36] hover:bg-[#2b5278] px-3 py-2 rounded-lg transition flex items-center justify-between gap-2 cursor-pointer"
+            title="Configurações Telegram API (Uploads até 2 GB)"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <Server className="w-3.5 h-3.5 text-[#5288c1] shrink-0" />
+              <span className="truncate">Telegram API</span>
+            </div>
+            <span
+              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                telegramApiConfig?.configured
+                  ? "bg-green-950/80 text-green-300 border border-green-600/40"
+                  : "bg-gray-800 text-gray-400 border border-gray-700"
+              }`}
+            >
+              {telegramApiConfig?.configured ? "2 GB Ativo" : "50 MB"}
+            </span>
+          </button>
           <button
             type="button"
             onClick={handleOpenDataDir}
@@ -3444,6 +3520,119 @@ export default function Home() {
               >
                 <Check className="w-4 h-4" />
                 {isUpdatingScheduled ? "Salvando..." : "OK — Confirmar Agendamento"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: CONFIGURAÇÃO TELEGRAM API (UPLOAD ATÉ 2 GB) (#56) */}
+      {showTelegramApiModal && (
+        <div
+          role="dialog"
+          aria-label="Configurações da Telegram API"
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+        >
+          <form
+            onSubmit={handleSaveTelegramApiConfig}
+            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150"
+          >
+            <div className="flex items-start justify-between gap-3 border-b border-gray-700/60 pb-3">
+              <div className="flex items-center gap-2">
+                <Server className="w-5 h-5 text-[#5288c1]" />
+                <h3 className="text-base font-semibold text-gray-100">
+                  Configurações da Telegram API
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTelegramApiModal(false)}
+                className="text-gray-400 hover:text-white transition p-1"
+                title="Fechar"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-[#242f3d]/60 border border-gray-700/50 rounded-lg p-3 text-xs text-gray-300 space-y-2 leading-relaxed">
+              <p>
+                Para enviar vídeos e fotos acima de <strong>50 MB (até 2 GB)</strong>, o Telegram
+                exige as credenciais da sua aplicação gratuita obtidas em{" "}
+                <a
+                  href="https://my.telegram.org"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[#64b5f6] underline hover:text-[#90caf9] font-medium inline-flex items-center gap-1"
+                >
+                  my.telegram.org <ExternalLink className="w-3 h-3" />
+                </a>
+                .
+              </p>
+              <p className="text-[11px] text-gray-400">
+                Faça login com seu telefone no Telegram, acesse <em>API development tools</em> e crie sua
+                aplicação para obter o <strong>API ID</strong> e o <strong>API Hash</strong>.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="field-telegram-api-id" className="text-xs text-gray-300 block mb-1">
+                  API ID
+                </label>
+                <input
+                  id="field-telegram-api-id"
+                  type="text"
+                  required
+                  placeholder="Ex: 12345678"
+                  value={apiIdInput}
+                  onChange={(e) => setApiIdInput(e.target.value)}
+                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="field-telegram-api-hash" className="text-xs text-gray-300 block mb-1">
+                  API Hash
+                </label>
+                <input
+                  id="field-telegram-api-hash"
+                  type="password"
+                  required
+                  placeholder={telegramApiConfig?.has_api_hash ? "••••••••••••••••••••••••••••••••" : "Ex: 0123456789abcdef..."}
+                  value={apiHashInput}
+                  onChange={(e) => setApiHashInput(e.target.value)}
+                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                />
+              </div>
+            </div>
+
+            <div className="text-[11px] text-gray-400 bg-[#0e1621] p-2.5 rounded-lg border border-gray-800 space-y-1">
+              <div className="flex items-center justify-between text-gray-300">
+                <span>Status do upload:</span>
+                <span className={telegramApiConfig?.configured ? "text-green-400 font-medium" : "text-amber-400 font-medium"}>
+                  {telegramApiConfig?.configured ? "Servidor Local Ativo (até 2.000 MB)" : "API Pública (até 50 MB)"}
+                </span>
+              </div>
+              <p className="text-[10px] text-gray-500 truncate" title={telegramApiConfig?.env_file_path || ""}>
+                Salvo em: {telegramApiConfig?.env_file_path || "%LOCALAPPDATA%\\Auto-Send\\.env"} (preservado entre versões).
+              </p>
+            </div>
+
+            <div className="pt-2 border-t border-gray-800 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowTelegramApiModal(false)}
+                className="px-3 py-2 text-xs text-gray-400 hover:text-white transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isSavingTelegramApi}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition disabled:opacity-50"
+              >
+                {isSavingTelegramApi && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                {isSavingTelegramApi ? "Salvando..." : "Salvar Credenciais"}
               </button>
             </div>
           </form>

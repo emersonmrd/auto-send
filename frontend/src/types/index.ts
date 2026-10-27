@@ -9,6 +9,19 @@ export interface OpenDataDirResponse {
   opened: boolean;
 }
 
+export interface TelegramApiConfigResponse {
+  configured: boolean;
+  api_id: string;
+  has_api_hash: boolean;
+  max_upload_mb: number;
+  env_file_path: string;
+}
+
+export interface UpdateTelegramApiConfigRequest {
+  api_id: string;
+  api_hash: string;
+}
+
 export interface Profile {
   id: string;
   name: string;
