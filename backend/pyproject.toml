@@ -29,7 +29,7 @@ dev = [
 [tool.mutmut]
 paths_to_mutate = "src/domain/broadcast/,src/domain/channels/,src/domain/profiles/"
 tests_dir = "tests/"
-runner = "uv run --frozen pytest -x -q -p no:cacheprovider tests/unit/test_broadcast_domain.py tests/unit/test_channel_domain.py tests/unit/test_chat_discovery_domain.py tests/unit/test_profile_domain.py tests/unit/test_value_objects_domain.py tests/unit/test_schedule_time_domain.py tests/unit/test_media_format_domain.py tests/test_mutation_audit.py"
+runner = "uv run --frozen pytest -x -q -p no:cacheprovider tests/unit/test_broadcast_domain.py tests/unit/test_channel_domain.py tests/unit/test_chat_discovery_domain.py tests/unit/test_profile_domain.py tests/unit/test_value_objects_domain.py tests/unit/test_schedule_time_domain.py tests/unit/test_media_format_domain.py tests/unit/test_message_template_domain.py tests/test_mutation_audit.py"
 
 [tool.coverage.run]
 branch = true

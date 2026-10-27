@@ -22,6 +22,7 @@ export function redactBotTokens(text: string): string {
 export const API_ERROR_CATALOG: Record<string, string> = {
   // Perfis e autenticação do bot
   "Profile not found": "Perfil não encontrado.",
+  "Template not found": "Modelo de mensagem não encontrado.",
   "Invalid Telegram Bot Token format":
     "Formato de token do bot inválido. Use o token gerado pelo @BotFather (ex.: 123456789:ABC...).",
 

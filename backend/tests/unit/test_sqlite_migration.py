@@ -548,3 +548,65 @@ async def test_legacy_profiles_without_created_at_migrated_and_queryable(tmp_pat
         assert profiles[0].created_at.isoformat()
     finally:
         await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_006_creates_message_templates_table(tmp_path, monkeypatch):
+    """A migração versão 6 cria a tabela message_templates e permite operações do repositório."""
+    from src.infrastructure.sqlite_repositories import SqlAlchemyMessageTemplateRepository
+    from src.domain.broadcast.message_template import MessageTemplate
+
+    assert CURRENT_SCHEMA_VERSION == 6
+
+    db_path = tmp_path / "autosend_v6.db"
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db()
+
+        # Garante que user_version é 6
+        assert get_user_version(db_path) == 6
+
+        # Garante colunas de message_templates
+        columns = get_table_columns(str(db_path), "message_templates")
+        assert {"id", "profile_id", "name", "text", "button_text", "button_url", "created_at", "updated_at"}.issubset(columns)
+
+        # Testa CRUD via SqlAlchemyMessageTemplateRepository
+        profile_repo = SqlAlchemyProfileRepository(session_factory)
+        profile = Profile(
+            id="p-test",
+            name="Perfil Teste",
+            credentials=BotCredentials(token="123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", bot_username="p_bot"),
+        )
+        await profile_repo.save(profile)
+
+        repo = SqlAlchemyMessageTemplateRepository(session_factory)
+        tmpl = MessageTemplate(
+            id="tmpl-1",
+            profile_id="p-test",
+            name="Modelo Promo",
+            text="Promoção relâmpago!",
+            button_text="Comprar",
+            button_url="https://loja.exemplo.com",
+        )
+        await repo.save(tmpl)
+
+        loaded = await repo.get_by_id("tmpl-1")
+        assert loaded is not None
+        assert loaded.name == "Modelo Promo"
+        assert loaded.text == "Promoção relâmpago!"
+        assert loaded.button_text == "Comprar"
+        assert loaded.button_url == "https://loja.exemplo.com"
+
+        all_tmpls = await repo.list_by_profile("p-test")
+        assert len(all_tmpls) == 1
+        assert all_tmpls[0].id == "tmpl-1"
+
+        deleted = await repo.delete("tmpl-1")
+        assert deleted is True
+        assert await repo.get_by_id("tmpl-1") is None
+    finally:
+        await test_engine.dispose()
+

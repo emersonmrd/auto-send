@@ -2263,4 +2263,71 @@ async def test_broadcast_media_replaced_dispatches_with_correct_gateway_endpoint
     assert not os.path.exists(dispatched_msg.media.file_path)
 
 
+async def test_message_templates_crud_flow(client):
+    """Testa criação, listagem, validações e exclusão de modelos de mensagens reutilizáveis (#63)."""
+    # 1. 404 para perfil inexistente
+    resp_404 = await client.post(
+        "/api/v1/profiles/unknown-profile/templates",
+        json={"name": "Aviso", "text": "Texto do modelo"},
+    )
+    assert resp_404.status_code == 404
+
+    # 2. Cria perfil para associar modelos
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="tmpl_bot")
+    profile = Profile(id="profile-tmpl-1", name="Acme Promos", credentials=creds)
+    await profile_repo.save(profile)
+
+    # 3. 422 para URL insegura (http)
+    resp_insecure = await client.post(
+        f"/api/v1/profiles/{profile.id}/templates",
+        json={
+            "name": "Link Inseguro",
+            "text": "Clique aqui",
+            "button_text": "Link",
+            "button_url": "http://exemplo.com",
+        },
+    )
+    assert resp_insecure.status_code == 422
+
+    # 4. 201 sucesso criando modelo com botão inline
+    resp_created = await client.post(
+        f"/api/v1/profiles/{profile.id}/templates",
+        json={
+            "name": "Boas-vindas",
+            "text": "Seja muito bem-vindo ao nosso canal oficial!",
+            "button_text": "Acessar Site",
+            "button_url": "https://exemplo.com/site",
+        },
+    )
+    assert resp_created.status_code == 201
+    created_data = resp_created.json()
+    assert created_data["id"]
+    assert created_data["profile_id"] == profile.id
+    assert created_data["name"] == "Boas-vindas"
+    assert created_data["text"] == "Seja muito bem-vindo ao nosso canal oficial!"
+    assert created_data["button_text"] == "Acessar Site"
+    assert created_data["button_url"] == "https://exemplo.com/site"
+    tmpl_id = created_data["id"]
+
+    # 5. 200 listagem de modelos do perfil
+    resp_list = await client.get(f"/api/v1/profiles/{profile.id}/templates")
+    assert resp_list.status_code == 200
+    templates = resp_list.json()
+    assert len(templates) == 1
+    assert templates[0]["id"] == tmpl_id
+
+    # 6. 200 exclusão do modelo
+    resp_del = await client.delete(f"/api/v1/profiles/{profile.id}/templates/{tmpl_id}")
+    assert resp_del.status_code == 200
+
+    # 7. 404 ao tentar deletar novamente
+    resp_del_again = await client.delete(f"/api/v1/profiles/{profile.id}/templates/{tmpl_id}")
+    assert resp_del_again.status_code == 404
+
+    # 8. Listagem agora vazia
+    resp_list_after = await client.get(f"/api/v1/profiles/{profile.id}/templates")
+    assert resp_list_after.status_code == 200
+    assert resp_list_after.json() == []
+
+
 
