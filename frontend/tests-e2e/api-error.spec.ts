@@ -143,6 +143,10 @@ test.describe("extractApiError", () => {
     expect(
       formatDeliveryFailureReason(null, "Bad Request: chat not found")
     ).toBe("Canal ou grupo não encontrado. Verifique se o ID ou @username está correto e se o bot é membro.");
+
+    expect(
+      formatDeliveryFailureReason("OTHER", "Bad Request: non-anonymous polls can't be sent to channel chats")
+    ).toBe("O Telegram não permite enquetes públicas (não-anônimas) em canais. Mantenha a opção de voto anônimo ativada.");
   });
 
   test("garante 100% de cobertura nos padrões do catálogo TELEGRAM_ERROR_CATALOG (Issue #57)", () => {

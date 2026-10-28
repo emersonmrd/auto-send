@@ -3097,6 +3097,14 @@ export default function Home() {
                   />
                   <span>Voto Anônimo (os usuários não verão quem votou em quê)</span>
                 </label>
+                {!tempPollIsAnonymous && (
+                  <div className="text-[11px] text-amber-200 bg-amber-950/60 border border-amber-600/60 rounded-lg p-2 flex items-start gap-1.5 leading-relaxed">
+                    <Info className="w-3.5 h-3.5 shrink-0 text-amber-400 mt-0.5" />
+                    <span>
+                      <strong>Aviso do Telegram:</strong> Canais exigem voto anônimo por regra de privacidade da plataforma. O Telegram rejeitará o envio se este campo estiver desmarcado para canais (enquetes públicas com votos visíveis só funcionam em grupos).
+                    </span>
+                  </div>
+                )}
 
                 {tempPollType === "regular" && (
                   <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">

@@ -215,6 +215,23 @@ export const TELEGRAM_ERROR_CATALOG: Array<{
     translation:
       "Limite de requisições do Telegram excedido. Aguarde alguns instantes antes de tentar novamente.",
   },
+  {
+    pattern: /(?:non-anonymous polls can'?t be sent to channel chats|poll can'?t be non-anonymous in channels)/i,
+    translation:
+      "O Telegram não permite enquetes públicas (não-anônimas) em canais. Mantenha a opção de voto anônimo ativada.",
+  },
+  {
+    pattern: /poll options must be completely different/i,
+    translation: "As opções da enquete devem ser diferentes entre si.",
+  },
+  {
+    pattern: /poll must have at least 2 option/i,
+    translation: "A enquete deve ter pelo menos 2 opções.",
+  },
+  {
+    pattern: /poll can'?t have more than 10 options/i,
+    translation: "A enquete não pode ter mais de 10 opções.",
+  },
 ];
 
 export function translateTelegramError(desc: string): string | null {
