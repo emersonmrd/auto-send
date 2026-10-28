@@ -2272,73 +2272,6 @@ export default function Home() {
 
             {/* RODAPÉ: COMPOSITOR ESTILO CHAT INPUT */}
             <div className="border-t border-[#17212b] bg-[#17212b] p-4">
-              {isSending && !!mediaFile && uploadProgress !== null && (() => {
-                const total =
-                  telegramProgress && telegramProgress.total_bytes > 0
-                    ? telegramProgress.total_bytes
-                    : (mediaFile?.size ?? 0);
-                const isCompleted = telegramProgress?.status === "completed";
-
-                let statusText = "";
-                let badgeText = "";
-
-                if (uploadPhase === "transmitting") {
-                  if (isCompleted) {
-                    statusText = "Publicado com sucesso no canal! Concluindo...";
-                    badgeText = "100%";
-                  } else {
-                    const elapsedStr = formatElapsed(transmittingElapsedMs);
-                    statusText = `Sincronizando com a nuvem do Telegram (${formatFileSize(total)}) • ${elapsedStr} decorridos • Publicando no canal...`;
-                    badgeText = "Transmitindo...";
-                  }
-                } else {
-                  statusText = `Fase 1/2: Enviando arquivo para o servidor... [${uploadProgress !== null ? uploadProgress : 0}%]`;
-                  badgeText = `${uploadProgress !== null ? uploadProgress : 0}%`;
-                }
-
-                return (
-                  <div className="max-w-4xl mx-auto mb-3 bg-[#1e2c3a] border border-[#5288c1]/70 rounded-xl p-3.5 shadow-xl space-y-2.5">
-                    <div className="flex items-center justify-between text-xs text-blue-200">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-4 h-4 border-2 border-[#5288c1] border-t-transparent rounded-full animate-spin shrink-0" />
-                        <span className="font-medium text-white text-sm">
-                          {statusText}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono font-bold text-base text-[#71aaeb]">
-                          {badgeText}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={handleAbortSend}
-                          className="px-2.5 py-1 bg-red-900/80 hover:bg-red-800 text-red-100 rounded-lg font-medium transition shrink-0 text-xs shadow"
-                          title="Cancelar upload em andamento"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    </div>
-                    {/* Barra de Progresso Real */}
-                    <div className="relative w-full bg-[#0e1621] rounded-full h-3 overflow-hidden border border-[#3b6694]/50 p-0.5">
-                      {uploadPhase === "transmitting" ? (
-                        isCompleted ? (
-                          <div className="bg-emerald-500 h-full w-full rounded-full transition-all duration-300" />
-                        ) : (
-                          <div className="h-full bg-gradient-to-r from-[#2b5278] via-[#71aaeb] to-[#2b5278] rounded-full animate-indeterminate w-1/2" />
-                        )
-                      ) : (
-                        <div
-                          className="bg-gradient-to-r from-[#2b5278] via-[#5288c1] to-[#71aaeb] h-full rounded-full transition-all duration-200 ease-out shadow"
-                          style={{
-                            width: `${Math.max(uploadProgress ?? 0, 5)}%`,
-                          }}
-                        />
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
               {composerEditing && (
                 <div
                   role="status"
@@ -2440,87 +2373,157 @@ export default function Home() {
                 </button>
 
                 {/* Área de Texto Expansível */}
-                <div className="flex-1 min-w-0 bg-[#242f3d] rounded-2xl px-4 py-2 flex flex-col">
-                  {!mediaFile && existingEditingMedia && !existingMediaRemoved && (
-                    <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
-                      <div className="flex items-center justify-between text-xs text-green-400">
-                        <span className="truncate min-w-0 flex items-center gap-1.5">
-                          {existingEditingMedia.mediaType === "PHOTO" ? (
-                            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
-                          ) : (
-                            <Video className="w-3.5 h-3.5 shrink-0" />
-                          )}
-                          <span className="truncate" title="Mídia do agendamento">
-                            Mídia do agendamento ({existingEditingMedia.mediaType === "PHOTO" ? "Foto" : "Vídeo"})
-                          </span>
-                          {existingEditingMedia.fileSize ? (
-                            <span className="text-[11px] text-gray-400 shrink-0">
-                              ({formatFileSize(existingEditingMedia.fileSize)})
+                {/* Coluna da caixa de texto: o card de progresso fica acima dela, com a mesma largura (issue #87) */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                    {isSending && !!mediaFile && uploadProgress !== null && (() => {
+                      const total =
+                        telegramProgress && telegramProgress.total_bytes > 0
+                          ? telegramProgress.total_bytes
+                          : (mediaFile?.size ?? 0);
+                      const isCompleted = telegramProgress?.status === "completed";
+
+                      let statusText = "";
+                      let badgeText = "";
+
+                      if (uploadPhase === "transmitting") {
+                        if (isCompleted) {
+                          statusText = "Publicado com sucesso no canal! Concluindo...";
+                          badgeText = "100%";
+                        } else {
+                          const elapsedStr = formatElapsed(transmittingElapsedMs);
+                          statusText = `Sincronizando com a nuvem do Telegram (${formatFileSize(total)}) • ${elapsedStr} decorridos • Publicando no canal...`;
+                          badgeText = "Transmitindo...";
+                        }
+                      } else {
+                        statusText = `Enviando arquivo para o servidor... [${uploadProgress !== null ? uploadProgress : 0}%]`;
+                        badgeText = `${uploadProgress !== null ? uploadProgress : 0}%`;
+                      }
+
+                      return (
+                        <div className="mb-3 bg-[#1e2c3a] border border-[#5288c1]/70 rounded-xl p-3.5 shadow-xl space-y-2.5">
+                          <div className="flex items-center justify-between text-xs text-blue-200">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-4 h-4 border-2 border-[#5288c1] border-t-transparent rounded-full animate-spin shrink-0" />
+                              <span className="font-medium text-white text-sm">
+                                {statusText}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="font-mono font-bold text-base text-[#71aaeb]">
+                                {badgeText}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleAbortSend}
+                                className="px-2.5 py-1 bg-red-900/80 hover:bg-red-800 text-red-100 rounded-lg font-medium transition shrink-0 text-xs shadow"
+                                title="Cancelar upload em andamento"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                          {/* Barra de Progresso Real */}
+                          <div className="relative w-full bg-[#0e1621] rounded-full h-3 overflow-hidden border border-[#3b6694]/50 p-0.5">
+                            {uploadPhase === "transmitting" ? (
+                              isCompleted ? (
+                                <div className="bg-emerald-500 h-full w-full rounded-full transition-all duration-300" />
+                              ) : (
+                                <div className="h-full bg-gradient-to-r from-[#2b5278] via-[#71aaeb] to-[#2b5278] rounded-full animate-indeterminate w-1/2" />
+                              )
+                            ) : (
+                              <div
+                                className="bg-gradient-to-r from-[#2b5278] via-[#5288c1] to-[#71aaeb] h-full rounded-full transition-all duration-200 ease-out shadow"
+                                style={{
+                                  width: `${Math.max(uploadProgress ?? 0, 5)}%`,
+                                }}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    <div className="min-w-0 bg-[#242f3d] rounded-2xl px-4 py-2 flex flex-col">
+                      {!mediaFile && existingEditingMedia && !existingMediaRemoved && (
+                        <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
+                          <div className="flex items-center justify-between text-xs text-green-400">
+                            <span className="truncate min-w-0 flex items-center gap-1.5">
+                              {existingEditingMedia.mediaType === "PHOTO" ? (
+                                <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                              ) : (
+                                <Video className="w-3.5 h-3.5 shrink-0" />
+                              )}
+                              <span className="truncate" title="Mídia do agendamento">
+                                Mídia do agendamento ({existingEditingMedia.mediaType === "PHOTO" ? "Foto" : "Vídeo"})
+                              </span>
+                              {existingEditingMedia.fileSize ? (
+                                <span className="text-[11px] text-gray-400 shrink-0">
+                                  ({formatFileSize(existingEditingMedia.fileSize)})
+                                </span>
+                              ) : null}
                             </span>
-                          ) : null}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={isSending}
-                          onClick={removeMedia}
-                          className="text-red-400 hover:text-red-300 text-xs ml-2 disabled:opacity-50"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                  {mediaFile && (
-                    <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
-                      <div className="flex items-center justify-between text-xs text-green-400">
-                        <span className="truncate min-w-0 flex items-center gap-1.5">
-                          {isImageMedia(mediaFile) ? (
-                            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
-                          ) : (
-                            <Video className="w-3.5 h-3.5 shrink-0" />
-                          )}
-                          <span className="truncate" title={mediaFile.name}>{mediaFile.name}</span>
-                          <span className="text-[11px] text-gray-400 shrink-0">
-                            ({formatFileSize(mediaFile.size)})
-                          </span>
-                          {videoMetadata && (
-                            <span className="text-[10px] bg-[#17212b] text-[#71aaeb] px-1.5 py-0.5 rounded border border-[#3b6694]/40 shrink-0 font-mono">
-                              {videoMetadata.width}x{videoMetadata.height} • {Math.floor(videoMetadata.duration / 60)}:{String(Math.round(videoMetadata.duration % 60)).padStart(2, "0")}
-                            </span>
-                          )}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={isSending}
-                          onClick={removeMedia}
-                          className="text-red-400 hover:text-red-300 text-xs ml-2 disabled:opacity-50"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                      {mediaFile.size > TELEGRAM_MAX_STANDARD_SIZE_BYTES && (
-                        <div className="text-[12px] text-sky-200 bg-sky-950/70 border border-sky-600/60 rounded-lg p-2.5 flex items-start gap-2 shadow-sm">
-                          <Info className="w-4 h-4 shrink-0 text-sky-400 mt-0.5" />
-                          <div className="flex-1">
-                            <p className="font-medium text-sky-100">
-                              Enviando arquivo grande (+50 MB). Por favor, aguarde enquanto a transferência é concluída.
-                            </p>
-                            <p className="text-[11px] text-sky-300/80 mt-0.5">
-                              Tamanho: {formatFileSize(mediaFile.size)}. O envio conta com suporte a streaming progressivo nos canais.
-                            </p>
+                            <button
+                              type="button"
+                              disabled={isSending}
+                              onClick={removeMedia}
+                              className="text-red-400 hover:text-red-300 text-xs ml-2 disabled:opacity-50"
+                            >
+                              Remover
+                            </button>
                           </div>
                         </div>
                       )}
+                      {mediaFile && (
+                        <div className="flex flex-col pb-1.5 mb-1.5 border-b border-gray-700 gap-1">
+                          <div className="flex items-center justify-between text-xs text-green-400">
+                            <span className="truncate min-w-0 flex items-center gap-1.5">
+                              {isImageMedia(mediaFile) ? (
+                                <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                              ) : (
+                                <Video className="w-3.5 h-3.5 shrink-0" />
+                              )}
+                              <span className="truncate" title={mediaFile.name}>{mediaFile.name}</span>
+                              <span className="text-[11px] text-gray-400 shrink-0">
+                                ({formatFileSize(mediaFile.size)})
+                              </span>
+                              {videoMetadata && (
+                                <span className="text-[10px] bg-[#17212b] text-[#71aaeb] px-1.5 py-0.5 rounded border border-[#3b6694]/40 shrink-0 font-mono">
+                                  {videoMetadata.width}x{videoMetadata.height} • {Math.floor(videoMetadata.duration / 60)}:{String(Math.round(videoMetadata.duration % 60)).padStart(2, "0")}
+                                </span>
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isSending}
+                              onClick={removeMedia}
+                              className="text-red-400 hover:text-red-300 text-xs ml-2 disabled:opacity-50"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                          {mediaFile.size > TELEGRAM_MAX_STANDARD_SIZE_BYTES && (
+                            <div className="text-[12px] text-sky-200 bg-sky-950/70 border border-sky-600/60 rounded-lg p-2.5 flex items-start gap-2 shadow-sm">
+                              <Info className="w-4 h-4 shrink-0 text-sky-400 mt-0.5" />
+                              <div className="flex-1">
+                                <p className="font-medium text-sky-100">
+                                  Enviando arquivo grande (+50 MB). Por favor, aguarde enquanto a transferência é concluída.
+                                </p>
+                                <p className="text-[11px] text-sky-300/80 mt-0.5">
+                                  Tamanho: {formatFileSize(mediaFile.size)}. O envio conta com suporte a streaming progressivo nos canais.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <TelegramRichEditor
+                        ariaLabel="Mensagem do canal"
+                        value={text}
+                        onChange={setText}
+                        placeholder="Escreva a mensagem do canal..."
+                        minRows={2}
+                        editorRefHandle={composerEditorRef}
+                      />
                     </div>
-                  )}
-                  <TelegramRichEditor
-                    ariaLabel="Mensagem do canal"
-                    value={text}
-                    onChange={setText}
-                    placeholder="Escreva a mensagem do canal..."
-                    minRows={2}
-                    editorRefHandle={composerEditorRef}
-                  />
                 </div>
 
                 {/* Botão de Agendamento */}
