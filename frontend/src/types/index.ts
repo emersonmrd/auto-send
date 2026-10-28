@@ -158,6 +158,11 @@ export interface CancelBroadcastResponse {
   message: string;
 }
 
+export interface AbortBroadcastResponse {
+  tracking_id: string;
+  status: string;
+}
+
 export interface AffectedBroadcastItem {
   id: string;
   text_preview: string;

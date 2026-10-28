@@ -819,3 +819,37 @@ def test_replace_media_rejects_invalid_type_and_terminal_states():
             match=r"^Cannot modify media of an in-flight, completed, failed, or cancelled broadcast$",
         ):
             msg.remove_media()
+
+
+def _broadcast_with_status(status: BroadcastStatus) -> BroadcastMessage:
+    return BroadcastMessage(
+        id="b-abort",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890", "-1001234567891"],
+        text="Hello",
+        status=status,
+    )
+
+
+def test_abort_dispatch_cancels_in_flight_broadcast_and_keeps_partial_results():
+    msg = _broadcast_with_status(BroadcastStatus.DISPATCHING)
+    partial = [ChannelDeliveryResult.success("-1001234567890")]
+
+    msg.abort_dispatch(partial)
+
+    assert msg.status == BroadcastStatus.CANCELLED
+    assert msg.delivery_results == partial
+    assert msg.delivery_results is not partial
+
+
+@pytest.mark.parametrize(
+    "status",
+    [s for s in BroadcastStatus if s != BroadcastStatus.DISPATCHING],
+)
+def test_abort_dispatch_rejects_broadcast_that_is_not_in_flight(status):
+    msg = _broadcast_with_status(status)
+
+    with pytest.raises(ValueError, match=r"^Only an in-flight broadcast can be aborted$"):
+        msg.abort_dispatch([])
+
+    assert msg.status == status

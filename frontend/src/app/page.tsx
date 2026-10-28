@@ -55,6 +55,36 @@ interface ToastNotice {
 // "" no export estático = mesma origem do backend que serve a tela (next.config.ts); no `npm run dev`, a porta 8000.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+const DEFAULT_TELEGRAM_SPEED_BPS = 6.5 * 1024 * 1024; // Baseline calibrado (~52 Mbps / 6.5 MB/s)
+
+function getEstimatedTelegramSpeed(): number {
+  if (typeof window === "undefined") return DEFAULT_TELEGRAM_SPEED_BPS;
+  try {
+    const saved = localStorage.getItem("autosend_telegram_speed_bps");
+    if (saved) {
+      const val = Number(saved);
+      if (val >= 500 * 1024 && val <= 100 * 1024 * 1024) {
+        return val;
+      }
+    }
+  } catch {}
+  return DEFAULT_TELEGRAM_SPEED_BPS;
+}
+
+function recordMeasuredTelegramSpeed(bytes: number, elapsedMs: number) {
+  if (typeof window === "undefined" || bytes <= 5 * 1024 * 1024 || elapsedMs < 2000) return;
+  try {
+    const measuredBps = bytes / (elapsedMs / 1000);
+    // Sanity check: entre 500 KB/s e 100 MB/s
+    if (measuredBps >= 500 * 1024 && measuredBps <= 100 * 1024 * 1024) {
+      const current = getEstimatedTelegramSpeed();
+      // Média móvel exponencial (EMA): 60% histórico + 40% envio recente
+      const updated = Math.round(current * 0.6 + measuredBps * 0.4);
+      localStorage.setItem("autosend_telegram_speed_bps", String(updated));
+    }
+  } catch {}
+}
+
 import {
   Send,
   Paperclip,
@@ -172,6 +202,9 @@ export default function Home() {
   const [uploadPhase, setUploadPhase] = useState<"uploading" | "transmitting" | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const activeXhrRef = useRef<XMLHttpRequest | null>(null);
+  const activeTrackingIdRef = useRef<string | null>(null);
+  const transmittingStartTimeRef = useRef<number | null>(null);
+  const [transmittingElapsedMs, setTransmittingElapsedMs] = useState<number>(0);
 
   // Modal de Adicionar Perfil
   const [showAddProfileModal, setShowAddProfileModal] = useState(false);
@@ -258,6 +291,13 @@ export default function Home() {
     return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
+  const formatElapsed = (ms: number) => {
+    const totalSec = Math.floor(ms / 1000);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
   const toLocalDateTimeParts = (d: Date) => {
     const pad = (n: number) => String(n).padStart(2, "0");
     const datePart = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -305,10 +345,22 @@ export default function Home() {
   };
 
   const handleAbortSend = () => {
+    const trackingIdToAbort = activeTrackingIdRef.current;
+    if (trackingIdToAbort) {
+      fetch(`${API_BASE_URL}/api/v1/broadcasts/abort-upload/${trackingIdToAbort}`, {
+        method: "POST",
+      }).catch(() => {
+        // Silencioso se backend offline
+      });
+      activeTrackingIdRef.current = null;
+    }
+
     if (progressIntervalRef.current) {
       clearInterval(progressIntervalRef.current);
       progressIntervalRef.current = null;
     }
+    transmittingStartTimeRef.current = null;
+    setTransmittingElapsedMs(0);
     setTelegramProgress(null);
     if (activeXhrRef.current) {
       try {
@@ -867,6 +919,7 @@ export default function Home() {
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : "track_" + Date.now();
+    activeTrackingIdRef.current = trackingId;
 
     const formData = new FormData();
     formData.append("tracking_id", trackingId);
@@ -907,31 +960,42 @@ export default function Home() {
         const startTelegramPolling = () => {
           if (pollingStarted) return;
           pollingStarted = true;
+          transmittingStartTimeRef.current = Date.now();
+          setTransmittingElapsedMs(0);
           setUploadProgress(100);
           setUploadPhase("transmitting");
 
+          let lastPollTime = 0;
           const pollProgress = async () => {
-            try {
-              const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/progress/${trackingId}`);
-              if (res.ok) {
-                const data: TelegramUploadProgress = await res.json();
-                if (data && typeof data.percent === "number") {
-                  setTelegramProgress(data);
-                  if (data.status === "completed" || data.status === "failed") {
-                    if (progressIntervalRef.current) {
-                      clearInterval(progressIntervalRef.current);
-                      progressIntervalRef.current = null;
+            const now = Date.now();
+            if (transmittingStartTimeRef.current) {
+              setTransmittingElapsedMs(now - transmittingStartTimeRef.current);
+            }
+
+            if (now - lastPollTime >= 400) {
+              lastPollTime = now;
+              try {
+                const res = await fetch(`${API_BASE_URL}/api/v1/broadcasts/progress/${trackingId}`);
+                if (res.ok) {
+                  const data: TelegramUploadProgress = await res.json();
+                  if (data && typeof data.percent === "number") {
+                    setTelegramProgress(data);
+                    if (data.status === "completed" || data.status === "failed") {
+                      if (progressIntervalRef.current) {
+                        clearInterval(progressIntervalRef.current);
+                        progressIntervalRef.current = null;
+                      }
                     }
                   }
                 }
+              } catch {
+                // Silencioso em caso de oscilação transitória
               }
-            } catch {
-              // Silencioso em caso de oscilação transitória
             }
           };
 
           pollProgress();
-          progressIntervalRef.current = setInterval(pollProgress, 400);
+          progressIntervalRef.current = setInterval(pollProgress, 200);
         };
 
         if (xhr.upload) {
@@ -960,6 +1024,10 @@ export default function Home() {
             data = null;
           }
           if (xhr.status >= 200 && xhr.status < 300) {
+            if (transmittingStartTimeRef.current && currentMediaFile && currentMediaFile.size > 5 * 1024 * 1024) {
+              const elapsed = Date.now() - transmittingStartTimeRef.current;
+              recordMeasuredTelegramSpeed(currentMediaFile.size, elapsed);
+            }
             resolve((data as BroadcastResponse | null) ?? { status: "SUCCESS" });
           } else {
             reject(new ApiHttpError(extractApiError(data, `Falha HTTP ${xhr.status}`), xhr.status));
@@ -1063,9 +1131,12 @@ export default function Home() {
         clearInterval(progressIntervalRef.current);
         progressIntervalRef.current = null;
       }
+      transmittingStartTimeRef.current = null;
+      setTransmittingElapsedMs(0);
       setTelegramProgress(null);
       sendAbortControllerRef.current = null;
       activeXhrRef.current = null;
+      activeTrackingIdRef.current = null;
       setIsSending(false);
       setUploadProgress(null);
       setUploadPhase(null);
@@ -2206,27 +2277,19 @@ export default function Home() {
                   telegramProgress && telegramProgress.total_bytes > 0
                     ? telegramProgress.total_bytes
                     : (mediaFile?.size ?? 0);
-                const sent = telegramProgress?.sent_bytes ?? 0;
-                const pct = telegramProgress?.percent ?? 0;
                 const isCompleted = telegramProgress?.status === "completed";
-                const isTelegramProcessing =
-                  !isCompleted &&
-                  (telegramProgress?.stage === "processing_by_telegram" ||
-                    (sent >= total && total > 0));
 
                 let statusText = "";
                 let badgeText = "";
 
                 if (uploadPhase === "transmitting") {
                   if (isCompleted) {
-                    statusText = `Publicado com sucesso no canal! Concluindo...`;
+                    statusText = "Publicado com sucesso no canal! Concluindo...";
                     badgeText = "100%";
-                  } else if (isTelegramProcessing) {
-                    statusText = `Sincronizando com o Telegram (${formatFileSize(total)}) • Publicando no canal...`;
-                    badgeText = "Processando...";
                   } else {
-                    statusText = `Transmitindo para o Telegram: ${pct}% (${formatFileSize(sent)} / ${formatFileSize(total)}) • Enviando...`;
-                    badgeText = `${pct}%`;
+                    const elapsedStr = formatElapsed(transmittingElapsedMs);
+                    statusText = `Sincronizando com a nuvem do Telegram (${formatFileSize(total)}) • ${elapsedStr} decorridos • Publicando no canal...`;
+                    badgeText = "Transmitindo...";
                   }
                 } else {
                   statusText = `Fase 1/2: Enviando arquivo para o servidor... [${uploadProgress !== null ? uploadProgress : 0}%]`;
@@ -2257,22 +2320,21 @@ export default function Home() {
                       </div>
                     </div>
                     {/* Barra de Progresso Real */}
-                    <div className="w-full bg-[#0e1621] rounded-full h-3 overflow-hidden border border-[#3b6694]/50 p-0.5">
-                      <div
-                        className={`bg-gradient-to-r from-[#2b5278] via-[#5288c1] to-[#71aaeb] h-full rounded-full transition-all duration-200 ease-out shadow ${
-                          uploadPhase === "transmitting" && isTelegramProcessing ? "animate-pulse" : ""
-                        }`}
-                        style={{
-                          width: `${Math.max(
-                            uploadPhase === "transmitting"
-                              ? isTelegramProcessing
-                                ? 100
-                                : pct
-                              : (uploadProgress ?? 0),
-                            5
-                          )}%`,
-                        }}
-                      />
+                    <div className="relative w-full bg-[#0e1621] rounded-full h-3 overflow-hidden border border-[#3b6694]/50 p-0.5">
+                      {uploadPhase === "transmitting" ? (
+                        isCompleted ? (
+                          <div className="bg-emerald-500 h-full w-full rounded-full transition-all duration-300" />
+                        ) : (
+                          <div className="h-full bg-gradient-to-r from-[#2b5278] via-[#71aaeb] to-[#2b5278] rounded-full animate-indeterminate w-1/2" />
+                        )
+                      ) : (
+                        <div
+                          className="bg-gradient-to-r from-[#2b5278] via-[#5288c1] to-[#71aaeb] h-full rounded-full transition-all duration-200 ease-out shadow"
+                          style={{
+                            width: `${Math.max(uploadProgress ?? 0, 5)}%`,
+                          }}
+                        />
+                      )}
                     </div>
                   </div>
                 );

@@ -2,12 +2,21 @@ import json
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from src.presentation.main import app, engine, profile_repo, channel_repo, telegram_gateway, broadcast_repo
+from src.presentation.main import (
+    app,
+    engine,
+    profile_repo,
+    channel_repo,
+    telegram_gateway,
+    broadcast_repo,
+    active_broadcast_tasks,
+    upload_progress_tracker,
+)
 from src.infrastructure.sqlite_repositories import Base
 from src.domain.profiles.profile import Profile
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.channels.channel import Channel
-from src.domain.broadcast.broadcast_message import BroadcastMessage
+from src.domain.broadcast.broadcast_message import BroadcastMessage, BroadcastStatus
 from datetime import datetime as _datetime, timedelta as _timedelta, timezone as _timezone
 
 # Base de datas futuras: 30 dias à frente da execução, para nenhum agendamento virar passado (issue #54).
@@ -2328,6 +2337,156 @@ async def test_message_templates_crud_flow(client):
     resp_list_after = await client.get(f"/api/v1/profiles/{profile.id}/templates")
     assert resp_list_after.status_code == 200
     assert resp_list_after.json() == []
+
+
+async def test_abort_broadcast_upload_endpoint_returns_200_and_records_status(client):
+    tracking_id = "test-track-abort-1"
+    resp = await client.post(f"/api/v1/broadcasts/abort-upload/{tracking_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tracking_id"] == tracking_id
+    assert data["status"] == "aborted"
+
+
+async def test_create_broadcast_aborts_immediately_when_cancelled_in_advance(client):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-abort-early", name="Test Early", credentials=creds)
+    await profile_repo.save(profile)
+
+    tracking_id = "test-track-early-abort"
+    # Cancela antes de iniciar
+    await client.post(f"/api/v1/broadcasts/abort-upload/{tracking_id}")
+
+    # Tenta criar o broadcast com o mesmo tracking_id
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "text": "Mensagem que não deve ser enviada",
+            "tracking_id": tracking_id,
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Broadcast cancelled by user"
+
+
+async def test_create_broadcast_aborts_in_flight_when_abort_endpoint_called(client, monkeypatch):
+    import asyncio
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-abort-inflight", name="Test Inflight", credentials=creds)
+    await profile_repo.save(profile)
+
+    started_event = asyncio.Event()
+
+    async def _mock_slow_send(*args, **kwargs):
+        started_event.set()
+        await asyncio.sleep(5.0)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", _mock_slow_send)
+
+    tracking_id = "test-track-inflight-abort"
+
+    async def _do_broadcast():
+        return await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": profile.id,
+                "target_channel_ids": json.dumps(["-1001234567890"]),
+                "text": "Mensagem cancelada em voo",
+                "tracking_id": tracking_id,
+            },
+        )
+
+    task = asyncio.create_task(_do_broadcast())
+    await started_event.wait()
+
+    # Dispara o cancelamento
+    abort_resp = await client.post(f"/api/v1/broadcasts/abort-upload/{tracking_id}")
+    assert abort_resp.status_code == 200
+
+    broadcast_resp = await task
+    assert broadcast_resp.status_code == 409
+    assert broadcast_resp.json()["detail"] == "Broadcast cancelled by user"
+
+    # O broadcast abortado em voo não fica preso em DISPATCHING no banco
+    saved = await broadcast_repo.list_by_profile(profile.id)
+    assert [b.status for b in saved] == [BroadcastStatus.CANCELLED]
+    assert tracking_id not in active_broadcast_tasks
+
+
+async def test_create_broadcast_does_not_leak_task_registry_on_scheduled_or_early_errors(client):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-abort-leak", name="Test Leak", credentials=creds)
+    await profile_repo.save(profile)
+
+    scheduled = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "text": "Agendado",
+            "scheduled_at": future_at(1, "10:00:00"),
+            "tracking_id": "test-track-leak-scheduled",
+        },
+    )
+    assert scheduled.status_code == 201
+
+    not_found = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": "profile-inexistente",
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "text": "Perfil inexistente",
+            "tracking_id": "test-track-leak-404",
+        },
+    )
+    assert not_found.status_code == 404
+
+    invalid = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": "nao-e-json",
+            "text": "Canais inválidos",
+            "tracking_id": "test-track-leak-422",
+        },
+    )
+    assert invalid.status_code == 422
+
+    assert "test-track-leak-scheduled" not in active_broadcast_tasks
+    assert "test-track-leak-404" not in active_broadcast_tasks
+    assert "test-track-leak-422" not in active_broadcast_tasks
+
+
+async def test_create_broadcast_client_disconnect_without_progress_entry_returns_409(client, monkeypatch):
+    from starlette.requests import Request
+
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-abort-disconnect", name="Test Disconnect", credentials=creds)
+    await profile_repo.save(profile)
+    tracking_id = "test-track-disconnect-evicted"
+
+    async def _disconnected_after_progress_evicted(self):
+        # A entrada de progresso pode já ter expirado (TTL/LRU) quando o cliente cai
+        upload_progress_tracker.pop(tracking_id, None)
+        return True
+
+    monkeypatch.setattr(Request, "is_disconnected", _disconnected_after_progress_evicted)
+
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "text": "Cliente desconectou",
+            "tracking_id": tracking_id,
+        },
+    )
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == "Broadcast cancelled by user"
+
 
 
 
