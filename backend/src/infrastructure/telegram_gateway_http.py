@@ -62,6 +62,10 @@ TELEGRAM_ERROR_TRANSLATIONS_PT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"user is deactivated", re.I), "O canal ou usuário de destino foi desativado pelo Telegram."),
     (re.compile(r"unauthorized", re.I), "Token do bot inválido, revogado ou expirado. Confira o token no @BotFather."),
     (re.compile(r"too many requests", re.I), "Limite de requisições do Telegram excedido. Aguarde alguns instantes antes de tentar novamente."),
+    (re.compile(r"non-anonymous polls can'?t be sent to channel chats|poll can'?t be non-anonymous in channels", re.I), "O Telegram não permite enquetes públicas (não-anônimas) em canais. Mantenha a opção de voto anônimo ativada."),
+    (re.compile(r"poll options must be completely different", re.I), "As opções da enquete devem ser diferentes entre si."),
+    (re.compile(r"poll must have at least 2 option", re.I), "A enquete deve ter pelo menos 2 opções."),
+    (re.compile(r"poll can'?t have more than 10 options", re.I), "A enquete não pode ter mais de 10 opções."),
 ]
 
 
