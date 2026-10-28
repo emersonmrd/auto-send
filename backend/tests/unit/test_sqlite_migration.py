@@ -610,3 +610,84 @@ async def test_migration_006_creates_message_templates_table(tmp_path, monkeypat
     finally:
         await test_engine.dispose()
 
+
+@pytest.mark.asyncio
+async def test_message_templates_survive_future_database_migrations(tmp_path, monkeypatch):
+    """Dado um banco no schema 6 com perfil e modelo de mensagem salvos,
+    quando uma nova migração (schema 7) é executada, o modelo e seus campos permanecem intactos."""
+    from src.infrastructure.sqlite_repositories import SqlAlchemyMessageTemplateRepository
+    from src.domain.broadcast.message_template import MessageTemplate
+
+    db_path = tmp_path / "autosend.db"
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        # 1. Inicia o banco com o schema atual (versão 6)
+        await main_module.init_db()
+        assert get_user_version(db_path) == CURRENT_SCHEMA_VERSION == 6
+
+        # 2. Insere um perfil 'Acme' e um modelo 'Canal de Novidades'
+        profile_repo = SqlAlchemyProfileRepository(session_factory)
+        profile = Profile(
+            id="prof-acme",
+            name="Acme",
+            credentials=BotCredentials(token="123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", bot_username="acme_bot"),
+        )
+        await profile_repo.save(profile)
+
+        template_repo = SqlAlchemyMessageTemplateRepository(session_factory)
+        tmpl = MessageTemplate(
+            id="tmpl-novidades",
+            profile_id="prof-acme",
+            name="Canal de Novidades",
+            text="Texto do modelo preservado",
+            button_text="Acessar",
+            button_url="https://canal.exemplo.com",
+        )
+        await template_repo.save(tmpl)
+
+        # 3. Define uma migração 7 simulada
+        def _migration_007_simulated(cur: sqlite3.Cursor) -> None:
+            cur.execute("ALTER TABLE profiles ADD COLUMN dummy_future_setting VARCHAR DEFAULT ''")
+
+        simulated_step_7 = MigrationStep(
+            version=7,
+            description="Migração 7 simulada para teste de sobrevivência de dados",
+            apply=_migration_007_simulated,
+        )
+
+        steps_with_7 = (*MIGRATIONS, simulated_step_7)
+
+        # 4. Executa init_db com a nova migração 7
+        await main_module.init_db(migration_steps=steps_with_7)
+
+        # 5. Valida nova versão e backup criado
+        assert get_user_version(db_path) == 7
+        assert (tmp_path / "autosend.db.bak-6").is_file()
+
+        # 6. Valida que o modelo sobreviveu com exatamente os mesmos campos
+        loaded = await template_repo.get_by_id("tmpl-novidades")
+        assert loaded is not None
+        assert loaded.id == "tmpl-novidades"
+        assert loaded.profile_id == "prof-acme"
+        assert loaded.name == "Canal de Novidades"
+        assert loaded.text == "Texto do modelo preservado"
+        assert loaded.button_text == "Acessar"
+        assert loaded.button_url == "https://canal.exemplo.com"
+        assert loaded.created_at is not None
+        assert loaded.updated_at is not None
+
+        by_profile = await template_repo.list_by_profile("prof-acme")
+        assert len(by_profile) == 1
+        assert by_profile[0].id == "tmpl-novidades"
+
+        # E o perfil continua íntegro
+        loaded_profile = await profile_repo.get_by_id("prof-acme")
+        assert loaded_profile is not None
+        assert loaded_profile.name == "Acme"
+    finally:
+        await test_engine.dispose()
+
+
