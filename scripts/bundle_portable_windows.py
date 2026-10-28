@@ -252,7 +252,13 @@ def setup_package_structure(target_dir: Path) -> None:
 
     # 2. Copiar backend source e pyproject.toml
     print("   -> Copiando código do backend para app/backend/...")
-    shutil.copytree(BACKEND_DIR / "src", app_backend / "src", dirs_exist_ok=True)
+    # O bytecode local (.pyc) de quem gera o pacote não vai junto; o Python embutido gera o próprio.
+    shutil.copytree(
+        BACKEND_DIR / "src",
+        app_backend / "src",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
     shutil.copy2(BACKEND_DIR / "pyproject.toml", app_backend / "pyproject.toml")
 
     # Gerar requirements.txt a partir do lockfile
