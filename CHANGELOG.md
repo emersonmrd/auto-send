@@ -5,6 +5,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+
+## [0.6.1] - 2026-10-27
+
 ### Performance
 - Reutilização instantânea de `file_id` do Telegram em disparos de mídias (vídeos e fotos) para múltiplos canais, realizando o upload físico do binário uma única vez e despachando para os canais subsequentes por referência, reduzindo drasticamente o tempo de envio e consumo de rede (#83).
 
