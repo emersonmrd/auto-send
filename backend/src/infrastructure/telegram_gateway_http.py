@@ -356,6 +356,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
                     # Reutilização instantânea de file_id (sem re-upload de binário)
                     if file_id:
+                        data.pop("thumbnail", None)
+                        data.pop("thumb", None)
                         data[media_field] = file_id
                         resp = await client.post(send_url, data=data)
                         res_data = await self._handle_response(resp)
@@ -428,6 +430,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
                     # Reutilização instantânea de file_id
                     if file_id:
+                        media_data.pop("thumbnail", None)
+                        media_data.pop("thumb", None)
                         media_data[media_field] = file_id
                         resp2 = await client.post(media_url, data=media_data)
                         data2 = await self._handle_response(resp2)
