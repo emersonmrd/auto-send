@@ -13,11 +13,14 @@ and send it now or schedule it. Auto-Send runs on your own machine; bot tokens n
   `@username` / `t.me/...` link.
 - Broadcasts with text, photo or video and an inline URL button, with a live preview shaped like a Telegram message.
   Text longer than a caption is sent as a separate message before the media.
+- Reusable message templates (presets): save and load messages with one click directly in the composer.
 - Scheduling in UTC, shown in the browser's time zone; scheduled broadcasts can be edited, rescheduled or cancelled.
 - Large videos (up to 2 GB) through a local [Telegram Bot API server](https://github.com/tdlib/telegram-bot-api);
-  without it, the public Bot API (50 MB limit) is used.
-- Rate-limit handling (`Retry-After`) and a circuit breaker around the Telegram API.
-- Windows portable package: unzip and double-click, no installation.
+  easily configure your credentials directly from the settings dialog.
+- Multi-channel broadcast optimization: single physical upload with instant delivery to subsequent channels via Telegram `file_id` reuse.
+- Dynamic transmission feedback: real-time live elapsed timer, accurate upload progress, and immediate broadcast cancellation without phantom deliveries.
+- Rate-limit handling (`Retry-After`) and an automated circuit breaker protecting against Telegram API throttles.
+- Windows portable package: unzip and double-click, with seamless data preservation across version upgrades.
 
 ## Quick start
 
@@ -25,7 +28,7 @@ and send it now or schedule it. Auto-Send runs on your own machine; bot tokens n
 
 1. Download `AutoSend-Portable.zip` from [Releases](https://github.com/emersonmrd/auto-send/releases) and check its SHA-256.
 2. Unzip it and double-click `Iniciar-AutoSend.bat`. The browser opens at `http://localhost:8000`.
-3. Data lives in the `data/` folder; copy it to back up.
+3. Application data and configuration are safely stored in `%LOCALAPPDATA%\Auto-Send\` (persisting across updates and extractions). You can open this folder directly via the "Abrir pasta de dados" (Open data folder) button in the dashboard.
 
 The package is not code-signed, so Windows SmartScreen may warn on first run ("More info" → "Run anyway").
 
