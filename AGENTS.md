@@ -198,6 +198,9 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
    - Nunca configurar `allow_origins=["*"]` concomitantemente com `allow_credentials=True`. As origens permitidas devem ser explicitamente listadas e parametrizáveis por ambiente.
 9. **Debounce e Feedback Visual em Ações de I/O na UI:**
    - Ações de formulário e botões de chamada à API no frontend devem obrigatoriamente implementar estado de carregamento (`isLoading`/`disabled`) com feedback visual (spinner), prevenindo submissões duplicadas e condições de corrida por múltiplos cliques acidentais (kaizen de 2026-10-26: issue #54 gerava conflitos 409 por duplo clique).
+10. **Feedback Contínuo em Uploads de Longa Duração e APIs com Ingestão Assíncrona:**
+   - Em transmissões assíncronas de arquivos pesados para serviços externos (como a Telegram Bot API local, que recebe os bytes via HTTP mas os transfere para a nuvem via MTProto sem stream contínuo de status), a interface nunca deve adotar simulações matemáticas que estacionem em porcentagens fictícias (ex.: 97%), que geram percepção de travamento no usuário.
+   - O padrão adotado é a transição para um fluxo contínuo e indeterminado (*shimmer/pulse*), acompanhado compulsoriamente de cronômetro ao vivo com tempo decorrido (`formatElapsed`) e indicação do tamanho real do arquivo, cravando 100% no momento da confirmação pelo servidor (kaizen de 2026-10-28: PR #86).
 
 
 ## 9. Checklist de Segurança do Domínio
@@ -233,6 +236,7 @@ Monólito modular em Clean Architecture. **Regra de dependência:** as setas apo
   - O arquivo temporário de mídia (`temp_media/`) é apagado depois do envio final, com sucesso ou com erro, e também no cancelamento.
   - Agendamentos são guardados e comparados em UTC; não se aceita agendar no passado.
   - Broadcasts de mídia (vídeo ou foto) para múltiplos canais reaproveitam o `file_id` retornado pelo Telegram no primeiro envio com sucesso para despachar aos demais canais sem re-upload do arquivo binário, mantendo o cálculo de progresso linear e contínuo com base no tamanho real do arquivo (kaizen de 2026-10-27: issue #83 e PR #84).
+  - Cancelamentos de uploads em andamento (`handleAbortSend`) devem compulsoriamente notificar o backend via `POST /api/v1/broadcasts/abort-upload/{tracking_id}` para cancelar ativamente a `asyncio.Task` do disparo, interromper o envio de pacotes ao Telegram e limpar mídias temporárias, impedindo disparos fantasmas e duplicação de mensagens no canal após aborts pelo usuário (kaizen de 2026-10-28: PR #86).
 - Propostas e specs de feature viram **issue** (fila do GitHub), não documentos soltos em `docs/`. Regras duradouras vêm para este arquivo; decisões ficam no ai-memory (`decisions/`).
 
 ## 11. Práticas de Engenharia
