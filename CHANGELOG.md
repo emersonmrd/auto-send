@@ -7,6 +7,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ### Added
 - Rota `POST /api/v1/broadcasts/abort-upload/{tracking_id}`: cancelar um envio na tela interrompe o disparo no backend, apaga a mídia temporária e marca o broadcast como `CANCELLED`, guardando os canais que já receberam (#86).
+- Teste automatizado garantindo que os modelos de mensagem sobrevivem a atualizações futuras do banco de dados, e menção explícita aos modelos de mensagem no `COMO_USAR.txt` do pacote portátil (#92).
 
 ### Fixed
 - Cancelar o envio várias vezes não publica mais a mensagem repetida no canal: antes, o backend continuava o disparo depois que o navegador fechava a conexão (#86).

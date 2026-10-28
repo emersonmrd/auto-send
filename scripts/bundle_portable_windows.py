@@ -133,8 +133,8 @@ O que vai acontecer:
 ------------------------------------------------------------------------
 2. ONDE FICAM SALVOS SEUS DADOS E PERFIS
 ------------------------------------------------------------------------
-Todos os canais cadastrados, perfis, configuracoes de bots e
-mensagens agendadas ficam salvos com total seguranca fora da pasta do
+Todos os canais cadastrados, perfis, configuracoes de bots, modelos de mensagem
+e mensagens agendadas ficam salvos com total seguranca fora da pasta do
 pacote, em:
     %LOCALAPPDATA%\Auto-Send\
 
@@ -144,7 +144,8 @@ pacote, em:
 
 VANTAGEM NAS ATUALIZACOES:
 Quando sair uma versao nova do Auto-Send, voce pode extrair o novo .zip em
-qualquer pasta: seus perfis, canais e agendamentos continuam la automaticamente!
+qualquer pasta: seus perfis, canais, agendamentos e modelos de mensagem continuam
+la automaticamente!
 Na tela do sistema, o botao "Abrir pasta de dados" abre essa pasta direto no
 Explorador de Arquivos.
 

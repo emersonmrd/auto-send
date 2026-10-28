@@ -28,6 +28,7 @@ def test_como_usar_explains_localappdata_and_how_to_copy_legacy_data():
     assert r"%LOCALAPPDATA%\Auto-Send" in COMO_USAR_TXT
     assert "v0.4.0" in COMO_USAR_TXT
     assert r"data\autosend.db" in COMO_USAR_TXT
+    assert "modelos de mensagem" in COMO_USAR_TXT
 
 
 def test_import_legacy_data_from_current_release_folder_without_interactive_prompt(tmp_path: Path):
