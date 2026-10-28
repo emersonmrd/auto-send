@@ -8,7 +8,8 @@ on:
     branches: [ main ]
   pull_request:
     # labeled: pôr o label windows-build num PR dispara o build Windows sem esperar novo commit.
-    types: [opened, synchronize, reopened, labeled]
+    # edited: editar a descrição do PR revalida o checklist de skills sem precisar de novo commit.
+    types: [opened, synchronize, reopened, labeled, edited]
   workflow_dispatch:
     inputs:
       windows:
@@ -37,6 +38,12 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Validate PR description checklist
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python3 scripts/dev/validate_pr_checklist.py
 
       - name: Match changed paths
         id: filter
