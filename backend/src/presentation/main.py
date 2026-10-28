@@ -1,4 +1,5 @@
 import asyncio
+from collections import OrderedDict
 import json
 import logging
 import os
@@ -6,7 +7,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -398,6 +399,10 @@ class BroadcastProgressResponse(BaseModel):
     status: str
     created_at: Optional[float] = None
     updated_at: Optional[float] = None
+
+class AbortBroadcastResponse(BaseModel):
+    tracking_id: str
+    status: str
 
 class ScheduledBroadcastCreateResponse(BaseModel):
     broadcast_id: str
@@ -1131,6 +1136,8 @@ upload_progress_tracker = UploadProgressStore(
     max_items=UPLOAD_PROGRESS_MAX_ITEMS,
 )
 progress_tracker = upload_progress_tracker
+active_broadcast_tasks: Dict[str, asyncio.Task] = {}
+cancelled_tracking_ids: OrderedDict[str, float] = OrderedDict()
 
 def update_progress(
     tracking_id: str,
@@ -1167,6 +1174,27 @@ async def get_broadcast_progress(tracking_id: str):
             detail="Tracking ID not found",
         )
     return upload_progress_tracker[tracking_id]
+
+
+@app.post(
+    "/api/v1/broadcasts/abort-upload/{tracking_id}",
+    response_model=AbortBroadcastResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def abort_broadcast_upload(tracking_id: str):
+    cancelled_tracking_ids[tracking_id] = time.time()
+    while len(cancelled_tracking_ids) > 1000:
+        cancelled_tracking_ids.popitem(last=False)
+
+    if tracking_id in upload_progress_tracker:
+        upload_progress_tracker[tracking_id]["status"] = "aborted"
+        upload_progress_tracker[tracking_id]["updated_at"] = time.time()
+
+    task = active_broadcast_tasks.get(tracking_id)
+    if task and not task.done():
+        task.cancel()
+
+    return {"tracking_id": tracking_id, "status": "aborted"}
 
 def extract_mp4_metadata(file_path: str) -> dict:
     import struct
@@ -1242,6 +1270,7 @@ def normalize_video_dimensions(
     responses={**_ERR_404, **_ERR_413, **_ERR_422},
 )
 async def create_broadcast(
+    request: Request,
     profile_id: str = Form(...),
     target_channel_ids: str = Form(...), # JSON string lista de chat_ids
     text: Optional[str] = Form(""),
@@ -1255,7 +1284,17 @@ async def create_broadcast(
     video_height: Optional[int] = Form(None),
     tracking_id: Optional[str] = Form(None),
 ):
+    broadcast = None
+    media_attachment = None
+    temp_file_path = None
+    temp_thumb_path = None
+
     if tracking_id:
+        if tracking_id in cancelled_tracking_ids:
+            raise HTTPException(status_code=499, detail="Broadcast cancelled by user")
+        curr_task = asyncio.current_task()
+        if curr_task:
+            active_broadcast_tasks[tracking_id] = curr_task
         update_progress(
             tracking_id,
             stage="uploading_to_telegram",
@@ -1299,10 +1338,6 @@ async def create_broadcast(
         raise HTTPException(status_code=422, detail=str(e))
 
     # Mídia temporária
-    media_attachment = None
-    temp_file_path = None
-    temp_thumb_path = None
-
     def reject_upload(status_code: int, detail: str):
         for path in (temp_thumb_path, temp_file_path):
             if path and os.path.exists(path):
@@ -1434,9 +1469,22 @@ async def create_broadcast(
         total_channels = len(channels_list)
         cached_file_id: Optional[str] = None
         for idx, chat_id in enumerate(channels_list):
+            if tracking_id and (
+                tracking_id in cancelled_tracking_ids
+                or upload_progress_tracker.get(tracking_id, {}).get("status") == "aborted"
+            ):
+                raise asyncio.CancelledError()
+            if await request.is_disconnected():
+                if tracking_id:
+                    cancelled_tracking_ids[tracking_id] = time.time()
+                    upload_progress_tracker[tracking_id]["status"] = "aborted"
+                raise asyncio.CancelledError()
+
             channel_cb = None
             if tracking_id and media_attachment and not cached_file_id:
                 def channel_progress_cb(sent_bytes: int, total_bytes: int):
+                    if tracking_id in cancelled_tracking_ids or upload_progress_tracker.get(tracking_id, {}).get("status") == "aborted":
+                        raise asyncio.CancelledError()
                     if tracking_id in upload_progress_tracker:
                         ratio = (sent_bytes / total_bytes) if total_bytes > 0 else 0
                         pct = int(ratio * 100)
@@ -1478,16 +1526,38 @@ async def create_broadcast(
             upload_progress_tracker[tracking_id]["status"] = "completed"
             upload_progress_tracker[tracking_id]["percent"] = 100
             upload_progress_tracker[tracking_id]["sent_bytes"] = upload_progress_tracker[tracking_id]["total_bytes"]
+    except asyncio.CancelledError:
+        logger.info("Envio do broadcast cancelado pelo usuário (tracking_id: %s)", tracking_id)
+        if tracking_id:
+            cancelled_tracking_ids[tracking_id] = time.time()
+            if tracking_id in upload_progress_tracker:
+                upload_progress_tracker[tracking_id]["status"] = "aborted"
+                upload_progress_tracker[tracking_id]["updated_at"] = time.time()
+        if broadcast:
+            try:
+                broadcast.cancel()
+                await broadcast_repo.save(broadcast)
+            except Exception:
+                pass
+        raise HTTPException(status_code=499, detail="Broadcast cancelled by user")
     except Exception:
         if tracking_id:
             upload_progress_tracker[tracking_id]["status"] = "failed"
         raise
     finally:
+        if tracking_id:
+            active_broadcast_tasks.pop(tracking_id, None)
         # Invariante de ciclo de vida: descarte imediato do arquivo temporário após disparo
         if temp_file_path and os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                pass
         if temp_thumb_path and os.path.exists(temp_thumb_path):
-            os.remove(temp_thumb_path)
+            try:
+                os.remove(temp_thumb_path)
+            except Exception:
+                pass
 
     return {
         "broadcast_id": broadcast.id,

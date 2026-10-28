@@ -2330,4 +2330,77 @@ async def test_message_templates_crud_flow(client):
     assert resp_list_after.json() == []
 
 
+async def test_abort_broadcast_upload_endpoint_returns_200_and_records_status(client):
+    tracking_id = "test-track-abort-1"
+    resp = await client.post(f"/api/v1/broadcasts/abort-upload/{tracking_id}")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tracking_id"] == tracking_id
+    assert data["status"] == "aborted"
+
+
+async def test_create_broadcast_aborts_immediately_when_cancelled_in_advance(client):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-abort-early", name="Test Early", credentials=creds)
+    await profile_repo.save(profile)
+
+    tracking_id = "test-track-early-abort"
+    # Cancela antes de iniciar
+    await client.post(f"/api/v1/broadcasts/abort-upload/{tracking_id}")
+
+    # Tenta criar o broadcast com o mesmo tracking_id
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "text": "Mensagem que não deve ser enviada",
+            "tracking_id": tracking_id,
+        },
+    )
+    assert resp.status_code == 499
+    assert resp.json()["detail"] == "Broadcast cancelled by user"
+
+
+async def test_create_broadcast_aborts_in_flight_when_abort_endpoint_called(client, monkeypatch):
+    import asyncio
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-abort-inflight", name="Test Inflight", credentials=creds)
+    await profile_repo.save(profile)
+
+    started_event = asyncio.Event()
+
+    async def _mock_slow_send(*args, **kwargs):
+        started_event.set()
+        await asyncio.sleep(5.0)
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", _mock_slow_send)
+
+    tracking_id = "test-track-inflight-abort"
+
+    async def _do_broadcast():
+        return await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": profile.id,
+                "target_channel_ids": json.dumps(["-1001234567890"]),
+                "text": "Mensagem cancelada em voo",
+                "tracking_id": tracking_id,
+            },
+        )
+
+    task = asyncio.create_task(_do_broadcast())
+    await started_event.wait()
+
+    # Dispara o cancelamento
+    abort_resp = await client.post(f"/api/v1/broadcasts/abort-upload/{tracking_id}")
+    assert abort_resp.status_code == 200
+
+    broadcast_resp = await task
+    assert broadcast_resp.status_code == 499
+    assert broadcast_resp.json()["detail"] == "Broadcast cancelled by user"
+
+
+
 

@@ -202,6 +202,7 @@ export default function Home() {
   const [uploadPhase, setUploadPhase] = useState<"uploading" | "transmitting" | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const activeXhrRef = useRef<XMLHttpRequest | null>(null);
+  const activeTrackingIdRef = useRef<string | null>(null);
   const transmittingStartTimeRef = useRef<number | null>(null);
   const [transmittingElapsedMs, setTransmittingElapsedMs] = useState<number>(0);
 
@@ -290,6 +291,13 @@ export default function Home() {
     return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
+  const formatElapsed = (ms: number) => {
+    const totalSec = Math.floor(ms / 1000);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${mins}:${secs.toString().padStart(2, "0")}`;
+  };
+
   const toLocalDateTimeParts = (d: Date) => {
     const pad = (n: number) => String(n).padStart(2, "0");
     const datePart = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -337,6 +345,16 @@ export default function Home() {
   };
 
   const handleAbortSend = () => {
+    const trackingIdToAbort = activeTrackingIdRef.current;
+    if (trackingIdToAbort) {
+      fetch(`${API_BASE_URL}/api/v1/broadcasts/abort-upload/${trackingIdToAbort}`, {
+        method: "POST",
+      }).catch(() => {
+        // Silencioso se backend offline
+      });
+      activeTrackingIdRef.current = null;
+    }
+
     if (progressIntervalRef.current) {
       clearInterval(progressIntervalRef.current);
       progressIntervalRef.current = null;
@@ -901,6 +919,7 @@ export default function Home() {
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : "track_" + Date.now();
+    activeTrackingIdRef.current = trackingId;
 
     const formData = new FormData();
     formData.append("tracking_id", trackingId);
@@ -1117,6 +1136,7 @@ export default function Home() {
       setTelegramProgress(null);
       sendAbortControllerRef.current = null;
       activeXhrRef.current = null;
+      activeTrackingIdRef.current = null;
       setIsSending(false);
       setUploadProgress(null);
       setUploadPhase(null);
@@ -2259,46 +2279,17 @@ export default function Home() {
                     : (mediaFile?.size ?? 0);
                 const isCompleted = telegramProgress?.status === "completed";
 
-                // Taxa dinâmica de ingestão do Telegram WAN calibrada por usuário
-                const userSpeedBps = getEstimatedTelegramSpeed();
-                const elapsedSec = transmittingElapsedMs / 1000;
-                const expectedSec = Math.max(2.5, total / userSpeedBps);
-
-                let simulatedPct = 0;
-                if (uploadPhase === "transmitting" && !isCompleted && total > 0) {
-                  if (elapsedSec <= expectedSec) {
-                    simulatedPct = Math.min(
-                      93,
-                      Math.round(93 * Math.sin((Math.PI / 2) * (elapsedSec / expectedSec)))
-                    );
-                  } else {
-                    const tailSec = elapsedSec - expectedSec;
-                    const tailProgress = 1 - Math.exp(-tailSec / (expectedSec * 0.4));
-                    simulatedPct = Math.min(97, Math.round(93 + tailProgress * 4));
-                  }
-                }
-
-                const realPct = telegramProgress?.percent ?? 0;
-                const effectivePct = isCompleted
-                  ? 100
-                  : realPct > 0 && realPct < 100
-                  ? Math.max(realPct, simulatedPct)
-                  : Math.max(2, simulatedPct);
-
-                const effectiveSent = isCompleted
-                  ? total
-                  : Math.min(total, Math.round((total * effectivePct) / 100));
-
                 let statusText = "";
                 let badgeText = "";
 
                 if (uploadPhase === "transmitting") {
                   if (isCompleted) {
-                    statusText = `Publicado com sucesso no canal! Concluindo...`;
+                    statusText = "Publicado com sucesso no canal! Concluindo...";
                     badgeText = "100%";
                   } else {
-                    statusText = `Transmitindo para o Telegram: ${effectivePct}% (${formatFileSize(effectiveSent)} / ${formatFileSize(total)}) • Publicando no canal...`;
-                    badgeText = `${effectivePct}%`;
+                    const elapsedStr = formatElapsed(transmittingElapsedMs);
+                    statusText = `Sincronizando com a nuvem do Telegram (${formatFileSize(total)}) • ${elapsedStr} decorridos • Publicando no canal...`;
+                    badgeText = "Transmitindo...";
                   }
                 } else {
                   statusText = `Fase 1/2: Enviando arquivo para o servidor... [${uploadProgress !== null ? uploadProgress : 0}%]`;
@@ -2329,16 +2320,21 @@ export default function Home() {
                       </div>
                     </div>
                     {/* Barra de Progresso Real */}
-                    <div className="w-full bg-[#0e1621] rounded-full h-3 overflow-hidden border border-[#3b6694]/50 p-0.5">
-                      <div
-                        className="bg-gradient-to-r from-[#2b5278] via-[#5288c1] to-[#71aaeb] h-full rounded-full transition-all duration-200 ease-out shadow"
-                        style={{
-                          width: `${Math.max(
-                            uploadPhase === "transmitting" ? effectivePct : (uploadProgress ?? 0),
-                            5
-                          )}%`,
-                        }}
-                      />
+                    <div className="relative w-full bg-[#0e1621] rounded-full h-3 overflow-hidden border border-[#3b6694]/50 p-0.5">
+                      {uploadPhase === "transmitting" ? (
+                        isCompleted ? (
+                          <div className="bg-emerald-500 h-full w-full rounded-full transition-all duration-300" />
+                        ) : (
+                          <div className="h-full bg-gradient-to-r from-[#2b5278] via-[#71aaeb] to-[#2b5278] rounded-full animate-indeterminate w-1/2" />
+                        )
+                      ) : (
+                        <div
+                          className="bg-gradient-to-r from-[#2b5278] via-[#5288c1] to-[#71aaeb] h-full rounded-full transition-all duration-200 ease-out shadow"
+                          style={{
+                            width: `${Math.max(uploadProgress ?? 0, 5)}%`,
+                          }}
+                        />
+                      )}
                     </div>
                   </div>
                 );
