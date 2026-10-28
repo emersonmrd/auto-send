@@ -2488,5 +2488,116 @@ async def test_create_broadcast_client_disconnect_without_progress_entry_returns
     assert resp.json()["detail"] == "Broadcast cancelled by user"
 
 
+async def test_create_broadcast_regular_poll_immediate(client, monkeypatch):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="poll_bot")
+    profile = Profile(id="prof-poll-imm", name="Poll Profile", credentials=creds)
+    await profile_repo.save(profile)
+
+    async def _mock_send_broadcast(**kwargs):
+        msg = kwargs["message"]
+        assert msg.poll is not None
+        assert msg.poll.question == "Qual seu editor?"
+        assert msg.poll.options == ["VSCode", "Neovim"]
+        return True
+
+    monkeypatch.setattr(telegram_gateway, "send_broadcast", _mock_send_broadcast)
+
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "poll_question": "Qual seu editor?",
+            "poll_options": json.dumps(["VSCode", "Neovim"]),
+            "poll_is_anonymous": "true",
+            "poll_allows_multiple_answers": "false",
+            "poll_type": "regular",
+        },
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["status"] == "COMPLETED"
+    assert data["dispatched_count"] == 1
+
+    hist_resp = await client.get(f"/api/v1/profiles/{profile.id}/broadcasts")
+    assert hist_resp.status_code == 200
+    hist = hist_resp.json()
+    assert len(hist) == 1
+    assert hist[0]["poll"]["question"] == "Qual seu editor?"
+    assert hist[0]["poll"]["options"] == ["VSCode", "Neovim"]
+
+
+async def test_create_broadcast_quiz_poll_scheduled(client):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="poll_bot_quiz")
+    profile = Profile(id="prof-poll-sched", name="Quiz Profile", credentials=creds)
+    await profile_repo.save(profile)
+
+    run_at = future_at(5, "14:00:00")
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "poll_question": "Capital do Brasil?",
+            "poll_options": json.dumps(["Brasília", "Rio", "São Paulo"]),
+            "poll_type": "quiz",
+            "poll_correct_option_id": "0",
+            "poll_explanation": "Brasília é a capital.",
+            "scheduled_at": run_at,
+        },
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["status"] == "SCHEDULED"
+
+    sched_resp = await client.get(f"/api/v1/profiles/{profile.id}/scheduled-broadcasts")
+    assert sched_resp.status_code == 200
+    items = sched_resp.json()
+    assert len(items) == 1
+    poll_data = items[0]["poll"]
+    assert poll_data is not None
+    assert poll_data["poll_type"] == "quiz"
+    assert poll_data["correct_option_id"] == 0
+    assert poll_data["explanation"] == "Brasília é a capital."
+
+
+async def test_create_broadcast_poll_validations(client, tmp_path):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="poll_bot_val")
+    profile = Profile(id="prof-poll-val", name="Val Profile", credentials=creds)
+    await profile_repo.save(profile)
+
+    # Rejeita quiz sem correct_option_id
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "poll_question": "Capital?",
+            "poll_options": json.dumps(["A", "B"]),
+            "poll_type": "quiz",
+        },
+    )
+    assert resp.status_code == 422
+    assert "quiz polls require correct_option_id" in resp.json()["detail"]
+
+    # Rejeita mídia e enquete juntos
+    test_img = tmp_path / "img.jpg"
+    test_img.write_bytes(b"\xff\xd8\xff\xe0fakejpeg")
+    with open(test_img, "rb") as f:
+        resp_media = await client.post(
+            "/api/v1/broadcasts",
+            data={
+                "profile_id": profile.id,
+                "target_channel_ids": json.dumps(["-1001234567890"]),
+                "poll_question": "Pergunta?",
+                "poll_options": json.dumps(["A", "B"]),
+            },
+            files={"media_file": ("test.jpg", f, "image/jpeg")},
+        )
+    assert resp_media.status_code == 422
+    assert resp_media.json()["detail"] == "A broadcast cannot have both media and a poll"
+
+
+
 
 

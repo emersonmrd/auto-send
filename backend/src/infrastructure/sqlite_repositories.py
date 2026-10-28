@@ -6,12 +6,14 @@ from sqlalchemy.orm import declarative_base, relationship
 
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
+    BroadcastPoll,
     BroadcastStatus,
     ChannelDeliveryResult,
     DeliveryFailureCategory,
     InlineButton,
     MediaAttachment,
     MediaType,
+    PollType,
 )
 from src.domain.broadcast.message_template import MessageTemplate
 from src.domain.channels.channel import Channel
@@ -67,6 +69,7 @@ class BroadcastModel(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     delivery_results = Column(Text, nullable=True)  # JSON encoded (#31)
     edit_locked_until = Column(DateTime(timezone=True), nullable=True)  # (#15)
+    poll_data = Column(Text, nullable=True)  # JSON encoded (#97)
 
 class MessageTemplateModel(Base):
     __tablename__ = "message_templates"
@@ -229,6 +232,22 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                 m_thumb = broadcast.media.thumbnail_path if broadcast.media else None
                 b_text = broadcast.button.text if broadcast.button else None
                 b_url = broadcast.button.url if broadcast.button else None
+                poll_json = (
+                    json.dumps(
+                        {
+                            "question": broadcast.poll.question,
+                            "options": broadcast.poll.options,
+                            "is_anonymous": broadcast.poll.is_anonymous,
+                            "allows_multiple_answers": broadcast.poll.allows_multiple_answers,
+                            "poll_type": broadcast.poll.poll_type.value,
+                            "correct_option_id": broadcast.poll.correct_option_id,
+                            "explanation": broadcast.poll.explanation,
+                            "is_closed": broadcast.poll.is_closed,
+                        }
+                    )
+                    if broadcast.poll
+                    else None
+                )
                 results_json = (
                     json.dumps(
                         [
@@ -261,6 +280,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                     existing.button_url = b_url
                     existing.delivery_results = results_json
                     existing.edit_locked_until = broadcast.edit_locked_until
+                    existing.poll_data = poll_json
                 else:
                     db_obj = BroadcastModel(
                         id=broadcast.id,
@@ -281,6 +301,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
                         created_at=broadcast.created_at,
                         delivery_results=results_json,
                         edit_locked_until=broadcast.edit_locked_until,
+                        poll_data=poll_json,
                     )
                     session.add(db_obj)
 
@@ -377,6 +398,24 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             except Exception:
                 delivery_results = []
 
+        poll: Optional[BroadcastPoll] = None
+        raw_poll = getattr(obj, "poll_data", None)
+        if raw_poll:
+            try:
+                p = json.loads(raw_poll)
+                poll = BroadcastPoll(
+                    question=p["question"],
+                    options=p["options"],
+                    is_anonymous=p.get("is_anonymous", True),
+                    allows_multiple_answers=p.get("allows_multiple_answers", False),
+                    poll_type=PollType(p.get("poll_type", "regular")),
+                    correct_option_id=p.get("correct_option_id"),
+                    explanation=p.get("explanation"),
+                    is_closed=p.get("is_closed", False),
+                )
+            except Exception:
+                poll = None
+
         return BroadcastMessage(
             id=obj.id,
             profile_id=obj.profile_id,
@@ -384,6 +423,7 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             text=obj.text or "",
             media=media,
             button=button,
+            poll=poll,
             status=BroadcastStatus(obj.status),
             scheduled_at=scheduled_dt,
             created_at=created_dt,

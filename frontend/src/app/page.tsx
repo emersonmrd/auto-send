@@ -109,6 +109,7 @@ import {
   Server,
   Bookmark,
   BookmarkPlus,
+  BarChart2,
 } from "lucide-react";
 
 export default function Home() {
@@ -133,6 +134,28 @@ export default function Home() {
   const [showButtonModal, setShowButtonModal] = useState(false);
   const [tempButtonText, setTempButtonText] = useState("");
   const [tempButtonUrl, setTempButtonUrl] = useState("");
+
+  // Enquete do Telegram (Polls #97)
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [pollIsAnonymous, setPollIsAnonymous] = useState(true);
+  const [pollAllowsMultipleAnswers, setPollAllowsMultipleAnswers] = useState(false);
+  const [pollType, setPollType] = useState<"regular" | "quiz">("regular");
+  const [pollCorrectOptionId, setPollCorrectOptionId] = useState<number | null>(null);
+  const [pollExplanation, setPollExplanation] = useState("");
+  const [pollIsClosed, setPollIsClosed] = useState(false);
+
+  // Temporários para o modal de enquete
+  const [tempPollQuestion, setTempPollQuestion] = useState("");
+  const [tempPollOptions, setTempPollOptions] = useState<string[]>(["", ""]);
+  const [tempPollIsAnonymous, setTempPollIsAnonymous] = useState(true);
+  const [tempPollAllowsMultipleAnswers, setTempPollAllowsMultipleAnswers] = useState(false);
+  const [tempPollType, setTempPollType] = useState<"regular" | "quiz">("regular");
+  const [tempPollCorrectOptionId, setTempPollCorrectOptionId] = useState<number | null>(null);
+  const [tempPollExplanation, setTempPollExplanation] = useState("");
+  const [tempPollIsClosed, setTempPollIsClosed] = useState(false);
+
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
   // Mídia do agendamento sendo editado no compositor (#18)
@@ -670,6 +693,10 @@ export default function Home() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (pollQuestion) {
+        handleRemovePoll();
+        showToast("A enquete foi removida porque o Telegram não permite mídia e enquete na mesma mensagem.", "info");
+      }
       if (file.size > TELEGRAM_MAX_STANDARD_SIZE_BYTES && !telegramApiConfig?.configured) {
         setShowTelegramApiModal(true);
       }
@@ -772,11 +799,24 @@ export default function Home() {
     sentText: string,
     sentFile: File | null,
     sentBtnText: string,
-    sentBtnUrl: string
+    sentBtnUrl: string,
+    sentPollQuestion?: string
   ) => {
     setText((prev) => (prev === sentText ? "" : prev));
     setButtonText((prev) => (prev === sentBtnText ? "" : prev));
     setButtonUrl((prev) => (prev === sentBtnUrl ? "" : prev));
+    if (sentPollQuestion !== undefined) {
+      setPollQuestion((prev) => {
+        if (prev === sentPollQuestion) {
+          setPollOptions(["", ""]);
+          setPollCorrectOptionId(null);
+          setPollExplanation("");
+          setPollType("regular");
+          return "";
+        }
+        return prev;
+      });
+    }
     setMediaFile((prevFile) => {
       if (prevFile === sentFile) {
         if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
@@ -843,6 +883,78 @@ export default function Home() {
     setShowButtonModal(false);
   };
 
+  // Handlers de Enquete (Polls #97)
+  const handleOpenPollModal = () => {
+    setTempPollQuestion(pollQuestion);
+    setTempPollOptions(pollOptions.length >= 2 ? [...pollOptions] : ["", ""]);
+    setTempPollIsAnonymous(pollIsAnonymous);
+    setTempPollAllowsMultipleAnswers(pollAllowsMultipleAnswers);
+    setTempPollType(pollType);
+    setTempPollCorrectOptionId(pollCorrectOptionId);
+    setTempPollExplanation(pollExplanation);
+    setTempPollIsClosed(pollIsClosed);
+    setShowPollModal(true);
+  };
+
+  const handleSavePollModal = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const q = tempPollQuestion.trim();
+    if (!q) {
+      showToast("A pergunta da enquete não pode estar vazia.", "error");
+      return;
+    }
+    const cleanOpts = tempPollOptions.map((o) => o.trim()).filter(Boolean);
+    if (cleanOpts.length < 2) {
+      showToast("A enquete deve ter pelo menos 2 opções preenchidas.", "error");
+      return;
+    }
+    if (cleanOpts.length > 10) {
+      showToast("A enquete não pode ter mais de 10 opções.", "error");
+      return;
+    }
+    if (tempPollType === "quiz") {
+      if (tempPollCorrectOptionId === null || tempPollCorrectOptionId < 0 || tempPollCorrectOptionId >= cleanOpts.length) {
+        showToast("No modo Quiz, selecione a resposta correta entre as opções.", "error");
+        return;
+      }
+    }
+
+    if (mediaFile || (existingEditingMedia && !existingMediaRemoved)) {
+      setMediaFile(null);
+      setExistingEditingMedia(null);
+      setExistingMediaRemoved(true);
+      if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
+      setMediaPreviewUrl(null);
+      showToast("A mídia foi removida porque o Telegram não permite mídia e enquete na mesma mensagem.", "info");
+    }
+
+    setPollQuestion(q);
+    setPollOptions(cleanOpts);
+    setPollIsAnonymous(tempPollIsAnonymous);
+    setPollAllowsMultipleAnswers(tempPollType === "quiz" ? false : tempPollAllowsMultipleAnswers);
+    setPollType(tempPollType);
+    setPollCorrectOptionId(tempPollType === "quiz" ? tempPollCorrectOptionId : null);
+    setPollExplanation(tempPollType === "quiz" ? tempPollExplanation.trim() : "");
+    setPollIsClosed(tempPollIsClosed);
+    setShowPollModal(false);
+  };
+
+  const handleRemovePoll = () => {
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setPollIsAnonymous(true);
+    setPollAllowsMultipleAnswers(false);
+    setPollType("regular");
+    setPollCorrectOptionId(null);
+    setPollExplanation("");
+    setPollIsClosed(false);
+    setShowPollModal(false);
+  };
+
+  const handleCancelPollModal = () => {
+    setShowPollModal(false);
+  };
+
   // Renderizador impecável de Links HTML e texto para o Balão do Telegram (Live Preview)
   const renderFormattedMessage = (rawText: string) => renderTelegramHtmlPreview(rawText);
 
@@ -866,8 +978,8 @@ export default function Home() {
       setFeedback({ type: "error", message: "Selecione pelo menos um canal de destino!" });
       return;
     }
-    if (!text.trim() && !mediaFile) {
-      setFeedback({ type: "error", message: "Escreva uma mensagem ou anexe uma mídia!" });
+    if (!text.trim() && !mediaFile && !pollQuestion.trim()) {
+      setFeedback({ type: "error", message: "Escreva uma mensagem, anexe uma mídia ou crie uma enquete!" });
       return;
     }
 
@@ -880,6 +992,7 @@ export default function Home() {
       mediaSize: mediaFile?.size || 0,
       buttonText: buttonText.trim(),
       buttonUrl: buttonUrl.trim(),
+      pollQuestion: pollQuestion.trim(),
       scheduleDateIso: scheduleDateIso || null,
     });
     const now = Date.now();
@@ -900,6 +1013,14 @@ export default function Home() {
     const currentMediaFile = mediaFile;
     const currentButtonText = buttonText;
     const currentButtonUrl = buttonUrl;
+    const currentPollQuestion = pollQuestion.trim();
+    const currentPollOptions = pollOptions.map((o) => o.trim()).filter(Boolean);
+    const currentPollIsAnonymous = pollIsAnonymous;
+    const currentPollAllowsMultipleAnswers = pollAllowsMultipleAnswers;
+    const currentPollType = pollType;
+    const currentPollCorrectOptionId = pollCorrectOptionId;
+    const currentPollExplanation = pollExplanation.trim();
+    const currentPollIsClosed = pollIsClosed;
     const currentChannelIds = [...selectedChannelIds];
 
     setIsSending(true);
@@ -929,6 +1050,20 @@ export default function Home() {
     if (currentButtonText && currentButtonUrl) {
       formData.append("button_text", currentButtonText);
       formData.append("button_url", currentButtonUrl);
+    }
+    if (currentPollQuestion) {
+      formData.append("poll_question", currentPollQuestion);
+      formData.append("poll_options", JSON.stringify(currentPollOptions));
+      formData.append("poll_is_anonymous", String(currentPollIsAnonymous));
+      formData.append("poll_allows_multiple_answers", String(currentPollAllowsMultipleAnswers));
+      formData.append("poll_type", currentPollType);
+      if (currentPollType === "quiz" && currentPollCorrectOptionId !== null) {
+        formData.append("poll_correct_option_id", String(currentPollCorrectOptionId));
+        if (currentPollExplanation) {
+          formData.append("poll_explanation", currentPollExplanation);
+        }
+      }
+      formData.append("poll_is_closed", String(currentPollIsClosed));
     }
     if (currentMediaFile) {
       formData.append("media_file", currentMediaFile);
@@ -1062,7 +1197,7 @@ export default function Home() {
           message: `Mensagem agendada com sucesso para ${new Date(result.scheduled_at).toLocaleString()}!`,
         });
         fetchScheduledQueue(currentProfileId);
-        clearComposerIfUnmodified(currentText, currentMediaFile, currentButtonText, currentButtonUrl);
+        clearComposerIfUnmodified(currentText, currentMediaFile, currentButtonText, currentButtonUrl, currentPollQuestion);
         setShowScheduleModal(false);
         setScheduledAtInput("");
         setScheduleConfirmedPreview(null);
@@ -1101,7 +1236,7 @@ export default function Home() {
             message: `Disparado com sucesso para ${dispatchedCount} canal(is)!`,
           });
           fetchScheduledQueue(currentProfileId);
-          clearComposerIfUnmodified(currentText, currentMediaFile, currentButtonText, currentButtonUrl);
+          clearComposerIfUnmodified(currentText, currentMediaFile, currentButtonText, currentButtonUrl, currentPollQuestion);
           setShowScheduleModal(false);
           setScheduledAtInput("");
           setScheduleConfirmedPreview(null);
@@ -1307,6 +1442,25 @@ export default function Home() {
       const d = new Date(item.scheduled_at);
       if (!isNaN(d.getTime())) applyScheduleDateTime(d);
     }
+    if (item.poll) {
+      setPollQuestion(item.poll.question);
+      setPollOptions(item.poll.options.length >= 2 ? [...item.poll.options] : [...item.poll.options, ""]);
+      setPollIsAnonymous(item.poll.is_anonymous);
+      setPollAllowsMultipleAnswers(item.poll.allows_multiple_answers);
+      setPollType(item.poll.poll_type);
+      setPollCorrectOptionId(item.poll.correct_option_id ?? null);
+      setPollExplanation(item.poll.explanation || "");
+      setPollIsClosed(Boolean(item.poll.is_closed));
+    } else {
+      setPollQuestion("");
+      setPollOptions(["", ""]);
+      setPollIsAnonymous(true);
+      setPollAllowsMultipleAnswers(false);
+      setPollType("regular");
+      setPollCorrectOptionId(null);
+      setPollExplanation("");
+      setPollIsClosed(false);
+    }
     // Mídia do agendamento (#18)
     if (item.media) {
       setExistingEditingMedia({
@@ -1342,6 +1496,14 @@ export default function Home() {
     setText("");
     setButtonText("");
     setButtonUrl("");
+    setPollQuestion("");
+    setPollOptions(["", ""]);
+    setPollIsAnonymous(true);
+    setPollAllowsMultipleAnswers(false);
+    setPollType("regular");
+    setPollCorrectOptionId(null);
+    setPollExplanation("");
+    setPollIsClosed(false);
     setScheduledAtInput("");
     setScheduleConfirmedPreview(null);
     setExistingEditingMedia(null);
@@ -2226,6 +2388,43 @@ export default function Home() {
                     </div>
                   ) : null}
 
+                  {/* Prévia da Enquete do Telegram (se configurada) */}
+                  {pollQuestion && (
+                    <div className="mb-3 p-3 rounded-xl bg-[#242f3d]/80 border border-[#3b6694]/40 text-left">
+                      <div className="flex items-center gap-2 mb-2 text-xs font-semibold text-[#71aaeb]">
+                        <BarChart2 className="w-4 h-4 shrink-0" />
+                        <span>{pollType === "quiz" ? "Quiz / Questionário" : "Enquete"}</span>
+                        <span className="text-[10px] text-gray-400 font-normal">
+                          ({pollIsAnonymous ? "Anônima" : "Votos visíveis"}
+                          {pollAllowsMultipleAnswers && pollType !== "quiz" ? " • Múltiplas escolhas" : ""})
+                        </span>
+                      </div>
+                      <p className="text-sm font-medium text-white mb-2.5 break-words">{pollQuestion}</p>
+                      <div className="space-y-1.5">
+                        {pollOptions.map((opt, idx) => (
+                          <div
+                            key={idx}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs border ${
+                              pollType === "quiz" && pollCorrectOptionId === idx
+                                ? "bg-green-950/40 border-green-600/50 text-green-200"
+                                : "bg-[#17212b]/60 border-[#242f3d] text-gray-200"
+                            }`}
+                          >
+                            <span className="w-4 h-4 rounded-full border border-gray-400 flex items-center justify-center text-[10px] text-gray-400 shrink-0">
+                              {pollType === "quiz" && pollCorrectOptionId === idx ? "✓" : idx + 1}
+                            </span>
+                            <span className="break-words flex-1">{opt || `Opção ${idx + 1}`}</span>
+                          </div>
+                        ))}
+                      </div>
+                      {pollType === "quiz" && pollExplanation && (
+                        <p className="mt-2 text-[11px] text-gray-400 italic">
+                          💡 Explicação: {pollExplanation}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {/* Texto da Mensagem com Renderização de Links e Preservação de Espaçamento */}
                   <div className="text-sm whitespace-pre-wrap leading-relaxed break-words">
                     {renderFormattedMessage(text)}
@@ -2339,6 +2538,23 @@ export default function Home() {
                   aria-label="Adicionar Botão Abaixo da Mensagem"
                 >
                   <SquarePlus className="w-5 h-5" />
+                </button>
+
+                {/* RECURSO: Adicionar Enquete (#97) */}
+                <button
+                  type="button"
+                  onClick={handleOpenPollModal}
+                  className={`p-2.5 rounded-full hover:bg-[#242f3d] transition ${
+                    pollQuestion ? "text-[#5288c1] bg-[#242f3d] ring-1 ring-[#5288c1]/50" : "text-gray-400 hover:text-[#5288c1]"
+                  }`}
+                  title={
+                    pollQuestion
+                      ? `Enquete configurada: "${pollQuestion.substring(0, 30)}..."`
+                      : "Criar Enquete"
+                  }
+                  aria-label="Criar Enquete"
+                >
+                  <BarChart2 className="w-5 h-5" />
                 </button>
 
                 {/* RECURSO: Modelos de Mensagens Salvos (#63) */}
@@ -2515,6 +2731,37 @@ export default function Home() {
                           )}
                         </div>
                       )}
+                      {/* Chip de Enquete Ativa */}
+                      {pollQuestion && (
+                        <div className="mb-2 p-2 bg-[#203a56]/60 border border-[#3b6694]/50 rounded-xl flex items-center justify-between gap-2 text-xs text-blue-100">
+                          <div className="flex items-center gap-2 truncate">
+                            <BarChart2 className="w-4 h-4 text-[#71aaeb] shrink-0" />
+                            <span className="font-semibold text-[#71aaeb]">
+                              {pollType === "quiz" ? "Quiz:" : "Enquete:"}
+                            </span>
+                            <span className="truncate">{pollQuestion}</span>
+                            <span className="text-[10px] text-gray-400 shrink-0">
+                              ({pollOptions.filter((o) => o.trim()).length} opções)
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={handleOpenPollModal}
+                              className="text-xs text-[#71aaeb] hover:underline"
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleRemovePoll}
+                              className="text-xs text-red-400 hover:text-red-300"
+                            >
+                              Remover
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       <TelegramRichEditor
                         ariaLabel="Mensagem do canal"
                         value={text}
@@ -2641,6 +2888,255 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={handleCancelButtonModal}
+                  className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition rounded-lg"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition shadow"
+                >
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* RECURSO: MODAL CRIAR ENQUETE (#97) */}
+      {showPollModal && (
+        <div
+          role="dialog"
+          aria-label="Criar Enquete do Telegram"
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+        >
+          <form
+            onSubmit={handleSavePollModal}
+            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-lg w-full p-5 shadow-2xl max-h-[90vh] flex flex-col"
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+              <h3 className="text-base font-semibold text-gray-100 flex items-center gap-2">
+                <BarChart2 className="w-5 h-5 text-[#5288c1]" /> Criar Enquete
+              </h3>
+              <button
+                type="button"
+                onClick={handleCancelPollModal}
+                className="text-gray-400 hover:text-gray-200"
+                aria-label="Fechar modal de enquete"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto py-4 space-y-4 flex-1 pr-1">
+              {/* Tipo de Enquete: Regular vs Quiz */}
+              <div>
+                <label className="text-xs text-gray-400 block mb-1.5 font-medium">Tipo de Enquete</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTempPollType("regular");
+                      setTempPollCorrectOptionId(null);
+                      setTempPollExplanation("");
+                    }}
+                    className={`px-3 py-2 text-xs rounded-lg border font-medium transition flex items-center justify-center gap-2 ${
+                      tempPollType === "regular"
+                        ? "bg-[#5288c1]/20 border-[#5288c1] text-white"
+                        : "bg-[#242f3d] border-transparent text-gray-400 hover:text-gray-200"
+                    }`}
+                  >
+                    <span>📊 Enquete Comum</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTempPollType("quiz");
+                      setTempPollAllowsMultipleAnswers(false);
+                      if (tempPollCorrectOptionId === null) {
+                        setTempPollCorrectOptionId(0);
+                      }
+                    }}
+                    className={`px-3 py-2 text-xs rounded-lg border font-medium transition flex items-center justify-center gap-2 ${
+                      tempPollType === "quiz"
+                        ? "bg-[#5288c1]/20 border-[#5288c1] text-white"
+                        : "bg-[#242f3d] border-transparent text-gray-400 hover:text-gray-200"
+                    }`}
+                  >
+                    <span>🎯 Quiz / Questionário</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Pergunta */}
+              <div>
+                <label htmlFor="poll-question-input" className="text-xs text-gray-400 block mb-1 font-medium">
+                  Pergunta da Enquete
+                </label>
+                <input
+                  id="poll-question-input"
+                  type="text"
+                  placeholder="Ex: Qual tema vocês querem no próximo conteúdo?"
+                  maxLength={300}
+                  value={tempPollQuestion}
+                  onChange={(e) => setTempPollQuestion(e.target.value)}
+                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  autoFocus
+                />
+                <div className="text-[10px] text-gray-500 text-right mt-0.5">
+                  {tempPollQuestion.length}/300
+                </div>
+              </div>
+
+              {/* Opções de Resposta */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs text-gray-400 font-medium">
+                    Opções ({tempPollOptions.length}/10)
+                    {tempPollType === "quiz" && (
+                      <span className="text-green-400 font-normal ml-1">
+                        (marque o círculo da resposta correta)
+                      </span>
+                    )}
+                  </label>
+                  {tempPollOptions.length < 10 && (
+                    <button
+                      type="button"
+                      onClick={() => setTempPollOptions((prev) => [...prev, ""])}
+                      className="text-xs text-[#5288c1] hover:underline flex items-center gap-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" /> Adicionar Opção
+                    </button>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  {tempPollOptions.map((opt, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      {tempPollType === "quiz" && (
+                        <button
+                          type="button"
+                          onClick={() => setTempPollCorrectOptionId(idx)}
+                          title="Marcar como resposta correta"
+                          className={`w-6 h-6 rounded-full border flex items-center justify-center shrink-0 transition ${
+                            tempPollCorrectOptionId === idx
+                              ? "bg-green-600 border-green-500 text-white"
+                              : "border-gray-500 text-transparent hover:border-gray-300"
+                          }`}
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      <input
+                        type="text"
+                        placeholder={`Opção ${idx + 1}`}
+                        maxLength={100}
+                        value={opt}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setTempPollOptions((prev) => {
+                            const next = [...prev];
+                            next[idx] = val;
+                            return next;
+                          });
+                        }}
+                        className="flex-1 bg-[#242f3d] rounded-lg px-3 py-1.5 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                      />
+                      {tempPollOptions.length > 2 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTempPollOptions((prev) => prev.filter((_, i) => i !== idx));
+                            if (tempPollCorrectOptionId === idx) {
+                              setTempPollCorrectOptionId(0);
+                            } else if (tempPollCorrectOptionId !== null && tempPollCorrectOptionId > idx) {
+                              setTempPollCorrectOptionId(tempPollCorrectOptionId - 1);
+                            }
+                          }}
+                          className="p-1.5 text-gray-500 hover:text-red-400 transition"
+                          title="Remover opção"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Explicação do Quiz (Apenas Quiz) */}
+              {tempPollType === "quiz" && (
+                <div>
+                  <label htmlFor="poll-explanation-input" className="text-xs text-gray-400 block mb-1 font-medium">
+                    Explicação (opcional - exibida quando o usuário responder)
+                  </label>
+                  <textarea
+                    id="poll-explanation-input"
+                    rows={2}
+                    placeholder="Explique por que esta resposta é a correta..."
+                    maxLength={200}
+                    value={tempPollExplanation}
+                    onChange={(e) => setTempPollExplanation(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-xs text-white outline-none border border-transparent focus:border-[#5288c1] resize-none"
+                  />
+                  <div className="text-[10px] text-gray-500 text-right mt-0.5">
+                    {tempPollExplanation.length}/200
+                  </div>
+                </div>
+              )}
+
+              {/* Opções e Configurações de Voto */}
+              <div className="space-y-2 pt-2 border-t border-gray-800">
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
+                  <input
+                    type="checkbox"
+                    checked={tempPollIsAnonymous}
+                    onChange={(e) => setTempPollIsAnonymous(e.target.checked)}
+                    className="rounded bg-[#242f3d] border-gray-600 text-[#5288c1] focus:ring-0"
+                  />
+                  <span>Voto Anônimo (os usuários não verão quem votou em quê)</span>
+                </label>
+                {!tempPollIsAnonymous && (
+                  <div className="text-[11px] text-amber-200 bg-amber-950/60 border border-amber-600/60 rounded-lg p-2 flex items-start gap-1.5 leading-relaxed">
+                    <Info className="w-3.5 h-3.5 shrink-0 text-amber-400 mt-0.5" />
+                    <span>
+                      <strong>Aviso do Telegram:</strong> Canais exigem voto anônimo por regra de privacidade da plataforma. O Telegram rejeitará o envio se este campo estiver desmarcado para canais (enquetes públicas com votos visíveis só funcionam em grupos).
+                    </span>
+                  </div>
+                )}
+
+                {tempPollType === "regular" && (
+                  <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
+                    <input
+                      type="checkbox"
+                      checked={tempPollAllowsMultipleAnswers}
+                      onChange={(e) => setTempPollAllowsMultipleAnswers(e.target.checked)}
+                      className="rounded bg-[#242f3d] border-gray-600 text-[#5288c1] focus:ring-0"
+                    />
+                    <span>Permitir múltiplas respostas</span>
+                  </label>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-800">
+              {pollQuestion ? (
+                <button
+                  type="button"
+                  onClick={handleRemovePoll}
+                  className="text-xs text-red-400 hover:text-red-300 font-medium transition"
+                  title="Remover a enquete configurada"
+                >
+                  Remover Enquete
+                </button>
+              ) : (
+                <div />
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelPollModal}
                   className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition rounded-lg"
                 >
                   Cancelar
@@ -3368,15 +3864,30 @@ export default function Home() {
 
                       {/* Conteúdo da mensagem com links formatados */}
                       <div className="text-xs text-gray-200 line-clamp-3 whitespace-pre-wrap leading-relaxed">
-                        {item.text ? renderFormattedMessage(item.text) : <span className="italic text-gray-400">Mensagem sem texto</span>}
+                        {item.text ? (
+                          renderFormattedMessage(item.text)
+                        ) : item.poll ? (
+                          <span className="font-medium text-[#71aaeb]">
+                            📊 {item.poll.poll_type === "quiz" ? "[Quiz] " : "[Enquete] "}
+                            {item.poll.question}
+                          </span>
+                        ) : (
+                          <span className="italic text-gray-400">Mensagem sem texto</span>
+                        )}
                       </div>
 
-                      {/* Mídia e Botão se houver */}
+                      {/* Mídia, Enquete e Botão se houver */}
                       <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-gray-700/40 text-[11px] text-gray-400">
                         {item.media && (
                           <span className="inline-flex items-center gap-1 bg-[#17212b] px-2 py-1 rounded text-green-400">
                             {isPhoto ? <ImageIcon className="w-3 h-3" /> : <Video className="w-3 h-3" />}
                             {isPhoto ? "Foto anexada" : isVideo ? "Vídeo anexado" : "Mídia anexada"}
+                          </span>
+                        )}
+                        {item.poll && (
+                          <span className="inline-flex items-center gap-1 bg-[#17212b] px-2 py-1 rounded text-[#71aaeb]">
+                            <BarChart2 className="w-3 h-3" />
+                            {item.poll.poll_type === "quiz" ? "Quiz" : "Enquete"} ({item.poll.options.length} opções)
                           </span>
                         )}
                         {item.button && (
@@ -3489,7 +4000,16 @@ export default function Home() {
                           </span>
                         </div>
                         <div className="text-gray-200 line-clamp-2 whitespace-pre-wrap">
-                          {hist.text ? renderFormattedMessage(hist.text) : <span className="italic text-gray-400">Mensagem sem texto</span>}
+                          {hist.text ? (
+                            renderFormattedMessage(hist.text)
+                          ) : hist.poll ? (
+                            <span className="font-medium text-[#71aaeb]">
+                              📊 {hist.poll.poll_type === "quiz" ? "[Quiz] " : "[Enquete] "}
+                              {hist.poll.question}
+                            </span>
+                          ) : (
+                            <span className="italic text-gray-400">Mensagem sem texto</span>
+                          )}
                         </div>
                         {summary ? (
                           <div

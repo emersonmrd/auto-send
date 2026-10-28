@@ -17,12 +17,14 @@ from pydantic import BaseModel, Field, field_validator
 from src.domain.broadcast.media_format import classify_media
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
+    BroadcastPoll,
     ChannelDeliveryResult,
     DeliveryFailureCategory,
     InlineButton,
     MediaAttachment,
     MediaType,
     BroadcastStatus,
+    PollType,
     ensure_schedulable,
     validate_and_escape_telegram_html,
 )
@@ -380,6 +382,17 @@ class ChannelDeliveryResultResponse(BaseModel):
     detail: Optional[str] = None
 
 
+class BroadcastPollResponse(BaseModel):
+    question: str
+    options: List[str]
+    is_anonymous: bool
+    allows_multiple_answers: bool
+    poll_type: str
+    correct_option_id: Optional[int] = None
+    explanation: Optional[str] = None
+    is_closed: bool = False
+
+
 class BroadcastHistoryItemResponse(BaseModel):
     id: str
     profile_id: str
@@ -389,6 +402,7 @@ class BroadcastHistoryItemResponse(BaseModel):
     scheduled_at: Optional[str] = None
     created_at: str
     delivery_results: List[ChannelDeliveryResultResponse] = []
+    poll: Optional[BroadcastPollResponse] = None
 
 class BroadcastProgressResponse(BaseModel):
     tracking_id: str
@@ -434,6 +448,7 @@ class ScheduledBroadcastResponse(BaseModel):
     text: str
     media: Optional[BroadcastMediaResponse] = None
     button: Optional[BroadcastButtonResponse] = None
+    poll: Optional[BroadcastPollResponse] = None
     status: str
     scheduled_at: Optional[str] = None
     created_at: Optional[str] = None
@@ -470,6 +485,8 @@ def _cleanup_broadcast_media(broadcast: BroadcastMessage) -> None:
 
 def _to_affected_item(b: BroadcastMessage) -> dict:
     preview = (b.text or "").strip().replace("\n", " ")
+    if not preview and b.poll:
+        preview = f"📊 Enquete: {b.poll.question}"
     if len(preview) > 60:
         preview = preview[:60] + "…"
     return {
@@ -1124,6 +1141,16 @@ async def list_profile_broadcasts(profile_id: str):
             "scheduled_at": b.scheduled_at.isoformat() if b.scheduled_at else None,
             "created_at": b.created_at.isoformat(),
             "delivery_results": _serialize_delivery_results(b.delivery_results),
+            "poll": {
+                "question": b.poll.question,
+                "options": b.poll.options,
+                "is_anonymous": b.poll.is_anonymous,
+                "allows_multiple_answers": b.poll.allows_multiple_answers,
+                "poll_type": b.poll.poll_type.value,
+                "correct_option_id": b.poll.correct_option_id,
+                "explanation": b.poll.explanation,
+                "is_closed": b.poll.is_closed,
+            } if b.poll else None,
         }
         for b in broadcasts
     ]
@@ -1290,6 +1317,14 @@ async def create_broadcast(
     video_width: Optional[int] = Form(None),
     video_height: Optional[int] = Form(None),
     tracking_id: Optional[str] = Form(None),
+    poll_question: Optional[str] = Form(None),
+    poll_options: Optional[str] = Form(None),
+    poll_is_anonymous: Optional[bool] = Form(True),
+    poll_allows_multiple_answers: Optional[bool] = Form(False),
+    poll_type: Optional[str] = Form("regular"),
+    poll_correct_option_id: Optional[int] = Form(None),
+    poll_explanation: Optional[str] = Form(None),
+    poll_is_closed: Optional[bool] = Form(False),
 ):
     broadcast = None
     media_attachment = None
@@ -1435,6 +1470,36 @@ async def create_broadcast(
                 upload_progress_tracker[tracking_id]["updated_at"] = time.time()
             raise HTTPException(status_code=422, detail=str(schedule_error))
 
+    poll = None
+    if poll_question and poll_question.strip():
+        if has_media:
+            reject_upload(422, "A broadcast cannot have both media and a poll")
+        try:
+            if not poll_options:
+                raise ValueError("poll must have at least 2 options")
+            opts = json.loads(poll_options) if isinstance(poll_options, str) else poll_options
+            if not isinstance(opts, list):
+                raise ValueError("poll options must be a list")
+            p_type = PollType.QUIZ if str(poll_type).lower() == "quiz" else PollType.REGULAR
+            poll = BroadcastPoll(
+                question=poll_question.strip(),
+                options=[str(o).strip() for o in opts],
+                is_anonymous=bool(poll_is_anonymous),
+                allows_multiple_answers=bool(poll_allows_multiple_answers),
+                poll_type=p_type,
+                correct_option_id=poll_correct_option_id,
+                explanation=poll_explanation.strip() if poll_explanation and poll_explanation.strip() else None,
+                is_closed=bool(poll_is_closed),
+            )
+        except ValueError as e:
+            if tracking_id:
+                upload_progress_tracker[tracking_id]["status"] = "failed"
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception:
+            if tracking_id:
+                upload_progress_tracker[tracking_id]["status"] = "failed"
+            raise HTTPException(status_code=422, detail="Invalid poll options format")
+
     broadcast = BroadcastMessage(
         id=str(uuid.uuid4()),
         profile_id=profile_id,
@@ -1442,6 +1507,7 @@ async def create_broadcast(
         text=text or "",
         media=media_attachment,
         button=button,
+        poll=poll,
         scheduled_at=parsed_scheduled_at,
         status=BroadcastStatus.SCHEDULED if parsed_scheduled_at else BroadcastStatus.PENDING,
     )
@@ -1590,6 +1656,16 @@ def _serialize_scheduled_broadcast(b: BroadcastMessage) -> dict:
             "text": b.button.text,
             "url": b.button.url,
         } if b.button else None,
+        "poll": {
+            "question": b.poll.question,
+            "options": b.poll.options,
+            "is_anonymous": b.poll.is_anonymous,
+            "allows_multiple_answers": b.poll.allows_multiple_answers,
+            "poll_type": b.poll.poll_type.value,
+            "correct_option_id": b.poll.correct_option_id,
+            "explanation": b.poll.explanation,
+            "is_closed": b.poll.is_closed,
+        } if b.poll else None,
         "status": b.status.value,
         "scheduled_at": _format_datetime_utc(b.scheduled_at),
         "created_at": _format_datetime_utc(b.created_at),

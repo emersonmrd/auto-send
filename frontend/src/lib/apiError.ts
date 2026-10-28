@@ -108,6 +108,40 @@ export const API_ERROR_CATALOG: Record<string, string> = {
   // Sistema
   "Unable to open the local data directory on this system":
     "Não foi possível abrir a pasta de dados neste sistema.",
+
+  // Enquetes (Polls #97)
+  "A broadcast cannot have both media and a poll":
+    "Uma mensagem não pode conter mídia e enquete ao mesmo tempo.",
+  "Invalid poll options format":
+    "Formato das opções da enquete inválido.",
+  "poll must have at least 2 options":
+    "A enquete deve ter pelo menos 2 opções.",
+  "poll options must be a list":
+    "As opções da enquete devem ser fornecidas em formato de lista.",
+  "question cannot be empty":
+    "A pergunta da enquete não pode estar vazia.",
+  "question cannot exceed 300 characters":
+    "A pergunta da enquete não pode exceder 300 caracteres.",
+  "poll cannot have more than 10 options":
+    "A enquete não pode ter mais de 10 opções.",
+  "poll option cannot be empty":
+    "As opções da enquete não podem estar vazias.",
+  "poll option cannot exceed 100 characters":
+    "A opção da enquete não pode exceder 100 caracteres.",
+  "quiz polls cannot allow multiple answers":
+    "Enquetes no modo Quiz não podem permitir múltiplas respostas.",
+  "quiz polls require correct_option_id":
+    "Enquetes no modo Quiz exigem a seleção de uma resposta correta.",
+  "correct_option_id must be an integer":
+    "O identificador da resposta correta deve ser um número inteiro.",
+  "correct_option_id is out of range":
+    "A resposta correta selecionada é inválida ou fora da lista de opções.",
+  "explanation cannot exceed 200 characters":
+    "A explicação do Quiz não pode exceder 200 caracteres.",
+  "regular polls cannot have correct_option_id":
+    "Enquetes regulares não aceitam resposta correta pré-definida.",
+  "regular polls cannot have explanation":
+    "Enquetes regulares não aceitam explicação de resposta.",
 };
 
 export const TELEGRAM_ERROR_CATALOG: Array<{
@@ -180,6 +214,23 @@ export const TELEGRAM_ERROR_CATALOG: Array<{
     pattern: /too many requests/i,
     translation:
       "Limite de requisições do Telegram excedido. Aguarde alguns instantes antes de tentar novamente.",
+  },
+  {
+    pattern: /(?:non-anonymous polls can'?t be sent to channel chats|poll can'?t be non-anonymous in channels)/i,
+    translation:
+      "O Telegram não permite enquetes públicas (não-anônimas) em canais. Mantenha a opção de voto anônimo ativada.",
+  },
+  {
+    pattern: /poll options must be completely different/i,
+    translation: "As opções da enquete devem ser diferentes entre si.",
+  },
+  {
+    pattern: /poll must have at least 2 option/i,
+    translation: "A enquete deve ter pelo menos 2 opções.",
+  },
+  {
+    pattern: /poll can'?t have more than 10 options/i,
+    translation: "A enquete não pode ter mais de 10 opções.",
   },
 ];
 

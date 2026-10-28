@@ -7,6 +7,7 @@ import pytest
 
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
+    BroadcastPoll,
     BroadcastStatus,
     ChannelDeliveryResult,
     DeliveryFailureCategory,
@@ -14,6 +15,7 @@ from src.domain.broadcast.broadcast_message import (
     InlineButton,
     MediaAttachment,
     MediaType,
+    PollType,
 )
 from src.domain.channels.channel import Channel
 from src.domain.profiles.bot_credentials import BotCredentials
@@ -35,10 +37,12 @@ def _assert_recent_utc(moment):
 
 def test_enum_values_are_the_persisted_strings():
     assert {m.name: m.value for m in MediaType} == {"VIDEO": "VIDEO", "PHOTO": "PHOTO"}
+    assert {m.name: m.value for m in PollType} == {"REGULAR": "regular", "QUIZ": "quiz"}
     assert {m.name: m.value for m in DispatchStrategy} == {
         "TEXT_ONLY": "TEXT_ONLY",
         "SINGLE_MEDIA_WITH_CAPTION": "SINGLE_MEDIA_WITH_CAPTION",
         "SPLIT_TEXT_THEN_MEDIA": "SPLIT_TEXT_THEN_MEDIA",
+        "POLL": "POLL",
     }
     assert {m.name: m.value for m in BroadcastStatus} == {
         "PENDING": "PENDING",
@@ -65,6 +69,7 @@ def test_value_objects_are_immutable():
     media = MediaAttachment(file_path="/tmp/v.mp4", media_type=MediaType.VIDEO, file_size=1)
     credentials = BotCredentials(token=VALID_TOKEN, bot_username="acme_bot")
     delivery_result = ChannelDeliveryResult.success("-1001234567890")
+    poll = BroadcastPoll(question="Pergunta?", options=["Opção 1", "Opção 2"])
 
     with pytest.raises(FrozenInstanceError):
         button.url = "https://evil.example"
@@ -74,6 +79,8 @@ def test_value_objects_are_immutable():
         credentials.token = "leaked"
     with pytest.raises(FrozenInstanceError):
         delivery_result.delivered = False
+    with pytest.raises(FrozenInstanceError):
+        poll.question = "Modificado"
 
 
 def test_media_attachment_metadata_defaults_to_none():
@@ -86,6 +93,7 @@ def test_broadcast_message_defaults():
     assert msg.text == ""
     assert msg.media is None
     assert msg.button is None
+    assert msg.poll is None
     assert msg.status is BroadcastStatus.PENDING
     assert msg.scheduled_at is None
     assert msg.delivery_results == []

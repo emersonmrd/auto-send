@@ -115,8 +115,22 @@ const server = http.createServer(async (req, res) => {
       },
     });
   }
-  if (["sendMessage", "sendPhoto", "sendVideo"].includes(method)) {
-    return send(res, 200, { ok: true, result: { message_id: nextMessageId++, chat: { id: Number(fields.chat_id) }, date: Math.floor(Date.now() / 1000) } });
+  if (["sendMessage", "sendPhoto", "sendVideo", "sendPoll"].includes(method)) {
+    return send(res, 200, {
+      ok: true,
+      result: {
+        message_id: nextMessageId++,
+        chat: { id: Number(fields.chat_id) },
+        date: Math.floor(Date.now() / 1000),
+        poll: method === "sendPoll" ? {
+          id: String(nextMessageId),
+          question: fields.question,
+          options: (fields.options || []).map((o) => ({ text: o, voter_count: 0 })),
+          is_anonymous: fields.is_anonymous !== false,
+          type: fields.type || "regular",
+        } : undefined,
+      },
+    });
   }
   return send(res, 404, { ok: false, error_code: 404, description: `Method ${method} not implemented by the fake` });
 });

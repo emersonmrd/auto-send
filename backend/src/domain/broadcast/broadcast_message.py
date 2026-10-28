@@ -139,10 +139,15 @@ class MediaType(str, Enum):
     VIDEO = "VIDEO"
     PHOTO = "PHOTO"
 
+class PollType(str, Enum):
+    REGULAR = "regular"
+    QUIZ = "quiz"
+
 class DispatchStrategy(str, Enum):
     TEXT_ONLY = "TEXT_ONLY"
     SINGLE_MEDIA_WITH_CAPTION = "SINGLE_MEDIA_WITH_CAPTION"
     SPLIT_TEXT_THEN_MEDIA = "SPLIT_TEXT_THEN_MEDIA"
+    POLL = "POLL"
 
 class BroadcastStatus(str, Enum):
     PENDING = "PENDING"
@@ -206,6 +211,51 @@ class InlineButton:
         validate_https_public_url(self.url)
 
 @dataclass(frozen=True)
+class BroadcastPoll:
+    question: str
+    options: List[str]
+    is_anonymous: bool = True
+    allows_multiple_answers: bool = False
+    poll_type: PollType = PollType.REGULAR
+    correct_option_id: Optional[int] = None
+    explanation: Optional[str] = None
+    is_closed: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.question or not self.question.strip():
+            raise ValueError("question cannot be empty")
+        if len(self.question) > 300:
+            raise ValueError("question cannot exceed 300 characters")
+
+        if not self.options or len(self.options) < 2:
+            raise ValueError("poll must have at least 2 options")
+        if len(self.options) > 10:
+            raise ValueError("poll cannot have more than 10 options")
+
+        for opt in self.options:
+            if not opt or not opt.strip():
+                raise ValueError("poll option cannot be empty")
+            if len(opt) > 100:
+                raise ValueError("poll option cannot exceed 100 characters")
+
+        if self.poll_type == PollType.QUIZ:
+            if self.allows_multiple_answers:
+                raise ValueError("quiz polls cannot allow multiple answers")
+            if self.correct_option_id is None:
+                raise ValueError("quiz polls require correct_option_id")
+            if not isinstance(self.correct_option_id, int) or isinstance(self.correct_option_id, bool):
+                raise ValueError("correct_option_id must be an integer")
+            if self.correct_option_id < 0 or self.correct_option_id >= len(self.options):
+                raise ValueError("correct_option_id is out of range")
+            if self.explanation is not None and len(self.explanation) > 200:
+                raise ValueError("explanation cannot exceed 200 characters")
+        else:
+            if self.correct_option_id is not None:
+                raise ValueError("regular polls cannot have correct_option_id")
+            if self.explanation is not None:
+                raise ValueError("regular polls cannot have explanation")
+
+@dataclass(frozen=True)
 class MediaAttachment:
     file_path: str
     media_type: MediaType
@@ -223,6 +273,7 @@ class BroadcastMessage:
     text: str = ""
     media: Optional[MediaAttachment] = None
     button: Optional[InlineButton] = None
+    poll: Optional[BroadcastPoll] = None
     status: BroadcastStatus = BroadcastStatus.PENDING
     scheduled_at: Optional[datetime] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -231,8 +282,12 @@ class BroadcastMessage:
 
     def __post_init__(self) -> None:
         self.text = validate_and_escape_telegram_html(self.text)
+        if self.poll is not None and self.media is not None:
+            raise ValueError("Broadcast cannot have both media and poll")
 
     def get_dispatch_strategy(self) -> DispatchStrategy:
+        if self.poll is not None:
+            return DispatchStrategy.POLL
         if not self.media:
             return DispatchStrategy.TEXT_ONLY
         
