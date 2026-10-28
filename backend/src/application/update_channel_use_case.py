@@ -66,9 +66,10 @@ class UpdateChannelUseCase:
             raise ProfileNotFoundError(channel.profile_id)
         token = profile.credentials.token
         await self.discovery_gateway.ensure_bot_can_post(token, new_chat_id)
+        channel.relink(new_chat_id)
+        await classify_from_telegram(channel, token, self.discovery_gateway)
 
+        # Só grava depois de todas as chamadas ao Telegram: um erro nelas não deixa broadcasts no chat novo.
         for b in broadcasts:
             if b.is_pending_or_scheduled() and b.replace_target_channel(old_chat_id, new_chat_id):
                 await self.broadcast_repo.save(b)
-        channel.relink(new_chat_id)
-        await classify_from_telegram(channel, token, self.discovery_gateway)

@@ -325,3 +325,20 @@ async def test_update_unknown_channel_is_404(client):
     resp = await client.put("/api/v1/channels/c-x", json={"name": "X", "telegram_channel_id": FORUM.chat_id})
     assert resp.status_code == 404
     assert resp.json() == {"detail": "Channel not found"}
+
+
+async def test_rename_of_a_legacy_channel_works_while_the_circuit_is_open(client):
+    # Depois de um 429 num disparo, o circuito fica aberto: renomear continua sendo local (#99).
+    from src.infrastructure.resilience import CircuitBreaker
+    from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
+
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0)
+    await breaker.record_failure(retry_after=30)
+    use_gateway(TelegramGatewayHttp(base_url="http://127.0.0.1:9", circuit_breaker=breaker))
+    await channel_repo.save(Channel(id="c-old", profile_id="p-1", title="Antigo", chat_id="-1001111111111"))
+
+    resp = await client.put("/api/v1/channels/c-old", json={"name": "Renomeado", "telegram_channel_id": "-1001111111111"})
+
+    assert resp.status_code == 200
+    assert (resp.json()["name"], resp.json()["chat_type"]) == ("Renomeado", None)
+    assert (await channel_repo.get_by_id("c-old")).title == "Renomeado"

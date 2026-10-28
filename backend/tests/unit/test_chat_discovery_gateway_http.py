@@ -239,10 +239,24 @@ async def test_429_opens_the_circuit_with_retry_after(monkeypatch):
         await gateway.discover_chats(TOKEN)
     assert cb.state == CircuitState.OPEN
 
-    with pytest.raises(CircuitBreakerOpenException) as exc:
+    # Circuito aberto sai pela porta como TelegramUnavailableError, como no ensure_bot_can_post (#99).
+    with pytest.raises(TelegramUnavailableError, match=r"^Could not reach Telegram, try again$"):
         await gateway.discover_chats(TOKEN)
+    with pytest.raises(CircuitBreakerOpenException) as exc:
+        await cb.can_execute()
     assert exc.value.retry_after == pytest.approx(25.0)
     assert len(requests) == 1
+
+
+async def test_resolve_with_open_circuit_raises_telegram_unavailable_without_calling_telegram(monkeypatch):
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0, time_func=FakeClock().time)
+    await cb.record_failure(retry_after=30)
+    requests = use_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True, "result": chat(-1001234567890, "Canal")}))
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org", circuit_breaker=cb)
+
+    with pytest.raises(TelegramUnavailableError, match=r"^Could not reach Telegram, try again$"):
+        await gateway.resolve_chat(TOKEN, ChatIdentifier("-1001234567890"))
+    assert requests == []
 
 
 @pytest.mark.parametrize("error", [httpx.ConnectTimeout("timed out"), httpx.ConnectError("connection refused")])

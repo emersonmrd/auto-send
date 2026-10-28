@@ -578,7 +578,11 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         return data.get("result")
 
     async def _call_chat_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
-        await self.circuit_breaker.can_execute()
+        try:
+            await self.circuit_breaker.can_execute()
+        except CircuitBreakerOpenException:
+            # Pela porta só saem erros de ChatDiscoveryError, como no _call_member_api (#99).
+            raise TelegramUnavailableError("Could not reach Telegram, try again") from None
         effective_url = await self.resolve_effective_base_url()
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:

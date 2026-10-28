@@ -255,3 +255,16 @@ async def test_rename_of_a_channel_without_kind_whose_profile_is_gone_saves_with
 
     assert gateway.calls == []
     assert (channel.title, channel.chat_type) == ("Outro", None)
+
+
+async def test_relink_persists_nothing_when_get_chat_fails_unexpectedly(repos):
+    # Toda chamada ao Telegram roda antes de qualquer gravação: um erro no getChat não deixa
+    # broadcasts apontando para um chat que o canal não tem.
+    _, channels, broadcasts = repos
+    await channels.save(Channel(id="c-1", profile_id="p-1", title="A", chat_id=CHAT_ID))
+    await broadcasts.save(BroadcastMessage(id="b-1", profile_id="p-1", target_channel_ids=[CHAT_ID], text="Oi"))
+    gateway = FakeGateway(resolve_error=RuntimeError("falha inesperada"))
+
+    with pytest.raises(RuntimeError):
+        await update(repos, gateway).execute(UpdateChannelCommand(channel_id="c-1", title="A", chat_id=OTHER_CHAT_ID))
+    assert (await broadcasts.get_by_id("b-1")).target_channel_ids == [CHAT_ID]
