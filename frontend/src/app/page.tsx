@@ -55,7 +55,7 @@ interface ToastNotice {
 // "" no export estático = mesma origem do backend que serve a tela (next.config.ts); no `npm run dev`, a porta 8000.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
-const DEFAULT_TELEGRAM_SPEED_BPS = 13.5 * 1024 * 1024; // Baseline calibrado (~108 Mbps / 13.5 MB/s)
+const DEFAULT_TELEGRAM_SPEED_BPS = 6.5 * 1024 * 1024; // Baseline calibrado (~52 Mbps / 6.5 MB/s)
 
 function getEstimatedTelegramSpeed(): number {
   if (typeof window === "undefined") return DEFAULT_TELEGRAM_SPEED_BPS;
@@ -2266,12 +2266,15 @@ export default function Home() {
 
                 let simulatedPct = 0;
                 if (uploadPhase === "transmitting" && !isCompleted && total > 0) {
-                  if (elapsedSec < expectedSec * 0.85) {
-                    simulatedPct = Math.min(85, Math.round((elapsedSec / expectedSec) * 100));
+                  if (elapsedSec <= expectedSec) {
+                    simulatedPct = Math.min(
+                      93,
+                      Math.round(93 * Math.sin((Math.PI / 2) * (elapsedSec / expectedSec)))
+                    );
                   } else {
-                    const tailSec = elapsedSec - expectedSec * 0.85;
-                    const tailProgress = 1 - Math.exp(-tailSec / (expectedSec * 0.45));
-                    simulatedPct = Math.min(96, Math.round(85 + tailProgress * 11));
+                    const tailSec = elapsedSec - expectedSec;
+                    const tailProgress = 1 - Math.exp(-tailSec / (expectedSec * 0.4));
+                    simulatedPct = Math.min(97, Math.round(93 + tailProgress * 4));
                   }
                 }
 
