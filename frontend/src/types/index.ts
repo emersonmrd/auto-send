@@ -40,6 +40,9 @@ export interface DeleteResourceResponse {
   id: string;
 }
 
+// Tipo informado pelo Telegram (#99); null em canal vinculado antes disso, até a próxima edição.
+export type ChannelChatType = "channel" | "supergroup";
+
 export interface Channel {
   id: string;
   profile_id: string;
@@ -47,6 +50,8 @@ export interface Channel {
   chat_id: string;
   invite_link?: string;
   is_active: boolean;
+  chat_type: ChannelChatType | null;
+  is_forum: boolean;
 }
 
 export interface ChannelCreateResponse {
@@ -55,6 +60,8 @@ export interface ChannelCreateResponse {
   title: string;
   chat_id: string;
   invite_link: string;
+  chat_type: ChannelChatType | null;
+  is_forum: boolean;
 }
 
 export interface ChannelUpdateResponse {
@@ -64,6 +71,8 @@ export interface ChannelUpdateResponse {
   title: string;
   telegram_channel_id: string;
   chat_id: string;
+  chat_type: ChannelChatType | null;
+  is_forum: boolean;
 }
 
 export type DeliveryFailureCategory =
@@ -198,6 +207,8 @@ export interface DiscoveredChat {
   username: string | null;
   // Canal ou supergrupo (-100...); grupo comum não pode ser vinculado.
   registrable: boolean;
+  // Supergrupo com tópicos ativados (#99).
+  is_forum: boolean;
 }
 
 // POST /api/v1/profiles/{profile_id}/discover-chats

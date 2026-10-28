@@ -3,7 +3,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from src.infrastructure.sqlite_repositories import Base, SqlAlchemyChannelRepository
 from src.infrastructure.in_memory_repositories import InMemoryChannelRepository
-from src.domain.channels.channel import Channel
+from src.domain.channels.channel import Channel, ChatType
 
 @pytest.mark.asyncio
 async def test_in_memory_channel_repo_save_and_update():
@@ -117,3 +117,31 @@ async def test_sqlalchemy_channel_repo_delete(sqlite_session_factory):
     # Deleta canal inexistente retorna False
     result_non_existent = await repo.delete("c-sql-del")
     assert result_non_existent is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["memory", "sqlite"])
+async def test_channel_repositories_keep_chat_type_and_forum(backend, sqlite_session_factory):
+    # Os dois repositórios cumprem o mesmo contrato (#99).
+    if backend == "sqlite":
+        engine, session_factory = sqlite_session_factory
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        repo = SqlAlchemyChannelRepository(session_factory)
+    else:
+        repo = InMemoryChannelRepository()
+
+    forum = Channel(id="c-forum", profile_id="p-1", title="Grupo", chat_id="-1001234567890",
+                    chat_type=ChatType.SUPERGROUP, is_forum=True)
+    unknown = Channel(id="c-unknown", profile_id="p-1", title="Canal antigo", chat_id="-1009876543210")
+    await repo.save(forum)
+    await repo.save(unknown)
+
+    loaded = {c.id: (c.chat_type, c.is_forum) for c in await repo.list_by_profile("p-1")}
+    assert loaded == {"c-forum": (ChatType.SUPERGROUP, True), "c-unknown": (None, False)}
+
+    forum.classify(ChatType.CHANNEL, is_forum=False)
+    await repo.save(forum)
+    updated = await repo.get_by_id("c-forum")
+    assert updated is not None
+    assert (updated.chat_type, updated.is_forum) == (ChatType.CHANNEL, False)

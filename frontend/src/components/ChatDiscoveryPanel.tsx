@@ -3,6 +3,7 @@
 import React, { useEffect, useId, useRef, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { useChatDiscovery } from "@/hooks/useChatDiscovery";
+import { chatKind } from "@/lib/chatKind";
 import type { DiscoveredChat } from "@/types";
 
 interface ChatDiscoveryPanelProps {
@@ -14,12 +15,6 @@ interface ChatDiscoveryPanelProps {
   onAdd: (chat: DiscoveredChat) => Promise<boolean>;
 }
 
-const TYPE_LABEL: Record<DiscoveredChat["type"], string> = {
-  channel: "Canal",
-  supergroup: "Supergrupo",
-  group: "Grupo",
-};
-
 function ChatRow({
   chat,
   alreadyRegistered,
@@ -30,6 +25,7 @@ function ChatRow({
   onAdd: (chat: DiscoveredChat) => Promise<boolean>;
 }) {
   const [isAdding, setIsAdding] = useState(false);
+  const kind = chatKind(chat.type, chat.is_forum);
 
   const handleAdd = async () => {
     if (isAdding) return;
@@ -46,7 +42,7 @@ function ChatRow({
       <div className="min-w-0">
         <p className="truncate text-sm text-gray-100">{chat.title || chat.chat_id}</p>
         <p className="truncate text-[11px] text-gray-400">
-          {TYPE_LABEL[chat.type]}: {chat.username ? `@${chat.username} (${chat.chat_id})` : chat.chat_id}
+          {kind ? `${kind.emoji} ${kind.label}` : chat.type}: {chat.username ? `@${chat.username} (${chat.chat_id})` : chat.chat_id}
         </p>
       </div>
       {alreadyRegistered ? (
@@ -62,11 +58,41 @@ function ChatRow({
           {isAdding ? "Adicionando..." : "Adicionar canal"}
         </button>
       ) : (
-        <span className="shrink-0 text-[11px] text-gray-400" title="Converta o grupo em supergrupo no Telegram">
-          Grupo comum não suportado
-        </span>
+        <span className="shrink-0 text-[11px] text-amber-300">Grupo comum: converta antes</span>
       )}
     </li>
+  );
+}
+
+// Grupo comum muda de ID ao virar supergrupo; a conversão é feita pelo dono no Telegram (#99).
+function BasicGroupHelp() {
+  const titleId = useId();
+  return (
+    <div
+      role="note"
+      aria-labelledby={titleId}
+      className="space-y-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100"
+    >
+      <p id={titleId} className="font-semibold">
+        💡 Como usar este grupo no Auto-Send
+      </p>
+      <p>
+        Grupos comuns do Telegram não possuem identificador permanente. Para usá-lo, transforme-o em um{" "}
+        <strong>Supergrupo</strong> em 2 cliques no Telegram:
+      </p>
+      <ol className="list-decimal space-y-0.5 pl-4">
+        <li>
+          Abra o grupo no Telegram e vá em <strong>Editar / Configurações</strong>.
+        </li>
+        <li>
+          Altere <strong>&quot;Histórico de Mensagens para Novos Membros&quot;</strong> para <strong>&quot;Visível&quot;</strong>{" "}
+          (ou ative a opção <strong>&quot;Tópicos&quot;</strong>).
+        </li>
+        <li>
+          Pronto! O grupo vira Supergrupo na hora, sem perder mensagens nem membros. Busque os canais de novo e adicione-o.
+        </li>
+      </ol>
+    </div>
   );
 }
 
@@ -116,6 +142,8 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
             ))}
           </ul>
         ))}
+
+      {chats?.some((chat) => chat.type === "group") && <BasicGroupHelp />}
 
       {/* div, não form: o painel fica dentro do formulário do modal de canal. */}
       <div className="flex items-end gap-2">

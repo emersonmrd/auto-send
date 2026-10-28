@@ -7,7 +7,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,7 +29,13 @@ from src.domain.broadcast.broadcast_message import (
     validate_and_escape_telegram_html,
 )
 from src.application.discover_chats_use_case import DiscoverChatsUseCase
-from src.application.errors import ProfileNotFoundError
+from src.application.errors import (
+    ChannelAlreadyRegisteredError,
+    ChannelNotFoundError,
+    ProfileNotFoundError,
+)
+from src.application.register_channel_use_case import RegisterChannelCommand, RegisterChannelUseCase
+from src.application.update_channel_use_case import UpdateChannelCommand, UpdateChannelUseCase
 from src.application.resolve_chat_use_case import ResolveChatUseCase
 from src.domain.channels.channel import Channel
 from src.domain.channels.chat_discovery import DiscoveredChat
@@ -346,6 +352,9 @@ class ChannelCreateResponse(BaseModel):
     title: str
     chat_id: str
     invite_link: str
+    # Tipo informado pelo Telegram (#99); None em canal vinculado antes disso, até a próxima edição.
+    chat_type: Optional[Literal["channel", "supergroup"]] = None
+    is_forum: bool = False
 
 class ChannelListItemResponse(ChannelCreateResponse):
     is_active: bool
@@ -361,6 +370,8 @@ class ChannelUpdateResponse(BaseModel):
     title: str
     telegram_channel_id: str
     chat_id: str
+    chat_type: Optional[Literal["channel", "supergroup"]] = None
+    is_forum: bool = False
 
 class BroadcastPatchRequest(BaseModel):
     text: Optional[str] = None
@@ -702,6 +713,7 @@ async def list_channels(profile_id: str):
             "chat_id": c.chat_id,
             "invite_link": c.invite_link,
             "is_active": c.is_active,
+            **_channel_kind(c),
         }
         for c in channels
     ]
@@ -717,42 +729,36 @@ async def create_channel(
     req: ChannelCreateRequest,
     gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway),
 ):
-    profile = await profile_repo.get_by_id(profile_id)
-    if not profile:
+    command = RegisterChannelCommand(
+        profile_id=profile_id, title=req.title, chat_id=req.chat_id, invite_link=req.invite_link or ""
+    )
+    try:
+        channel = await RegisterChannelUseCase(profile_repo, channel_repo, gateway).execute(command)
+    except ProfileNotFoundError:
         raise HTTPException(status_code=404, detail="Profile not found")
-
-    existing_channels = await channel_repo.list_by_profile(profile_id)
-    if any(c.chat_id == req.chat_id for c in existing_channels):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Channel already registered for this profile",
-        )
-
-    try:
-        channel = Channel(
-            id=str(uuid.uuid4()),
-            profile_id=profile_id,
-            title=req.title,
-            chat_id=req.chat_id,
-            invite_link=req.invite_link or "",
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    try:
-        await gateway.ensure_bot_can_post(profile.credentials.token, channel.chat_id)
+    except ChannelAlreadyRegisteredError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except BotNotChannelAdminError:
         raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
     except (TelegramUnavailableError, CircuitBreakerOpenException):
         raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
-    await channel_repo.save(channel)
     return {
         "id": channel.id,
         "profile_id": channel.profile_id,
         "title": channel.title,
         "chat_id": channel.chat_id,
         "invite_link": channel.invite_link,
+        **_channel_kind(channel),
+    }
+
+
+def _channel_kind(channel: Channel) -> dict:
+    return {
+        "chat_type": channel.chat_type.value if channel.chat_type else None,
+        "is_forum": channel.is_forum,
     }
 
 
@@ -803,53 +809,23 @@ async def update_channel(
     req: ChannelUpdateRequest,
     gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway),
 ):
-    channel = await channel_repo.get_by_id(channel_id)
-    if not channel:
+    command = UpdateChannelCommand(channel_id=channel_id, title=req.name, chat_id=req.telegram_channel_id)
+    try:
+        channel = await UpdateChannelUseCase(profile_repo, channel_repo, broadcast_repo, gateway).execute(command)
+    except ChannelNotFoundError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+    except ProfileNotFoundError:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    except ChannelAlreadyRegisteredError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BotNotChannelAdminError:
+        raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
+    except (TelegramUnavailableError, CircuitBreakerOpenException):
+        raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
+    except ValueError as e:
+        # Chat_id inválido ou disparo em andamento (ChannelDispatchingError).
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
 
-    import re
-    chat_id_pattern = r"^-100\d{9,}$"
-    if not re.match(chat_id_pattern, req.telegram_channel_id):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Invalid Telegram Channel Chat ID format (must start with -100 followed by digits)",
-        )
-
-    old_chat_id = channel.chat_id
-    if req.telegram_channel_id != old_chat_id:
-        existing_channels = await channel_repo.list_by_profile(channel.profile_id)
-        if any(c.id != channel_id and c.chat_id == req.telegram_channel_id for c in existing_channels):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Channel already registered for this profile",
-            )
-        all_broadcasts = await broadcast_repo.list_by_profile(channel.profile_id)
-        if any(
-            b.status == BroadcastStatus.DISPATCHING and old_chat_id in b.target_channel_ids
-            for b in all_broadcasts
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="There is a broadcast currently dispatching. Wait for it to finish and try again.",
-            )
-
-        profile = await profile_repo.get_by_id(channel.profile_id)
-        if not profile:
-            raise HTTPException(status_code=404, detail="Profile not found")
-        try:
-            await gateway.ensure_bot_can_post(profile.credentials.token, req.telegram_channel_id)
-        except BotNotChannelAdminError:
-            raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
-        except (TelegramUnavailableError, CircuitBreakerOpenException):
-            raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
-
-        for b in all_broadcasts:
-            if b.is_pending_or_scheduled() and b.replace_target_channel(old_chat_id, req.telegram_channel_id):
-                await broadcast_repo.save(b)
-
-    channel.title = req.name
-    channel.chat_id = req.telegram_channel_id
-    await channel_repo.save(channel)
     return {
         "id": channel.id,
         "profile_id": channel.profile_id,
@@ -857,6 +833,7 @@ async def update_channel(
         "title": channel.title,
         "telegram_channel_id": channel.chat_id,
         "chat_id": channel.chat_id,
+        **_channel_kind(channel),
     }
 
 @app.delete(
@@ -973,6 +950,7 @@ class DiscoveredChatResponse(BaseModel):
     username: Optional[str] = None
     # Canal ou supergrupo (-100...); grupo comum aparece, mas não pode ser vinculado.
     registrable: bool
+    is_forum: bool = False
 
 class DiscoveredChatListItem(DiscoveredChatResponse):
     already_registered: bool
@@ -995,6 +973,7 @@ def _chat_response(chat: DiscoveredChat) -> dict:
         "type": chat.chat_type,
         "username": chat.username,
         "registrable": chat.is_registrable,
+        "is_forum": chat.is_forum,
     }
 
 @app.post(

@@ -17,6 +17,7 @@ import {
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
+import ChatKindBadge from "@/components/ChatKindBadge";
 import ConfirmDialog, { ConfirmDialogProps } from "@/components/ConfirmDialog";
 import {
   TelegramRichEditor,
@@ -2227,6 +2228,7 @@ export default function Home() {
                       }`}
                     >
                       {isChecked && <Check className="w-3 h-3 shrink-0" />}
+                      <ChatKindBadge chatType={c.chat_type} isForum={c.is_forum} />
                       <span className="truncate max-w-[140px]">{c.title}</span>
                       <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
                         <button

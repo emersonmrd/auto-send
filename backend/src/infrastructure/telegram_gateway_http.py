@@ -617,6 +617,7 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                 title=raw_chat.get("title") or "",
                 chat_type=raw_chat.get("type", ""),
                 username=raw_chat.get("username"),
+                is_forum=raw_chat.get("is_forum") is True,
             )
         except ValueError:
             # Conversa privada ou dado incompleto: não é um chat que possa virar canal.

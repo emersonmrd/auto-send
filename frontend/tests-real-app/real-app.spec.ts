@@ -208,28 +208,35 @@ test.describe.serial("aplicação real", () => {
     await expect(panel.getByRole("alert")).toContainText("Link de convite não serve");
 
     const calls = await telegramCalls(page);
-    // A busca só lê (getUpdates, getChat); a vinculação de cada canal confere se o bot é admin (getMe + getChatMember, #2).
+    // A busca só lê (getUpdates, getChat); a vinculação de cada canal confere se o bot é admin (getMe + getChatMember, #2)
+    // e depois lê o tipo do chat (getChat pelo ID, #99).
     expect(calls.map((c) => c.method)).toEqual([
       "getUpdates",
       "getMe",
       "getChatMember",
       "getChat",
-      "getMe",
-      "getChatMember",
       "getChat",
       "getMe",
       "getChatMember",
+      "getChat",
+      "getChat",
+      "getMe",
+      "getChatMember",
+      "getChat",
     ]);
     // A busca só lê: sem offset nenhum update é confirmado, sem allowed_updates a configuração do bot fica igual.
     expect(calls[0].query).toEqual({ timeout: "0" });
-    expect(calls[3].query).toEqual({ chat_id: "@canalpublico" });
-    expect(calls[6].query).toEqual({ chat_id: "-1004444444444" });
+    expect(calls[3].query).toEqual({ chat_id: "-1002222222222" });
+    expect(calls[4].query).toEqual({ chat_id: "@canalpublico" });
+    expect(calls[8].query).toEqual({ chat_id: "-1004444444444" });
 
-    // Os dois canais vinculados pela busca aparecem na barra de canais do perfil.
+    // Os canais vinculados pela busca aparecem na barra de canais do perfil, com o tipo lido do Telegram (#99).
     await page.goto("/");
     await page.getByText(profileName, { exact: true }).first().click();
     await expect(page.getByText("Canal Descoberto").first()).toBeVisible();
     await expect(page.getByText("Canal Público").first()).toBeVisible();
+    const chip = page.getByRole("button").filter({ hasText: "Canal Descoberto" }).first();
+    await expect(chip.getByRole("img", { name: "Canal", exact: true })).toBeVisible();
   });
 
   // Também roda com o Telegram real: o bot de teste está no canal de teste, e o getChat por ID não depende de mensagens.

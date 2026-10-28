@@ -231,6 +231,7 @@ Monólito modular em Clean Architecture. **Regra de dependência:** as setas apo
 - **Invariantes que todo código respeita (e que têm teste de domínio):**
   - Cada perfil tem o próprio token de bot; o token nunca sai do backend (§9).
   - `Channel.telegram_channel_id` segue `^-100\d{9,}$`.
+  - `Channel.chat_type` (`ChatType`) vem do `getChat` do Telegram no vínculo e na edição, nunca do cliente: canal ou supergrupo; grupo comum não vira `Channel`; `is_forum` só em supergrupo; `None` em canal vinculado antes da migração 8, até a próxima edição (#99).
   - Com mídia, um texto de até 1.024 caracteres vai como `caption`; acima disso, o texto (até 4.096) e a mídia saem em duas mensagens ordenadas (`DispatchStrategy`). Sem mídia, o limite é 4.096.
   - Enquetes nativas (`BroadcastPoll`) suportam modos regular e quiz, de 2 a 10 opções (1 a 100 caracteres cada), pergunta de até 300 caracteres, e exigem `is_anonymous=True` para envio a canais públicos do Telegram (kaizen de 2026-10-28: PR #98).
   - `InlineButton` só aceita `https://` com host.

@@ -127,6 +127,30 @@ async def test_resolve_calls_get_chat_with_the_numeric_chat_id(monkeypatch):
     assert result == DiscoveredChat(chat_id="-1001234567890", title="Canal Privado", chat_type="channel")
 
 
+async def test_resolve_reads_is_forum_from_a_supergroup_with_topics(monkeypatch):
+    forum = {**chat(-1009876543210, "Grupo com Tópicos", type_="supergroup"), "is_forum": True}
+    use_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True, "result": forum}))
+
+    result = await TelegramGatewayHttp(base_url="https://api.telegram.org").resolve_chat(TOKEN, ChatIdentifier("-1009876543210"))
+
+    assert result == DiscoveredChat(chat_id="-1009876543210", title="Grupo com Tópicos", chat_type="supergroup", is_forum=True)
+
+
+async def test_discover_reads_is_forum_and_treats_a_missing_flag_as_false(monkeypatch):
+    forum = {**chat(-1009876543210, "Fórum", type_="supergroup"), "is_forum": True}
+    use_transport(
+        monkeypatch,
+        lambda r: updates(
+            {"message": {"chat": forum}},
+            {"channel_post": {"chat": chat(-1001111111111, "Canal A")}},
+        ),
+    )
+
+    result = await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+    assert {c.chat_id: c.is_forum for c in result} == {"-1009876543210": True, "-1001111111111": False}
+
+
 async def test_discover_with_active_webhook_raises_a_typed_error_without_token(monkeypatch):
     use_transport(
         monkeypatch,
