@@ -287,6 +287,13 @@ class BroadcastMessage:
             raise ValueError("Cannot cancel an in-flight or completed broadcast")
         self.status = BroadcastStatus.CANCELLED
 
+    def abort_dispatch(self, partial_results: List[ChannelDeliveryResult]) -> None:
+        """Usuário abortou o envio em voo; guarda o que já foi entregue aos canais."""
+        if self.status != BroadcastStatus.DISPATCHING:
+            raise ValueError("Only an in-flight broadcast can be aborted")
+        self.delivery_results = list(partial_results)
+        self.status = BroadcastStatus.CANCELLED
+
     def reschedule(self, new_run_date: datetime) -> None:
         if self.status in [BroadcastStatus.DISPATCHING, BroadcastStatus.COMPLETED, BroadcastStatus.CANCELLED]:
             raise ValueError("Cannot reschedule an in-flight, completed, or cancelled broadcast")

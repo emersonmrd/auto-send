@@ -5,6 +5,13 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+### Added
+- Rota `POST /api/v1/broadcasts/abort-upload/{tracking_id}`: cancelar um envio na tela interrompe o disparo no backend, apaga a mídia temporária e marca o broadcast como `CANCELLED`, guardando os canais que já receberam (#86).
+
+### Fixed
+- Cancelar o envio várias vezes não publica mais a mensagem repetida no canal: antes, o backend continuava o disparo depois que o navegador fechava a conexão (#86).
+- A barra de progresso não estaciona mais em 97% enquanto o Telegram processa o vídeo: a segunda fase mostra animação contínua, cronômetro e tamanho do arquivo, e crava 100% na confirmação (#86).
+
 
 ## [0.6.1] - 2026-10-27
 

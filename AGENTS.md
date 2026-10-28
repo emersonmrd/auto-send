@@ -283,8 +283,9 @@ O contrato vivo é o OpenAPI gerado pelo FastAPI; estas regras dizem como ele de
 SCHEDULED ──PATCH──▶ SCHEDULED     (edita texto/botão, reagenda)
 SCHEDULED ──cancel─▶ CANCELLED     (remove o job e a mídia)
 SCHEDULED/PENDING ──▶ DISPATCHING ──▶ COMPLETED | FAILED
+                       DISPATCHING ──abort─▶ CANCELLED  (usuário abortou em voo; guarda as entregas parciais)
 ```
-- Editar e cancelar só em `PENDING`/`SCHEDULED`; em outro estado, `422`. A transição é método do agregado (`cancel()`, `reschedule()`, `update_content()`), nunca atribuição de status na rota.
+- Editar e cancelar só em `PENDING`/`SCHEDULED`; em outro estado, `422`. Abortar (`abort_dispatch()`) só em `DISPATCHING`, pela rota `abort-upload`, e a resposta do envio abortado é `409 "Broadcast cancelled by user"`. A transição é método do agregado (`cancel()`, `abort_dispatch()`, `reschedule()`, `update_content()`), nunca atribuição de status na rota.
 - Cancelar é idempotente nos efeitos: remover o job `broadcast_{id}` ignora job inexistente, e apagar a mídia ignora arquivo ausente.
 - O job do APScheduler tem id `broadcast_{id}`; reagendar substitui o job, não cria outro.
 

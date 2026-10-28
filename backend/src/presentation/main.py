@@ -1138,6 +1138,19 @@ upload_progress_tracker = UploadProgressStore(
 progress_tracker = upload_progress_tracker
 active_broadcast_tasks: Dict[str, asyncio.Task] = {}
 cancelled_tracking_ids: OrderedDict[str, float] = OrderedDict()
+CANCELLED_TRACKING_IDS_MAX_ITEMS = 1000
+BROADCAST_CANCELLED_DETAIL = "Broadcast cancelled by user"
+
+
+def _mark_upload_aborted(tracking_id: str) -> None:
+    cancelled_tracking_ids[tracking_id] = time.time()
+    while len(cancelled_tracking_ids) > CANCELLED_TRACKING_IDS_MAX_ITEMS:
+        cancelled_tracking_ids.popitem(last=False)
+    # A entrada de progresso pode já ter expirado (TTL/LRU) do UploadProgressStore
+    progress = upload_progress_tracker.get(tracking_id)
+    if progress is not None:
+        progress["status"] = "aborted"
+        progress["updated_at"] = time.time()
 
 def update_progress(
     tracking_id: str,
@@ -1182,13 +1195,7 @@ async def get_broadcast_progress(tracking_id: str):
     status_code=status.HTTP_200_OK,
 )
 async def abort_broadcast_upload(tracking_id: str):
-    cancelled_tracking_ids[tracking_id] = time.time()
-    while len(cancelled_tracking_ids) > 1000:
-        cancelled_tracking_ids.popitem(last=False)
-
-    if tracking_id in upload_progress_tracker:
-        upload_progress_tracker[tracking_id]["status"] = "aborted"
-        upload_progress_tracker[tracking_id]["updated_at"] = time.time()
+    _mark_upload_aborted(tracking_id)
 
     task = active_broadcast_tasks.get(tracking_id)
     if task and not task.done():
@@ -1267,7 +1274,7 @@ def normalize_video_dimensions(
     "/api/v1/broadcasts",
     status_code=status.HTTP_201_CREATED,
     response_model=Union[ScheduledBroadcastCreateResponse, ImmediateBroadcastCreateResponse],
-    responses={**_ERR_404, **_ERR_413, **_ERR_422},
+    responses={**_ERR_404, **_ERR_409, **_ERR_413, **_ERR_422},
 )
 async def create_broadcast(
     request: Request,
@@ -1291,10 +1298,7 @@ async def create_broadcast(
 
     if tracking_id:
         if tracking_id in cancelled_tracking_ids:
-            raise HTTPException(status_code=499, detail="Broadcast cancelled by user")
-        curr_task = asyncio.current_task()
-        if curr_task:
-            active_broadcast_tasks[tracking_id] = curr_task
+            raise HTTPException(status_code=409, detail=BROADCAST_CANCELLED_DETAIL)
         update_progress(
             tracking_id,
             stage="uploading_to_telegram",
@@ -1462,6 +1466,11 @@ async def create_broadcast(
     dispatched_count = 0
     errors = []
     delivery_results: List[ChannelDeliveryResult] = []
+    # Registrado só aqui: o finally abaixo é o único ponto que remove a entrada
+    if tracking_id:
+        curr_task = asyncio.current_task()
+        if curr_task:
+            active_broadcast_tasks[tracking_id] = curr_task
     try:
         broadcast.status = BroadcastStatus.DISPATCHING
         await broadcast_repo.save(broadcast)
@@ -1476,8 +1485,7 @@ async def create_broadcast(
                 raise asyncio.CancelledError()
             if await request.is_disconnected():
                 if tracking_id:
-                    cancelled_tracking_ids[tracking_id] = time.time()
-                    upload_progress_tracker[tracking_id]["status"] = "aborted"
+                    _mark_upload_aborted(tracking_id)
                 raise asyncio.CancelledError()
 
             channel_cb = None
@@ -1529,17 +1537,10 @@ async def create_broadcast(
     except asyncio.CancelledError:
         logger.info("Envio do broadcast cancelado pelo usuário (tracking_id: %s)", tracking_id)
         if tracking_id:
-            cancelled_tracking_ids[tracking_id] = time.time()
-            if tracking_id in upload_progress_tracker:
-                upload_progress_tracker[tracking_id]["status"] = "aborted"
-                upload_progress_tracker[tracking_id]["updated_at"] = time.time()
-        if broadcast:
-            try:
-                broadcast.cancel()
-                await broadcast_repo.save(broadcast)
-            except Exception:
-                pass
-        raise HTTPException(status_code=499, detail="Broadcast cancelled by user")
+            _mark_upload_aborted(tracking_id)
+        broadcast.abort_dispatch(delivery_results)
+        await broadcast_repo.save(broadcast)
+        raise HTTPException(status_code=409, detail=BROADCAST_CANCELLED_DETAIL)
     except Exception:
         if tracking_id:
             upload_progress_tracker[tracking_id]["status"] = "failed"
