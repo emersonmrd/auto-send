@@ -68,6 +68,12 @@ mutation_targets() {
 run_mutation() {
   local targets="$1" args=()
   [[ "$targets" != ALL ]] && args=(--paths-to-mutate "$targets")
+  # O mutmut roda sem saída; sem este aviso, quem acompanha o log acha que travou (kaizen de 2026-10-28).
+  if [[ "$targets" == ALL ]]; then
+    echo "Mutando o domínio inteiro; leva ~20 min sem imprimir nada até o fim."
+  else
+    echo "Mutando: $targets (sem saída até o fim)."
+  fi
   cd backend || return 1
   rm -f .mutmut-cache*
   python3 -c "import sqlite3; c = sqlite3.connect('.mutmut-cache'); c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA busy_timeout=60000'); c.close()"
