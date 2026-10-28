@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
-import { FAKE_TELEGRAM_PORT, REAL_BOT_TOKEN, REAL_CHANNEL_ID, RUN_DIR, USES_REAL_TELEGRAM } from "./env";
+import { FAKE_TELEGRAM_PORT, REAL_BOT_TOKEN, REAL_CHANNEL_ID, REAL_SUPERGROUP_ID, RUN_DIR, USES_REAL_TELEGRAM } from "./env";
 
 // Fluxos de quem usa o app, contra o backend real servindo o frontend exportado (playwright.real-app.config.ts).
 // Com a API falsa do Telegram, cada fluxo também confere o que chegou ao Telegram.
@@ -291,5 +291,26 @@ test.describe.serial("aplicação real", () => {
   test("não deixa mídia temporária depois de enviar e cancelar", () => {
     // AGENTS.md §10: o arquivo em temp_media é apagado depois do envio, com sucesso ou erro, e no cancelamento.
     expect(fs.readdirSync(path.join(RUN_DIR, "media"))).toEqual([]);
+  });
+
+  // Por último: com mais um destino vinculado, os envios acima iriam para dois chats.
+  test("vincula um supergrupo e mostra o tipo lido do Telegram (#99)", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
+    const supergroupId = REAL_SUPERGROUP_ID || "-1005555555555";
+    await openProfile(page);
+    await page.getByRole("button", { name: "Adicionar Canal" }).click();
+    await page.getByPlaceholder("Ex: Canal de Novidades").fill("Supergrupo de Teste");
+    await page.getByPlaceholder("-1001234567890").fill(supergroupId);
+    await page.getByRole("button", { name: "Vincular Canal" }).click();
+
+    const chip = page.getByRole("button").filter({ hasText: "Supergrupo de Teste" }).first();
+    // Supergrupo com tópicos aparece como fórum; o de teste real pode ter ou não.
+    await expect(chip.getByRole("img", { name: /^(Grupo|Fórum)$/ })).toBeVisible();
+    if (!USES_REAL_TELEGRAM) {
+      await expect(chip.getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
+      const calls = await telegramCalls(page);
+      expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat"]);
+      expect(calls[2].query).toEqual({ chat_id: supergroupId });
+    }
   });
 });

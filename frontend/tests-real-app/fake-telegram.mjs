@@ -20,6 +20,7 @@ const PUBLIC_CHANNEL = { id: -1003333333333, title: "Canal Público", type: "cha
 const CHATS_BY_ID = {
   "-1004444444444": { id: -1004444444444, title: "Canal Privado", type: "channel" },
   "-1001234567890": { id: -1001234567890, title: "Canal de Teste", type: "channel" },
+  "-1005555555555": { id: -1005555555555, title: "Supergrupo de Teste", type: "supergroup" },
   [String(DISCOVERED_CHANNEL.id)]: DISCOVERED_CHANNEL,
   [String(PUBLIC_CHANNEL.id)]: PUBLIC_CHANNEL,
 };
