@@ -55,6 +55,36 @@ interface ToastNotice {
 // "" no export estático = mesma origem do backend que serve a tela (next.config.ts); no `npm run dev`, a porta 8000.
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+const DEFAULT_TELEGRAM_SPEED_BPS = 13.5 * 1024 * 1024; // Baseline calibrado (~108 Mbps / 13.5 MB/s)
+
+function getEstimatedTelegramSpeed(): number {
+  if (typeof window === "undefined") return DEFAULT_TELEGRAM_SPEED_BPS;
+  try {
+    const saved = localStorage.getItem("autosend_telegram_speed_bps");
+    if (saved) {
+      const val = Number(saved);
+      if (val >= 500 * 1024 && val <= 100 * 1024 * 1024) {
+        return val;
+      }
+    }
+  } catch {}
+  return DEFAULT_TELEGRAM_SPEED_BPS;
+}
+
+function recordMeasuredTelegramSpeed(bytes: number, elapsedMs: number) {
+  if (typeof window === "undefined" || bytes <= 5 * 1024 * 1024 || elapsedMs < 2000) return;
+  try {
+    const measuredBps = bytes / (elapsedMs / 1000);
+    // Sanity check: entre 500 KB/s e 100 MB/s
+    if (measuredBps >= 500 * 1024 && measuredBps <= 100 * 1024 * 1024) {
+      const current = getEstimatedTelegramSpeed();
+      // Média móvel exponencial (EMA): 60% histórico + 40% envio recente
+      const updated = Math.round(current * 0.6 + measuredBps * 0.4);
+      localStorage.setItem("autosend_telegram_speed_bps", String(updated));
+    }
+  } catch {}
+}
+
 import {
   Send,
   Paperclip,
@@ -975,6 +1005,10 @@ export default function Home() {
             data = null;
           }
           if (xhr.status >= 200 && xhr.status < 300) {
+            if (transmittingStartTimeRef.current && currentMediaFile && currentMediaFile.size > 5 * 1024 * 1024) {
+              const elapsed = Date.now() - transmittingStartTimeRef.current;
+              recordMeasuredTelegramSpeed(currentMediaFile.size, elapsed);
+            }
             resolve((data as BroadcastResponse | null) ?? { status: "SUCCESS" });
           } else {
             reject(new ApiHttpError(extractApiError(data, `Falha HTTP ${xhr.status}`), xhr.status));
@@ -2225,10 +2259,10 @@ export default function Home() {
                     : (mediaFile?.size ?? 0);
                 const isCompleted = telegramProgress?.status === "completed";
 
-                // Taxa média de ingestão do Telegram WAN (~13.5 MB/s)
-                const TELEGRAM_INGESTION_BPS = 13.5 * 1024 * 1024;
+                // Taxa dinâmica de ingestão do Telegram WAN calibrada por usuário
+                const userSpeedBps = getEstimatedTelegramSpeed();
                 const elapsedSec = transmittingElapsedMs / 1000;
-                const expectedSec = Math.max(2.5, total / TELEGRAM_INGESTION_BPS);
+                const expectedSec = Math.max(2.5, total / userSpeedBps);
 
                 let simulatedPct = 0;
                 if (uploadPhase === "transmitting" && !isCompleted && total > 0) {
