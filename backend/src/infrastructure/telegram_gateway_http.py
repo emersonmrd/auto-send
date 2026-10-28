@@ -340,6 +340,9 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                         "caption": message.text,
                         "parse_mode": "HTML"
                     }
+                    if not message.text:
+                        data.pop("caption", None)
+                        data.pop("parse_mode", None)
                     if not is_photo:
                         data["supports_streaming"] = "true"
                         if message.media and message.media.duration and message.media.duration > 0:

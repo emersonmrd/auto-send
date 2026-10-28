@@ -1427,6 +1427,48 @@ async def test_send_broadcast_with_file_id_cleans_thumbnail_references(monkeypat
     assert "telegram_video_file_id_123" in content
 
 
+@pytest.mark.asyncio
+async def test_send_broadcast_video_without_caption_omits_caption_field(sample_video_file, monkeypatch):
+    recorded_requests = []
+
+    def mock_handler(request: httpx.Request):
+        recorded_requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 204}})
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    message = BroadcastMessage(
+        id="broadcast-vid-no-cap",
+        profile_id="profile-1",
+        target_channel_ids=["-1001234567890"],
+        text="",
+        media=MediaAttachment(
+            file_path=sample_video_file,
+            media_type=MediaType.VIDEO,
+            file_size=os.path.getsize(sample_video_file),
+        ),
+    )
+
+    ok = await gateway.send_broadcast(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="-1001234567890",
+        message=message,
+    )
+    assert ok is True
+    assert len(recorded_requests) == 1
+    content = recorded_requests[0].read().decode("latin1")
+    assert 'name="caption"' not in content
+    assert 'name="parse_mode"' not in content
+
+
+
 
 
 
