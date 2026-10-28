@@ -2208,9 +2208,30 @@ export default function Home() {
                     : (mediaFile?.size ?? 0);
                 const sent = telegramProgress?.sent_bytes ?? 0;
                 const pct = telegramProgress?.percent ?? 0;
+                const isCompleted = telegramProgress?.status === "completed";
                 const isTelegramProcessing =
-                  telegramProgress?.stage === "processing_by_telegram" ||
-                  (sent >= total && total > 0);
+                  !isCompleted &&
+                  (telegramProgress?.stage === "processing_by_telegram" ||
+                    (sent >= total && total > 0));
+
+                let statusText = "";
+                let badgeText = "";
+
+                if (uploadPhase === "transmitting") {
+                  if (isCompleted) {
+                    statusText = `Publicado com sucesso no canal! Concluindo...`;
+                    badgeText = "100%";
+                  } else if (isTelegramProcessing) {
+                    statusText = `Sincronizando com o Telegram (${formatFileSize(total)}) • Publicando no canal...`;
+                    badgeText = "Processando...";
+                  } else {
+                    statusText = `Transmitindo para o Telegram: ${pct}% (${formatFileSize(sent)} / ${formatFileSize(total)}) • Enviando...`;
+                    badgeText = `${pct}%`;
+                  }
+                } else {
+                  statusText = `Fase 1/2: Enviando arquivo para o servidor... [${uploadProgress !== null ? uploadProgress : 0}%]`;
+                  badgeText = `${uploadProgress !== null ? uploadProgress : 0}%`;
+                }
 
                 return (
                   <div className="max-w-4xl mx-auto mb-3 bg-[#1e2c3a] border border-[#5288c1]/70 rounded-xl p-3.5 shadow-xl space-y-2.5">
@@ -2218,20 +2239,12 @@ export default function Home() {
                       <div className="flex items-center gap-2.5">
                         <div className="w-4 h-4 border-2 border-[#5288c1] border-t-transparent rounded-full animate-spin shrink-0" />
                         <span className="font-medium text-white text-sm">
-                          {uploadPhase === "transmitting" ? (
-                            isTelegramProcessing
-                              ? `Upload concluído (${formatFileSize(total)})! Telegram processando e publicando no canal... Quase lá!`
-                              : `Transmitindo para o Telegram: ${pct}% (${formatFileSize(sent)} / ${formatFileSize(total)}) • Enviando...`
-                          ) : (
-                            `Fase 1/2: Enviando arquivo para o servidor... [${uploadProgress !== null ? uploadProgress : 0}%]`
-                          )}
+                          {statusText}
                         </span>
                       </div>
                       <div className="flex items-center gap-3">
                         <span className="font-mono font-bold text-base text-[#71aaeb]">
-                          {uploadPhase === "transmitting"
-                            ? `${telegramProgress?.percent ?? 0}%`
-                            : `${uploadProgress !== null ? uploadProgress : 0}%`}
+                          {badgeText}
                         </span>
                         <button
                           type="button"
@@ -2252,7 +2265,9 @@ export default function Home() {
                         style={{
                           width: `${Math.max(
                             uploadPhase === "transmitting"
-                              ? (telegramProgress?.percent ?? 0)
+                              ? isTelegramProcessing
+                                ? 100
+                                : pct
                               : (uploadProgress ?? 0),
                             5
                           )}%`,
