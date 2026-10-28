@@ -98,6 +98,43 @@ async def test_discover_drops_chats_the_bot_has_left(monkeypatch):
     assert [c.chat_id for c in chats] == ["-1002222222222"]
 
 
+async def test_discover_hides_a_basic_group_that_migrated_to_a_supergroup(monkeypatch):
+    # Ordem real do getUpdates depois da conversão: o grupo antigo, o supergrupo novo
+    # (com migrate_from_chat_id) e, por último, o aviso no grupo antigo (migrate_to_chat_id).
+    old_group = {**chat(-444444444, "Grupo", type_="group"), "all_members_are_administrators": False}
+    supergroup = chat(-1005555555555, "Grupo", type_="supergroup")
+    use_transport(
+        monkeypatch,
+        lambda r: updates(
+            {"my_chat_member": {"chat": old_group, "new_chat_member": {"status": "member"}}},
+            {"message": {"chat": old_group, "group_chat_created": True}},
+            {"my_chat_member": {"chat": supergroup, "new_chat_member": {"status": "member"}}},
+            {"message": {"chat": supergroup, "migrate_from_chat_id": -444444444}},
+            {"message": {"chat": old_group, "migrate_to_chat_id": -1005555555555}},
+        ),
+    )
+
+    chats = await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+    assert [(c.chat_id, c.chat_type) for c in chats] == [("-1005555555555", "supergroup")]
+
+
+@pytest.mark.parametrize("marker", ["migrate_from_chat_id", "migrate_to_chat_id"])
+async def test_discover_hides_a_migrated_group_with_either_migration_message(monkeypatch, marker):
+    old_group = chat(-444444444, "Grupo", type_="group")
+    supergroup = chat(-1005555555555, "Grupo", type_="supergroup")
+    migration = (
+        {"message": {"chat": supergroup, "migrate_from_chat_id": -444444444}}
+        if marker == "migrate_from_chat_id"
+        else {"message": {"chat": old_group, "migrate_to_chat_id": -1005555555555}}
+    )
+    use_transport(monkeypatch, lambda r: updates({"message": {"chat": old_group, "text": "oi"}}, migration))
+
+    chats = await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+    assert "-444444444" not in [c.chat_id for c in chats]
+
+
 async def test_resolve_calls_get_chat_with_the_username(monkeypatch):
     requests = use_transport(
         monkeypatch,
