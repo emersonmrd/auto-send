@@ -7,9 +7,11 @@ import httpx
 from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
+    BroadcastPoll,
     MediaAttachment,
     MediaType,
     InlineButton,
+    PollType,
 )
 
 @pytest.fixture
@@ -1466,6 +1468,143 @@ async def test_send_broadcast_video_without_caption_omits_caption_field(sample_v
     content = recorded_requests[0].read().decode("latin1")
     assert 'name="caption"' not in content
     assert 'name="parse_mode"' not in content
+
+
+@pytest.mark.asyncio
+async def test_send_broadcast_regular_poll_using_send_poll_endpoint(monkeypatch):
+    recorded_requests = []
+
+    def mock_handler(request: httpx.Request):
+        recorded_requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 301, "poll": {"id": "p-1"}}})
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    poll = BroadcastPoll(
+        question="Qual sua linguagem preferida?",
+        options=["Python", "TypeScript", "Rust"],
+        is_anonymous=False,
+        allows_multiple_answers=True,
+        poll_type=PollType.REGULAR,
+        is_closed=False,
+    )
+    message = BroadcastMessage(
+        id="broadcast-poll-reg",
+        profile_id="profile-1",
+        target_channel_ids=["-1001234567890"],
+        poll=poll,
+        button=InlineButton(text="Votar no site", url="https://example.com/poll"),
+    )
+
+    ok = await gateway.send_broadcast(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="-1001234567890",
+        message=message,
+    )
+    assert ok is True
+    assert len(recorded_requests) == 1
+    req = recorded_requests[0]
+    assert req.method == "POST"
+    assert req.url.path.endswith("/sendPoll")
+    body = json.loads(req.read())
+    assert body["chat_id"] == "-1001234567890"
+    assert body["question"] == "Qual sua linguagem preferida?"
+    assert body["options"] == ["Python", "TypeScript", "Rust"]
+    assert body["is_anonymous"] is False
+    assert body["allows_multiple_answers"] is True
+    assert body["type"] == "regular"
+    assert "correct_option_id" not in body
+    assert "explanation" not in body
+    assert body["reply_markup"]["inline_keyboard"][0][0]["text"] == "Votar no site"
+
+
+@pytest.mark.asyncio
+async def test_send_broadcast_quiz_poll_with_correct_option_and_explanation(monkeypatch):
+    recorded_requests = []
+
+    def mock_handler(request: httpx.Request):
+        recorded_requests.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 302, "poll": {"id": "p-quiz"}}})
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    poll = BroadcastPoll(
+        question="Qual a capital da França?",
+        options=["Londres", "Paris", "Berlim"],
+        poll_type=PollType.QUIZ,
+        correct_option_id=1,
+        explanation="Paris é a capital e maior cidade da França.",
+        is_closed=True,
+    )
+    message = BroadcastMessage(
+        id="broadcast-poll-quiz",
+        profile_id="profile-1",
+        target_channel_ids=["-1001234567890"],
+        poll=poll,
+    )
+
+    ok = await gateway.send_broadcast(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="-1001234567890",
+        message=message,
+    )
+    assert ok is True
+    assert len(recorded_requests) == 1
+    req = recorded_requests[0]
+    body = json.loads(req.read())
+    assert body["type"] == "quiz"
+    assert body["correct_option_id"] == 1
+    assert body["explanation"] == "Paris é a capital e maior cidade da França."
+    assert body["is_closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_send_broadcast_poll_handles_telegram_error(monkeypatch):
+    def mock_handler(request: httpx.Request):
+        return httpx.Response(400, json={"ok": False, "description": "Bad Request: poll options must not be empty"})
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    original_client_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        original_client_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    poll = BroadcastPoll(
+        question="Q?",
+        options=["A", "B"],
+    )
+    message = BroadcastMessage(
+        id="broadcast-poll-err",
+        profile_id="profile-1",
+        target_channel_ids=["-1001234567890"],
+        poll=poll,
+    )
+
+    ok = await gateway.send_broadcast(
+        bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+        chat_id="-1001234567890",
+        message=message,
+    )
+    assert ok is False
+    assert gateway.last_failure_category is not None
+
 
 
 

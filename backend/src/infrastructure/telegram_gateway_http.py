@@ -20,6 +20,7 @@ from src.domain.broadcast.broadcast_message import (
     DeliveryFailureCategory,
     DispatchStrategy,
     MediaType,
+    PollType,
 )
 from src.infrastructure.progress_reader import ProgressFileReader
 from src.infrastructure.resilience import CircuitBreaker, CircuitBreakerOpenException
@@ -315,6 +316,34 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
+                if strategy == DispatchStrategy.POLL:
+                    send_url = f"{effective_url}/bot{bot_token}/sendPoll"
+                    poll = message.poll
+                    if not poll:
+                        self.last_error = "Dados da enquete ausentes no broadcast."
+                        self.last_failure_category = DeliveryFailureCategory.OTHER
+                        self.last_failure_detail = self.last_error
+                        return False
+                    payload = {
+                        "chat_id": chat_id,
+                        "question": poll.question,
+                        "options": poll.options,
+                        "is_anonymous": poll.is_anonymous,
+                        "allows_multiple_answers": poll.allows_multiple_answers,
+                        "type": poll.poll_type.value,
+                    }
+                    if poll.is_closed:
+                        payload["is_closed"] = True
+                    if poll.poll_type == PollType.QUIZ:
+                        payload["correct_option_id"] = poll.correct_option_id
+                        if poll.explanation:
+                            payload["explanation"] = poll.explanation
+                    if reply_markup:
+                        payload["reply_markup"] = reply_markup
+                    resp = await client.post(send_url, json=payload)
+                    data = await self._handle_response(resp)
+                    return bool(data.get("ok"))
+
                 if strategy == DispatchStrategy.TEXT_ONLY:
                     send_url = f"{effective_url}/bot{bot_token}/sendMessage"
                     payload = {

@@ -125,6 +125,10 @@ def _migration_006_message_templates(cursor: sqlite3.Cursor) -> None:
         )
 
 
+def _migration_007_broadcast_poll_data(cursor: sqlite3.Cursor) -> None:
+    _add_column_if_missing(cursor, "broadcasts", "poll_data", "TEXT")
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -155,6 +159,11 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         version=6,
         description="Tabela de modelos de mensagens reutilizáveis por perfil (#63)",
         apply=_migration_006_message_templates,
+    ),
+    MigrationStep(
+        version=7,
+        description="Campo poll_data em broadcasts para suporte a enquetes (#97)",
+        apply=_migration_007_broadcast_poll_data,
     ),
 )
 

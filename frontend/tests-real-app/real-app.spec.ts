@@ -97,6 +97,30 @@ test.describe.serial("aplicação real", () => {
     }
   });
 
+  test("cria e envia uma enquete para o canal pelo sendPoll", async ({ page }) => {
+    await openProfile(page);
+    await page.getByLabel("Criar Enquete").click();
+
+    const dialog = page.getByRole("dialog", { name: "Criar Enquete do Telegram" });
+    await dialog.getByPlaceholder("Ex: Qual tema vocês querem no próximo conteúdo?").fill("Qual seu framework favorito?");
+    await dialog.getByPlaceholder("Opção 1").fill("React");
+    await dialog.getByPlaceholder("Opção 2").fill("Vue");
+    await dialog.getByRole("button", { name: "Salvar", exact: true }).click();
+
+    await expect(page.getByText("Qual seu framework favorito?").first()).toBeVisible();
+
+    await page.getByLabel("Enviar Agora").click();
+    await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
+
+    if (!USES_REAL_TELEGRAM) {
+      const [call] = await telegramCalls(page);
+      expect(call.method).toBe("sendPoll");
+      expect(call.fields.chat_id).toBe(channelId);
+      expect(call.fields.question).toBe("Qual seu framework favorito?");
+      expect(call.fields.options).toEqual(["React", "Vue"]);
+    }
+  });
+
   test("envia foto com legenda pelo sendPhoto", async ({ page }) => {
     await openProfile(page);
     await page.locator('input[type="file"]').setInputFiles({ name: "foto.png", mimeType: "image/png", buffer: PHOTO });

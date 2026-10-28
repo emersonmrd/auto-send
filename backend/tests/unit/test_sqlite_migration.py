@@ -556,7 +556,7 @@ async def test_migration_006_creates_message_templates_table(tmp_path, monkeypat
     from src.infrastructure.sqlite_repositories import SqlAlchemyMessageTemplateRepository
     from src.domain.broadcast.message_template import MessageTemplate
 
-    assert CURRENT_SCHEMA_VERSION == 6
+    assert CURRENT_SCHEMA_VERSION >= 6
 
     db_path = tmp_path / "autosend_v6.db"
     test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
@@ -566,8 +566,8 @@ async def test_migration_006_creates_message_templates_table(tmp_path, monkeypat
     try:
         await main_module.init_db()
 
-        # Garante que user_version é 6
-        assert get_user_version(db_path) == 6
+        # Garante que user_version é CURRENT_SCHEMA_VERSION (>= 6)
+        assert get_user_version(db_path) == CURRENT_SCHEMA_VERSION
 
         # Garante colunas de message_templates
         columns = get_table_columns(str(db_path), "message_templates")
@@ -613,8 +613,8 @@ async def test_migration_006_creates_message_templates_table(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_message_templates_survive_future_database_migrations(tmp_path, monkeypatch):
-    """Dado um banco no schema 6 com perfil e modelo de mensagem salvos,
-    quando uma nova migração (schema 7) é executada, o modelo e seus campos permanecem intactos."""
+    """Dado um banco no schema atual com perfil e modelo de mensagem salvos,
+    quando uma nova migração futura é executada, o modelo e seus campos permanecem intactos."""
     from src.infrastructure.sqlite_repositories import SqlAlchemyMessageTemplateRepository
     from src.domain.broadcast.message_template import MessageTemplate
 
@@ -624,9 +624,10 @@ async def test_message_templates_survive_future_database_migrations(tmp_path, mo
     monkeypatch.setattr(main_module, "engine", test_engine)
 
     try:
-        # 1. Inicia o banco com o schema atual (versão 6)
+        # 1. Inicia o banco com o schema atual
         await main_module.init_db()
-        assert get_user_version(db_path) == CURRENT_SCHEMA_VERSION == 6
+        curr_ver = CURRENT_SCHEMA_VERSION
+        assert get_user_version(db_path) == curr_ver
 
         # 2. Insere um perfil 'Acme' e um modelo 'Canal de Novidades'
         profile_repo = SqlAlchemyProfileRepository(session_factory)
@@ -648,24 +649,25 @@ async def test_message_templates_survive_future_database_migrations(tmp_path, mo
         )
         await template_repo.save(tmpl)
 
-        # 3. Define uma migração 7 simulada
-        def _migration_007_simulated(cur: sqlite3.Cursor) -> None:
+        # 3. Define uma migração futura simulada
+        next_ver = curr_ver + 1
+        def _migration_future_simulated(cur: sqlite3.Cursor) -> None:
             cur.execute("ALTER TABLE profiles ADD COLUMN dummy_future_setting VARCHAR DEFAULT ''")
 
-        simulated_step_7 = MigrationStep(
-            version=7,
-            description="Migração 7 simulada para teste de sobrevivência de dados",
-            apply=_migration_007_simulated,
+        simulated_step = MigrationStep(
+            version=next_ver,
+            description="Migração futura simulada para teste de sobrevivência de dados",
+            apply=_migration_future_simulated,
         )
 
-        steps_with_7 = (*MIGRATIONS, simulated_step_7)
+        steps_future = (*MIGRATIONS, simulated_step)
 
-        # 4. Executa init_db com a nova migração 7
-        await main_module.init_db(migration_steps=steps_with_7)
+        # 4. Executa init_db com a nova migração
+        await main_module.init_db(migration_steps=steps_future)
 
         # 5. Valida nova versão e backup criado
-        assert get_user_version(db_path) == 7
-        assert (tmp_path / "autosend.db.bak-6").is_file()
+        assert get_user_version(db_path) == next_ver
+        assert (tmp_path / f"autosend.db.bak-{curr_ver}").is_file()
 
         # 6. Valida que o modelo sobreviveu com exatamente os mesmos campos
         loaded = await template_repo.get_by_id("tmpl-novidades")
@@ -689,5 +691,85 @@ async def test_message_templates_survive_future_database_migrations(tmp_path, mo
         assert loaded_profile.name == "Acme"
     finally:
         await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_007_creates_poll_data_column_and_persists_polls(tmp_path, monkeypatch):
+    """A migração versão 7 adiciona a coluna poll_data em broadcasts e permite persistir e carregar enquetes."""
+    from src.domain.broadcast.broadcast_message import BroadcastPoll, PollType
+    from src.infrastructure.sqlite_repositories import SqlAlchemyBroadcastRepository
+
+    assert CURRENT_SCHEMA_VERSION == 7
+
+    db_path = tmp_path / "autosend_v7.db"
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db()
+
+        assert get_user_version(db_path) == 7
+
+        columns = get_table_columns(str(db_path), "broadcasts")
+        assert "poll_data" in columns
+
+        profile_repo = SqlAlchemyProfileRepository(session_factory)
+        profile = Profile(
+            id="p-poll-test",
+            name="Perfil Enquetes",
+            credentials=BotCredentials(token="123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef", bot_username="poll_bot"),
+        )
+        await profile_repo.save(profile)
+
+        broadcast_repo = SqlAlchemyBroadcastRepository(session_factory)
+        poll = BroadcastPoll(
+            question="Qual o melhor framework?",
+            options=["Next.js", "Vue", "Svelte"],
+            is_anonymous=False,
+            allows_multiple_answers=True,
+            poll_type=PollType.REGULAR,
+        )
+        b_msg = BroadcastMessage(
+            id="b-poll-1",
+            profile_id="p-poll-test",
+            target_channel_ids=["-1001234567890"],
+            poll=poll,
+        )
+        await broadcast_repo.save(b_msg)
+
+        loaded = await broadcast_repo.get_by_id("b-poll-1")
+        assert loaded is not None
+        assert loaded.poll is not None
+        assert loaded.poll.question == "Qual o melhor framework?"
+        assert loaded.poll.options == ["Next.js", "Vue", "Svelte"]
+        assert loaded.poll.is_anonymous is False
+        assert loaded.poll.allows_multiple_answers is True
+        assert loaded.poll.poll_type == PollType.REGULAR
+        assert loaded.poll.correct_option_id is None
+        assert loaded.poll.explanation is None
+
+        # Testa atualização para modo Quiz
+        quiz_poll = BroadcastPoll(
+            question="Quanto é 1 + 1?",
+            options=["1", "2", "3"],
+            poll_type=PollType.QUIZ,
+            correct_option_id=1,
+            explanation="1 mais 1 é igual a 2.",
+            is_closed=True,
+        )
+        b_msg.poll = quiz_poll
+        await broadcast_repo.save(b_msg)
+
+        reloaded = await broadcast_repo.get_by_id("b-poll-1")
+        assert reloaded is not None
+        assert reloaded.poll is not None
+        assert reloaded.poll.poll_type == PollType.QUIZ
+        assert reloaded.poll.correct_option_id == 1
+        assert reloaded.poll.explanation == "1 mais 1 é igual a 2."
+        assert reloaded.poll.is_closed is True
+    finally:
+        await test_engine.dispose()
+
 
 

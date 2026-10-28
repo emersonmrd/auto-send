@@ -1,7 +1,9 @@
+import dataclasses
 from datetime import datetime, timezone
 import pytest
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
+    BroadcastPoll,
     BroadcastStatus,
     ChannelDeliveryResult,
     DeliveryFailureCategory,
@@ -9,6 +11,7 @@ from src.domain.broadcast.broadcast_message import (
     InlineButton,
     MediaAttachment,
     MediaType,
+    PollType,
     validate_and_escape_telegram_html,
 )
 
@@ -853,3 +856,186 @@ def test_abort_dispatch_rejects_broadcast_that_is_not_in_flight(status):
         msg.abort_dispatch([])
 
     assert msg.status == status
+
+
+def test_broadcast_poll_fields_and_defaults():
+    field_map = {f.name: f for f in dataclasses.fields(BroadcastPoll)}
+    assert field_map["is_anonymous"].default is True
+    assert field_map["allows_multiple_answers"].default is False
+    assert field_map["poll_type"].default == PollType.REGULAR
+    assert field_map["correct_option_id"].default is None
+    assert field_map["explanation"].default is None
+    assert field_map["is_closed"].default is False
+
+    poll = BroadcastPoll(question="Qual sua cor favorita?", options=["Azul", "Vermelho"])
+    assert poll.question == "Qual sua cor favorita?"
+    assert poll.options == ["Azul", "Vermelho"]
+    assert poll.is_anonymous is True
+    assert poll.allows_multiple_answers is False
+    assert poll.poll_type == PollType.REGULAR
+    assert poll.correct_option_id is None
+    assert poll.explanation is None
+    assert poll.is_closed is False
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        poll.question = "Outra"
+
+    quiz = BroadcastPoll(
+        question="Quanto é 2 + 2?",
+        options=["3", "4"],
+        poll_type=PollType.QUIZ,
+        correct_option_id=1,
+        explanation="2 + 2 = 4",
+        is_closed=True,
+    )
+    assert quiz.poll_type == PollType.QUIZ
+    assert quiz.correct_option_id == 1
+    assert quiz.explanation == "2 + 2 = 4"
+    assert quiz.is_closed is True
+
+
+def test_broadcast_poll_validations_question():
+    for empty_q in ("", "   ", None):
+        with pytest.raises(ValueError, match=r"^question cannot be empty$"):
+            BroadcastPoll(question=empty_q, options=["A", "B"])  # type: ignore
+
+    with pytest.raises(ValueError, match=r"^question cannot exceed 300 characters$"):
+        BroadcastPoll(question="A" * 301, options=["A", "B"])
+
+    p_min = BroadcastPoll(question="A", options=["A", "B"])
+    assert p_min.question == "A"
+    p_max = BroadcastPoll(question="A" * 300, options=["A", "B"])
+    assert len(p_max.question) == 300
+
+
+def test_broadcast_poll_validations_options():
+    with pytest.raises(ValueError, match=r"^poll must have at least 2 options$"):
+        BroadcastPoll(question="Q?", options=[])
+
+    with pytest.raises(ValueError, match=r"^poll must have at least 2 options$"):
+        BroadcastPoll(question="Q?", options=["A"])
+
+    with pytest.raises(ValueError, match=r"^poll cannot have more than 10 options$"):
+        BroadcastPoll(question="Q?", options=[f"Opt {i}" for i in range(11)])
+
+    for empty_opt in ("", "   ", None):
+        with pytest.raises(ValueError, match=r"^poll option cannot be empty$"):
+            BroadcastPoll(question="Q?", options=["Valid", empty_opt])  # type: ignore
+
+    with pytest.raises(ValueError, match=r"^poll option cannot exceed 100 characters$"):
+        BroadcastPoll(question="Q?", options=["Valid", "X" * 101])
+
+    p2 = BroadcastPoll(question="Q?", options=["A", "B"])
+    assert len(p2.options) == 2
+    p10 = BroadcastPoll(question="Q?", options=["X" * 100 for _ in range(10)])
+    assert len(p10.options) == 10
+    assert len(p10.options[0]) == 100
+
+
+def test_broadcast_poll_validations_quiz():
+    opts = ["A", "B", "C"]
+    with pytest.raises(ValueError, match=r"^quiz polls cannot allow multiple answers$"):
+        BroadcastPoll(
+            question="Q?",
+            options=opts,
+            poll_type=PollType.QUIZ,
+            allows_multiple_answers=True,
+            correct_option_id=0,
+        )
+
+    with pytest.raises(ValueError, match=r"^quiz polls require correct_option_id$"):
+        BroadcastPoll(question="Q?", options=opts, poll_type=PollType.QUIZ, correct_option_id=None)
+
+    with pytest.raises(ValueError, match=r"^correct_option_id must be an integer$"):
+        BroadcastPoll(
+            question="Q?",
+            options=opts,
+            poll_type=PollType.QUIZ,
+            correct_option_id=True,  # bool subclass of int
+        )
+
+    with pytest.raises(ValueError, match=r"^correct_option_id must be an integer$"):
+        BroadcastPoll(
+            question="Q?",
+            options=opts,
+            poll_type=PollType.QUIZ,
+            correct_option_id="0",  # type: ignore
+        )
+
+    with pytest.raises(ValueError, match=r"^correct_option_id is out of range$"):
+        BroadcastPoll(question="Q?", options=opts, poll_type=PollType.QUIZ, correct_option_id=-1)
+
+    with pytest.raises(ValueError, match=r"^correct_option_id is out of range$"):
+        BroadcastPoll(question="Q?", options=opts, poll_type=PollType.QUIZ, correct_option_id=3)
+
+    with pytest.raises(ValueError, match=r"^explanation cannot exceed 200 characters$"):
+        BroadcastPoll(
+            question="Q?",
+            options=opts,
+            poll_type=PollType.QUIZ,
+            correct_option_id=0,
+            explanation="E" * 201,
+        )
+
+    quiz_valid_0 = BroadcastPoll(
+        question="Q?",
+        options=opts,
+        poll_type=PollType.QUIZ,
+        correct_option_id=0,
+        explanation="E" * 200,
+    )
+    assert quiz_valid_0.correct_option_id == 0
+    assert len(quiz_valid_0.explanation) == 200
+
+    quiz_valid_last = BroadcastPoll(
+        question="Q?",
+        options=opts,
+        poll_type=PollType.QUIZ,
+        correct_option_id=2,
+    )
+    assert quiz_valid_last.correct_option_id == 2
+
+
+def test_broadcast_poll_validations_regular():
+    opts = ["A", "B"]
+    with pytest.raises(ValueError, match=r"^regular polls cannot have correct_option_id$"):
+        BroadcastPoll(
+            question="Q?",
+            options=opts,
+            poll_type=PollType.REGULAR,
+            correct_option_id=0,
+        )
+
+    with pytest.raises(ValueError, match=r"^regular polls cannot have explanation$"):
+        BroadcastPoll(
+            question="Q?",
+            options=opts,
+            poll_type=PollType.REGULAR,
+            explanation="Just note",
+        )
+
+
+def test_broadcast_message_with_poll():
+    b_fields = {f.name: f for f in dataclasses.fields(BroadcastMessage)}
+    assert b_fields["poll"].default is None
+
+    poll = BroadcastPoll(question="Nova enquete?", options=["Sim", "Não"])
+    msg = BroadcastMessage(
+        id="b-poll-1",
+        profile_id="p-1",
+        target_channel_ids=["-1001234567890"],
+        poll=poll,
+    )
+    assert msg.poll == poll
+    assert msg.get_dispatch_strategy() == DispatchStrategy.POLL
+
+    media = MediaAttachment(file_path="/tmp/pic.jpg", media_type=MediaType.PHOTO, file_size=100)
+    with pytest.raises(ValueError, match=r"^Broadcast cannot have both media and poll$"):
+        BroadcastMessage(
+            id="b-poll-err",
+            profile_id="p-1",
+            target_channel_ids=["-1001234567890"],
+            media=media,
+            poll=poll,
+        )
+

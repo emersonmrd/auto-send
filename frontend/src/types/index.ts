@@ -81,6 +81,17 @@ export interface ChannelDeliveryResult {
   detail?: string | null;
 }
 
+export interface BroadcastPoll {
+  question: string;
+  options: string[];
+  is_anonymous: boolean;
+  allows_multiple_answers: boolean;
+  poll_type: "regular" | "quiz";
+  correct_option_id?: number | null;
+  explanation?: string | null;
+  is_closed?: boolean;
+}
+
 export interface BroadcastHistoryItem {
   id: string;
   profile_id: string;
@@ -90,6 +101,7 @@ export interface BroadcastHistoryItem {
   scheduled_at?: string | null;
   created_at: string;
   delivery_results?: ChannelDeliveryResult[];
+  poll?: BroadcastPoll | null;
 }
 
 export interface BroadcastProgressResponse {
@@ -139,6 +151,7 @@ export interface ScheduledBroadcast {
   text: string;
   media?: BroadcastMedia | null;
   button?: BroadcastButton | null;
+  poll?: BroadcastPoll | null;
   status: "PENDING" | "SCHEDULED" | "MISFIRED" | "DISPATCHING" | "COMPLETED" | "PARTIALLY_COMPLETED" | "FAILED" | "CANCELLED";
   scheduled_at: string | null;
   created_at?: string | null;
