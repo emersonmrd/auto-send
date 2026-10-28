@@ -17,23 +17,23 @@ from pydantic import BaseModel, Field, field_validator
 from src.domain.broadcast.media_format import classify_media
 from src.domain.broadcast.broadcast_message import (
     BroadcastMessage,
-    BroadcastPoll,
     ChannelDeliveryResult,
     DeliveryFailureCategory,
-    InlineButton,
     MediaAttachment,
     MediaType,
     BroadcastStatus,
-    PollType,
-    ensure_schedulable,
-    validate_and_escape_telegram_html,
 )
 from src.application.discover_chats_use_case import DiscoverChatsUseCase
+from src.application.create_broadcast_use_case import CreateBroadcastCommand, CreateBroadcastUseCase, PollSpec
+from src.application.dispatch_broadcast_use_case import DispatchBroadcastUseCase
 from src.application.errors import (
+    BroadcastAbortedError,
+    BroadcastNotFoundError,
     ChannelAlreadyRegisteredError,
     ChannelNotFoundError,
     ProfileNotFoundError,
 )
+from src.application.update_broadcast_use_case import UpdateBroadcastCommand, UpdateBroadcastUseCase
 from src.application.register_channel_use_case import RegisterChannelCommand, RegisterChannelUseCase
 from src.application.update_channel_use_case import UpdateChannelCommand, UpdateChannelUseCase
 from src.application.resolve_chat_use_case import ResolveChatUseCase
@@ -1305,10 +1305,21 @@ async def create_broadcast(
     poll_explanation: Optional[str] = Form(None),
     poll_is_closed: Optional[bool] = Form(False),
 ):
-    broadcast = None
-    media_attachment = None
-    temp_file_path = None
-    temp_thumb_path = None
+    temp_file_path: Optional[str] = None
+    temp_thumb_path: Optional[str] = None
+
+    def mark_tracking_failed() -> None:
+        if tracking_id and tracking_id in upload_progress_tracker:
+            upload_progress_tracker[tracking_id]["status"] = "failed"
+            upload_progress_tracker[tracking_id]["updated_at"] = time.time()
+
+    def remove_temp_media() -> None:
+        for path in (temp_thumb_path, temp_file_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     if tracking_id:
         if tracking_id in cancelled_tracking_ids:
@@ -1322,179 +1333,114 @@ async def create_broadcast(
             status="in_progress",
         )
 
-    profile = await profile_repo.get_by_id(profile_id)
-    if not profile:
-        if tracking_id:
-            upload_progress_tracker[tracking_id]["status"] = "failed"
-        raise HTTPException(status_code=404, detail="Profile not found")
-
     try:
         channels_list = json.loads(target_channel_ids)
         if not isinstance(channels_list, list) or len(channels_list) == 0:
             raise ValueError("target_channel_ids must be a non-empty list")
     except Exception:
-        if tracking_id:
-            upload_progress_tracker[tracking_id]["status"] = "failed"
+        mark_tracking_failed()
         raise HTTPException(status_code=422, detail="Invalid target_channel_ids format")
 
-    # Botão inline seguro
-    button = None
-    if button_text and button_url:
-        try:
-            button = InlineButton(text=button_text, url=button_url)
-        except ValueError as e:
-            if tracking_id:
-                upload_progress_tracker[tracking_id]["status"] = "failed"
-            raise HTTPException(status_code=422, detail=str(e))
-
-    # Sanitização e validação de HTML do Telegram (Issue #16)
-    try:
-        text = validate_and_escape_telegram_html(text or "")
-    except ValueError as e:
-        if tracking_id:
-            upload_progress_tracker[tracking_id]["status"] = "failed"
-        raise HTTPException(status_code=422, detail=str(e))
-
-    # Mídia temporária
-    def reject_upload(status_code: int, detail: str):
-        for path in (temp_thumb_path, temp_file_path):
-            if path and os.path.exists(path):
-                os.remove(path)
-        if tracking_id:
-            upload_progress_tracker[tracking_id]["status"] = "failed"
-        raise HTTPException(status_code=status_code, detail=detail)
-
-    # Tipo real pela assinatura do arquivo, antes de gravar qualquer coisa em temp_media/ (#39).
-    has_media = bool(media_file and media_file.filename)
-    # Capa sem vídeo não tem uso: não é gravada (antes ficava esquecida em temp_media/).
-    has_thumb = has_media and bool(thumbnail_file and thumbnail_file.filename)
-    try:
-        if has_media:
-            # basename: prevenção de path traversal
-            file_ext = os.path.splitext(os.path.basename(media_file.filename))[1].lower()
-            media_type = classify_media(file_ext, read_upload_header(media_file))
-        if has_thumb:
-            thumb_ext = os.path.splitext(os.path.basename(thumbnail_file.filename))[1].lower()
-            if classify_media(thumb_ext, read_upload_header(thumbnail_file)) is not MediaType.PHOTO:
-                raise ValueError("Unsupported media format")
-    except ValueError as e:
-        reject_upload(422, str(e))
-
-    max_bytes = media_upload_limit_bytes()
-    try:
-        if has_thumb:
-            temp_thumb_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}_thumb{thumb_ext}")
-            save_upload(thumbnail_file.file, temp_thumb_path, max_bytes)
-        if has_media:
-            temp_file_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}{file_ext}")
-            file_size = save_upload(media_file.file, temp_file_path, max_bytes)
-    except MediaTooLarge:
-        reject_upload(413, f"Media file too large (limit: {max_bytes // (1024 * 1024)} MB)")
-
-    if has_media:
-        if tracking_id:
-            upload_progress_tracker[tracking_id]["total_bytes"] = file_size
-
-        final_duration = video_duration
-        final_width = video_width
-        final_height = video_height
-
-        if media_type == MediaType.VIDEO:
-            extracted = extract_mp4_metadata(temp_file_path)
-            if extracted.get("duration"):
-                final_duration = extracted["duration"]
-            if extracted.get("width") and extracted.get("height"):
-                final_width = extracted["width"]
-                final_height = extracted["height"]
-
-            final_width, final_height = normalize_video_dimensions(final_width, final_height)
-
-        media_attachment = MediaAttachment(
-            file_path=temp_file_path,
-            media_type=media_type,
-            file_size=file_size,
-            duration=final_duration,
-            width=final_width,
-            height=final_height,
-            thumbnail_path=temp_thumb_path,
-        )
-
-    parsed_scheduled_at: Optional[datetime] = None
-    if scheduled_at and scheduled_at.strip():
-        try:
-            parsed_scheduled_at = datetime.fromisoformat(scheduled_at.replace("Z", "+00:00"))
-            if parsed_scheduled_at.tzinfo is None:
-                parsed_scheduled_at = parsed_scheduled_at.replace(tzinfo=timezone.utc)
-            else:
-                parsed_scheduled_at = parsed_scheduled_at.astimezone(timezone.utc)
-        except Exception:
-            if temp_file_path and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            if temp_thumb_path and os.path.exists(temp_thumb_path):
-                os.remove(temp_thumb_path)
-            if tracking_id and tracking_id in upload_progress_tracker:
-                upload_progress_tracker[tracking_id]["status"] = "failed"
-                upload_progress_tracker[tracking_id]["updated_at"] = time.time()
-            raise HTTPException(status_code=422, detail="Invalid scheduled_at ISO-8601 format")
-
-        try:
-            ensure_schedulable(parsed_scheduled_at, now=datetime.now(timezone.utc))
-        except ValueError as schedule_error:
-            if temp_file_path and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-            if temp_thumb_path and os.path.exists(temp_thumb_path):
-                os.remove(temp_thumb_path)
-            if tracking_id and tracking_id in upload_progress_tracker:
-                upload_progress_tracker[tracking_id]["status"] = "failed"
-                upload_progress_tracker[tracking_id]["updated_at"] = time.time()
-            raise HTTPException(status_code=422, detail=str(schedule_error))
-
-    poll = None
+    poll_spec = None
     if poll_question and poll_question.strip():
-        if has_media:
-            reject_upload(422, "A broadcast cannot have both media and a poll")
         try:
             if not poll_options:
                 raise ValueError("poll must have at least 2 options")
-            opts = json.loads(poll_options) if isinstance(poll_options, str) else poll_options
+            opts = json.loads(poll_options)
             if not isinstance(opts, list):
                 raise ValueError("poll options must be a list")
-            p_type = PollType.QUIZ if str(poll_type).lower() == "quiz" else PollType.REGULAR
-            poll = BroadcastPoll(
-                question=poll_question.strip(),
-                options=[str(o).strip() for o in opts],
-                is_anonymous=bool(poll_is_anonymous),
+            # O FastAPI trata bool de formulário como checkbox: campo ausente chega como False. Ausente é anônima (#99).
+            sent_fields = await request.form()
+            is_anonymous = bool(poll_is_anonymous) if "poll_is_anonymous" in sent_fields else True
+            poll_spec = PollSpec(
+                question=poll_question,
+                options=opts,
+                is_anonymous=is_anonymous,
                 allows_multiple_answers=bool(poll_allows_multiple_answers),
-                poll_type=p_type,
+                poll_type=str(poll_type or "regular"),
                 correct_option_id=poll_correct_option_id,
-                explanation=poll_explanation.strip() if poll_explanation and poll_explanation.strip() else None,
+                explanation=poll_explanation,
                 is_closed=bool(poll_is_closed),
             )
         except ValueError as e:
-            if tracking_id:
-                upload_progress_tracker[tracking_id]["status"] = "failed"
+            mark_tracking_failed()
             raise HTTPException(status_code=422, detail=str(e))
-        except Exception:
-            if tracking_id:
-                upload_progress_tracker[tracking_id]["status"] = "failed"
-            raise HTTPException(status_code=422, detail="Invalid poll options format")
 
-    broadcast = BroadcastMessage(
-        id=str(uuid.uuid4()),
+    has_media = bool(media_file and media_file.filename)
+    # Capa sem vídeo não tem uso: não é gravada (antes ficava esquecida em temp_media/).
+    has_thumb = has_media and bool(thumbnail_file and thumbnail_file.filename)
+
+    async def load_media() -> Optional[MediaAttachment]:
+        nonlocal temp_file_path, temp_thumb_path
+        if not has_media:
+            return None
+        # Tipo real pela assinatura do arquivo, antes de gravar qualquer coisa em temp_media/ (#39).
+        try:
+            # basename: prevenção de path traversal
+            file_ext = os.path.splitext(os.path.basename(media_file.filename))[1].lower()
+            media_type = classify_media(file_ext, read_upload_header(media_file))
+            if has_thumb:
+                thumb_ext = os.path.splitext(os.path.basename(thumbnail_file.filename))[1].lower()
+                if classify_media(thumb_ext, read_upload_header(thumbnail_file)) is not MediaType.PHOTO:
+                    raise ValueError("Unsupported media format")
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+        max_bytes = media_upload_limit_bytes()
+        try:
+            if has_thumb:
+                temp_thumb_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}_thumb{thumb_ext}")
+                save_upload(thumbnail_file.file, temp_thumb_path, max_bytes)
+            temp_file_path = os.path.join(TEMP_MEDIA_DIR, f"{uuid.uuid4()}{file_ext}")
+            file_size = save_upload(media_file.file, temp_file_path, max_bytes)
+        except MediaTooLarge:
+            raise HTTPException(status_code=413, detail=f"Media file too large (limit: {max_bytes // (1024 * 1024)} MB)")
+
+        if tracking_id:
+            upload_progress_tracker[tracking_id]["total_bytes"] = file_size
+        duration, width, height = video_duration, video_width, video_height
+        if media_type == MediaType.VIDEO:
+            extracted = extract_mp4_metadata(temp_file_path)
+            if extracted.get("duration"):
+                duration = extracted["duration"]
+            if extracted.get("width") and extracted.get("height"):
+                width, height = extracted["width"], extracted["height"]
+            width, height = normalize_video_dimensions(width, height)
+        return MediaAttachment(
+            file_path=temp_file_path,
+            media_type=media_type,
+            file_size=file_size,
+            duration=duration,
+            width=width,
+            height=height,
+            thumbnail_path=temp_thumb_path,
+        )
+
+    command = CreateBroadcastCommand(
         profile_id=profile_id,
         target_channel_ids=channels_list,
         text=text or "",
-        media=media_attachment,
-        button=button,
-        poll=poll,
-        scheduled_at=parsed_scheduled_at,
-        status=BroadcastStatus.SCHEDULED if parsed_scheduled_at else BroadcastStatus.PENDING,
+        button_text=button_text,
+        button_url=button_url,
+        scheduled_at=scheduled_at,
+        has_media=has_media,
+        poll=poll_spec,
     )
-    await broadcast_repo.save(broadcast)
+    try:
+        broadcast = await CreateBroadcastUseCase(profile_repo, channel_repo, broadcast_repo, scheduler_service).execute(
+            command, load_media
+        )
+    except Exception as exc:
+        remove_temp_media()
+        mark_tracking_failed()
+        if isinstance(exc, ProfileNotFoundError):
+            raise HTTPException(status_code=404, detail="Profile not found")
+        if isinstance(exc, ValueError):
+            raise HTTPException(status_code=422, detail=str(exc))
+        raise
 
     # Cenário de Agendamento Futuro
-    if parsed_scheduled_at:
-        scheduler_service.schedule_broadcast(broadcast.id, parsed_scheduled_at)
+    if broadcast.scheduled_at:
         if tracking_id:
             upload_progress_tracker[tracking_id]["status"] = "completed"
             upload_progress_tracker[tracking_id]["percent"] = 100
@@ -1502,89 +1448,44 @@ async def create_broadcast(
         return {
             "broadcast_id": broadcast.id,
             "status": "SCHEDULED",
-            "scheduled_at": parsed_scheduled_at.isoformat(),
+            "scheduled_at": broadcast.scheduled_at.isoformat(),
             "channels_count": len(channels_list),
             "dispatched_count": 0,
         }
 
     # Cenário de Disparo Imediato
-    dispatched_count = 0
-    errors = []
-    delivery_results: List[ChannelDeliveryResult] = []
+    profile = await profile_repo.get_by_id(profile_id)
+    bot_token = profile.credentials.token
+
+    async def send(chat_id: str, progress_callback, file_id: Optional[str]):
+        res, legacy_err = await _dispatch_and_record(
+            gateway=telegram_gateway,
+            bot_token=bot_token,
+            chat_id=chat_id,
+            message=broadcast,
+            progress_callback=progress_callback,
+            file_id=file_id,
+        )
+        uploaded = getattr(telegram_gateway, "last_uploaded_file_id", None) if res.delivered else None
+        return res, legacy_err, uploaded
+
     # Registrado só aqui: o finally abaixo é o único ponto que remove a entrada
     if tracking_id:
         curr_task = asyncio.current_task()
         if curr_task:
             active_broadcast_tasks[tracking_id] = curr_task
     try:
-        broadcast.status = BroadcastStatus.DISPATCHING
-        await broadcast_repo.save(broadcast)
-
-        total_channels = len(channels_list)
-        cached_file_id: Optional[str] = None
-        for idx, chat_id in enumerate(channels_list):
-            if tracking_id and (
-                tracking_id in cancelled_tracking_ids
-                or upload_progress_tracker.get(tracking_id, {}).get("status") == "aborted"
-            ):
-                raise asyncio.CancelledError()
-            if await request.is_disconnected():
-                if tracking_id:
-                    _mark_upload_aborted(tracking_id)
-                raise asyncio.CancelledError()
-
-            channel_cb = None
-            if tracking_id and media_attachment and not cached_file_id:
-                def channel_progress_cb(sent_bytes: int, total_bytes: int):
-                    if tracking_id in cancelled_tracking_ids or upload_progress_tracker.get(tracking_id, {}).get("status") == "aborted":
-                        raise asyncio.CancelledError()
-                    if tracking_id in upload_progress_tracker:
-                        ratio = (sent_bytes / total_bytes) if total_bytes > 0 else 0
-                        pct = int(ratio * 100)
-                        upload_progress_tracker[tracking_id]["percent"] = min(100, max(0, pct))
-                        upload_progress_tracker[tracking_id]["sent_bytes"] = sent_bytes
-                        upload_progress_tracker[tracking_id]["total_bytes"] = total_bytes
-                        if sent_bytes >= total_bytes:
-                            upload_progress_tracker[tracking_id]["stage"] = "processing_by_telegram"
-                            upload_progress_tracker[tracking_id]["percent"] = 100
-                        else:
-                            upload_progress_tracker[tracking_id]["stage"] = "uploading_to_telegram"
-                channel_cb = channel_progress_cb
-
-            res, legacy_err = await _dispatch_and_record(
-                gateway=telegram_gateway,
-                bot_token=profile.credentials.token,
-                chat_id=chat_id,
-                message=broadcast,
-                progress_callback=channel_cb,
-                file_id=cached_file_id,
-            )
-            delivery_results.append(res)
-            if res.delivered:
-                dispatched_count += 1
-                if not cached_file_id:
-                    cached_file_id = getattr(telegram_gateway, "last_uploaded_file_id", None)
-            elif legacy_err:
-                errors.append(legacy_err)
-
-            if tracking_id and not media_attachment:
-                pct = int(((idx + 1) / total_channels) * 100)
-                tot = upload_progress_tracker[tracking_id]["total_bytes"]
-                upload_progress_tracker[tracking_id]["percent"] = pct
-                upload_progress_tracker[tracking_id]["sent_bytes"] = int(tot * (pct / 100))
-
-        broadcast.finish_dispatch_with_results(delivery_results)
-        await broadcast_repo.save(broadcast)
+        outcome = await DispatchBroadcastUseCase(broadcast_repo).execute(
+            broadcast, send, _UploadTrackingObserver(tracking_id, request)
+        )
         if tracking_id:
             upload_progress_tracker[tracking_id]["status"] = "completed"
             upload_progress_tracker[tracking_id]["percent"] = 100
             upload_progress_tracker[tracking_id]["sent_bytes"] = upload_progress_tracker[tracking_id]["total_bytes"]
-    except asyncio.CancelledError:
+    except BroadcastAbortedError:
         logger.info("Envio do broadcast cancelado pelo usuário (tracking_id: %s)", tracking_id)
         if tracking_id:
             _mark_upload_aborted(tracking_id)
-        broadcast.abort_dispatch(delivery_results)
-        await broadcast_repo.save(broadcast)
         raise HTTPException(status_code=409, detail=BROADCAST_CANCELLED_DETAIL)
     except Exception:
         if tracking_id:
@@ -1594,25 +1495,69 @@ async def create_broadcast(
         if tracking_id:
             active_broadcast_tasks.pop(tracking_id, None)
         # Invariante de ciclo de vida: descarte imediato do arquivo temporário após disparo
-        if temp_file_path and os.path.exists(temp_file_path):
-            try:
-                os.remove(temp_file_path)
-            except Exception:
-                pass
-        if temp_thumb_path and os.path.exists(temp_thumb_path):
-            try:
-                os.remove(temp_thumb_path)
-            except Exception:
-                pass
+        remove_temp_media()
 
     return {
         "broadcast_id": broadcast.id,
         "status": broadcast.status.value,
-        "dispatched_count": dispatched_count,
+        "dispatched_count": outcome.dispatched_count,
         "total_targets": len(channels_list),
-        "errors": errors,
+        "errors": outcome.errors,
         "delivery_results": _serialize_delivery_results(broadcast.delivery_results),
     }
+
+
+class _UploadTrackingObserver:
+    """Observer do disparo imediato: alimenta a barra de progresso e para quando o usuário cancela (#86)."""
+
+    def __init__(self, tracking_id: Optional[str], request: Request):
+        self.tracking_id = tracking_id
+        self.request = request
+
+    def _aborted(self) -> bool:
+        tid = self.tracking_id
+        return bool(tid) and (
+            tid in cancelled_tracking_ids or upload_progress_tracker.get(tid, {}).get("status") == "aborted"
+        )
+
+    async def should_stop(self) -> bool:
+        if self._aborted():
+            return True
+        if await self.request.is_disconnected():
+            if self.tracking_id:
+                _mark_upload_aborted(self.tracking_id)
+            return True
+        return False
+
+    def upload_progress_callback(self):
+        tid = self.tracking_id
+        if not tid:
+            return None
+
+        def on_progress(sent_bytes: int, total_bytes: int) -> None:
+            if self._aborted():
+                raise asyncio.CancelledError()
+            if tid in upload_progress_tracker:
+                entry = upload_progress_tracker[tid]
+                ratio = (sent_bytes / total_bytes) if total_bytes > 0 else 0
+                entry["percent"] = min(100, max(0, int(ratio * 100)))
+                entry["sent_bytes"] = sent_bytes
+                entry["total_bytes"] = total_bytes
+                if sent_bytes >= total_bytes:
+                    entry["stage"] = "processing_by_telegram"
+                    entry["percent"] = 100
+                else:
+                    entry["stage"] = "uploading_to_telegram"
+
+        return on_progress
+
+    def channel_done(self, done: int, total: int) -> None:
+        tid = self.tracking_id
+        if tid and tid in upload_progress_tracker:
+            pct = int((done / total) * 100)
+            tot = upload_progress_tracker[tid]["total_bytes"]
+            upload_progress_tracker[tid]["percent"] = pct
+            upload_progress_tracker[tid]["sent_bytes"] = int(tot * (pct / 100))
 
 def _format_datetime_utc(dt: Optional[datetime]) -> Optional[str]:
     if not dt:
@@ -1765,89 +1710,20 @@ async def dispatch_broadcast_now(broadcast_id: str):
     responses={**_ERR_404, **_ERR_422},
 )
 async def patch_broadcast(broadcast_id: str, req: BroadcastPatchRequest):
-    broadcast = await broadcast_repo.get_by_id(broadcast_id)
-    if not broadcast:
-        raise HTTPException(status_code=404, detail="Broadcast not found")
-
-    if broadcast.status not in [
-        BroadcastStatus.PENDING,
-        BroadcastStatus.SCHEDULED,
-        BroadcastStatus.MISFIRED,
-    ]:
-        raise HTTPException(status_code=422, detail="Cannot edit an in-flight, completed, or cancelled broadcast")
-
-    # Validação e montagem de Button
-    updated_button = broadcast.button
-    if req.button_text is not None or req.button_url is not None:
-        if req.button_text == "" and req.button_url == "":
-            updated_button = None
-        elif req.button_text is None or req.button_url is None or not req.button_text.strip() or not req.button_url.strip():
-            raise HTTPException(
-                status_code=422,
-                detail="Both button_text and button_url are required when defining an inline button",
-            )
-        else:
-            try:
-                updated_button = InlineButton(text=req.button_text, url=req.button_url)
-            except ValueError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-
-    # Validação de Data/Hora (scheduled_at)
-    new_run_date = None
-    if req.scheduled_at is not None:
-        try:
-            parsed_dt = datetime.fromisoformat(req.scheduled_at.replace("Z", "+00:00"))
-            if parsed_dt.tzinfo is None:
-                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
-        except Exception:
-            raise HTTPException(status_code=422, detail="Invalid scheduled_at ISO-8601 format")
-
-        try:
-            ensure_schedulable(parsed_dt, now=datetime.now(timezone.utc))
-        except ValueError as schedule_error:
-            raise HTTPException(status_code=422, detail=str(schedule_error))
-        new_run_date = parsed_dt
-
-    now_utc = datetime.now(timezone.utc)
-    was_edit_locked = broadcast.edit_locked_until is not None
-    # Salvar no modo edição sem novo horário, depois que o horário passou, exige um horário futuro (#15).
-    if (
-        new_run_date is None
-        and was_edit_locked
-        and broadcast.scheduled_at is not None
-        and broadcast.status != BroadcastStatus.MISFIRED
-    ):
-        try:
-            ensure_schedulable(broadcast.scheduled_at, now=now_utc)
-        except ValueError as schedule_error:
-            raise HTTPException(status_code=422, detail=str(schedule_error))
-
-    # Atualiza conteúdo se texto ou botão foram alterados
-    updated_text = req.text if req.text is not None else broadcast.text
+    command = UpdateBroadcastCommand(
+        broadcast_id=broadcast_id,
+        text=req.text,
+        button_text=req.button_text,
+        button_url=req.button_url,
+        scheduled_at=req.scheduled_at,
+        target_channel_ids=req.target_channel_ids,
+    )
     try:
-        broadcast.update_content(text=updated_text, button=updated_button)
-        if req.target_channel_ids is not None:
-            broadcast.update_target_channels(req.target_channel_ids)
+        broadcast = await UpdateBroadcastUseCase(channel_repo, broadcast_repo, scheduler_service).execute(command)
+    except BroadcastNotFoundError:
+        raise HTTPException(status_code=404, detail="Broadcast not found")
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-
-    # Reagendamento
-    if new_run_date is not None:
-        try:
-            broadcast.reschedule(new_run_date)
-            scheduler_service.reschedule_broadcast(broadcast.id, new_run_date)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
-    elif was_edit_locked:
-        broadcast.release_edit_lock(now_utc)
-        if broadcast.scheduled_at is not None and broadcast.status in (
-            BroadcastStatus.PENDING,
-            BroadcastStatus.SCHEDULED,
-        ):
-            scheduler_service.reschedule_broadcast(broadcast.id, broadcast.scheduled_at)
-
-    await broadcast_repo.save(broadcast)
-
     return _serialize_scheduled_broadcast(broadcast)
 
 

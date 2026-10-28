@@ -2607,3 +2607,56 @@ async def test_create_broadcast_poll_validations(client, tmp_path):
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_poll_without_is_anonymous_field_is_anonymous(client):
+    # O FastAPI trata bool de formulário como checkbox: ausente chegava como False e a enquete saía pública (#99).
+    profile = Profile(
+        id="prof-poll-default",
+        name="Acme",
+        credentials=BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="acme_bot"),
+    )
+    await profile_repo.save(profile)
+
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "poll_question": "Qual?",
+            "poll_options": json.dumps(["A", "B"]),
+            "scheduled_at": future_at(5, "14:00:00"),
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    [item] = (await client.get(f"/api/v1/profiles/{profile.id}/scheduled-broadcasts")).json()
+    assert item["poll"]["is_anonymous"] is True
+
+
+@pytest.mark.asyncio
+async def test_public_poll_to_a_channel_is_refused_with_422(client):
+    profile = Profile(
+        id="prof-poll-public",
+        name="Acme",
+        credentials=BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="acme_bot"),
+    )
+    await profile_repo.save(profile)
+    await channel_repo.save(Channel(id="c-pub", profile_id=profile.id, title="Canal", chat_id="-1001234567890"))
+
+    resp = await client.post(
+        "/api/v1/broadcasts",
+        data={
+            "profile_id": profile.id,
+            "target_channel_ids": json.dumps(["-1001234567890"]),
+            "poll_question": "Qual?",
+            "poll_options": json.dumps(["A", "B"]),
+            "poll_is_anonymous": "false",
+            "scheduled_at": future_at(5, "14:00:00"),
+        },
+    )
+
+    assert resp.status_code == 422
+    assert resp.json() == {"detail": "Non-anonymous polls can only be sent when every destination is a group"}
+    assert await broadcast_repo.list_by_profile(profile.id) == []

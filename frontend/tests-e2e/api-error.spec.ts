@@ -22,6 +22,12 @@ test.describe("extractApiError", () => {
         "fallback"
       )
     ).toBe("Formato de ID do canal inválido. O ID deve começar com -100 seguido de números.");
+    // #99: enquete pública com canal entre os destinos.
+    expect(
+      extractApiError({ detail: "Non-anonymous polls can only be sent when every destination is a group" }, "fallback")
+    ).toBe(
+      "Enquete com votos visíveis só pode ir para grupos: algum destino é canal ou ainda não tem tipo. Marque o voto anônimo ou deixe só grupos."
+    );
   });
 
   test("traduz erros comuns da API do Telegram encapsulados em 'Telegram API error' (Issue #57)", () => {

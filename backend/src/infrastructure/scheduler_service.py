@@ -12,6 +12,7 @@ from src.domain.broadcast.broadcast_message import (
     evaluate_due_schedule,
 )
 from src.domain.ports.broadcast_repository import IBroadcastRepository
+from src.domain.ports.broadcast_scheduler import IBroadcastScheduler
 from src.domain.ports.profile_repository import IProfileRepository
 from src.domain.ports.telegram_gateway import ITelegramGateway
 from src.infrastructure.telegram_gateway_http import dispatch_broadcast_to_channel, redact_bot_token
@@ -30,7 +31,7 @@ def _read_misfire_grace_minutes() -> int:
         return DEFAULT_MISFIRE_GRACE_MINUTES
 
 
-class AutomationSchedulerService:
+class AutomationSchedulerService(IBroadcastScheduler):
     def __init__(
         self,
         scheduler: Optional[AsyncIOScheduler] = None,
