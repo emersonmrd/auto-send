@@ -1,6 +1,7 @@
 import json
 import pytest
 import pytest_asyncio
+from src.domain.channels.chat_discovery import DiscoveredChat
 from httpx import ASGITransport, AsyncClient
 from src.presentation.main import (
     app,
@@ -32,7 +33,12 @@ async def setup_db(monkeypatch):
     async def _default_can_post(bot_token: str, chat_id: str) -> None:
         return None
 
+    async def _default_resolve(bot_token: str, identifier):
+        # getChat do vínculo (#99): nenhum teste sai para a rede.
+        return DiscoveredChat(chat_id=identifier.as_chat_id(), title="Canal", chat_type="channel")
+
     monkeypatch.setattr(telegram_gateway, "ensure_bot_can_post", _default_can_post)
+    monkeypatch.setattr(telegram_gateway, "resolve_chat", _default_resolve)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield

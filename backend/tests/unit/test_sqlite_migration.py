@@ -27,6 +27,7 @@ from src.domain.broadcast.broadcast_message import (
     MediaAttachment,
     MediaType,
 )
+from src.domain.channels.channel import ChatType
 from src.domain.profiles.profile import Profile
 from src.domain.profiles.bot_credentials import BotCredentials
 
@@ -699,7 +700,7 @@ async def test_migration_007_creates_poll_data_column_and_persists_polls(tmp_pat
     from src.domain.broadcast.broadcast_message import BroadcastPoll, PollType
     from src.infrastructure.sqlite_repositories import SqlAlchemyBroadcastRepository
 
-    assert CURRENT_SCHEMA_VERSION == 7
+    assert CURRENT_SCHEMA_VERSION >= 7
 
     db_path = tmp_path / "autosend_v7.db"
     test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
@@ -709,7 +710,7 @@ async def test_migration_007_creates_poll_data_column_and_persists_polls(tmp_pat
     try:
         await main_module.init_db()
 
-        assert get_user_version(db_path) == 7
+        assert get_user_version(db_path) == CURRENT_SCHEMA_VERSION
 
         columns = get_table_columns(str(db_path), "broadcasts")
         assert "poll_data" in columns
@@ -773,3 +774,33 @@ async def test_migration_007_creates_poll_data_column_and_persists_polls(tmp_pat
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_migration_008_adds_chat_type_and_forum_to_existing_channels(tmp_path, monkeypatch):
+    """Dado um canal vinculado antes da #99, quando o app atualiza, o canal continua lá sem tipo
+    e passa a guardar o tipo e o fórum informados pelo Telegram."""
+    assert CURRENT_SCHEMA_VERSION >= 8
+
+    db_path = tmp_path / "autosend.db"
+    create_v040_sqlite_db(str(db_path))
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db()
+
+        assert {"chat_type", "is_forum"} <= get_table_columns(str(db_path), "channels")
+
+        repo = SqlAlchemyChannelRepository(session_factory)
+        [legacy] = await repo.list_by_profile("prof-acme")
+        assert (legacy.chat_type, legacy.is_forum) == (None, False)
+
+        legacy.classify(ChatType.SUPERGROUP, is_forum=True)
+        await repo.save(legacy)
+        reloaded = await repo.get_by_id(legacy.id)
+        assert reloaded is not None
+        assert (reloaded.chat_type, reloaded.is_forum) == (ChatType.SUPERGROUP, True)
+    finally:
+        await test_engine.dispose()

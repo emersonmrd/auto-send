@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional
 import re
 
-from src.domain.channels.channel import CHANNEL_CHAT_ID_PATTERN
+from src.domain.channels.channel import CHANNEL_CHAT_ID_PATTERN, ChatType
 
 # Username público do Telegram: 5 a 32 caracteres, começa com letra, só letras, dígitos e "_".
 _USERNAME_PATTERN = r"[A-Za-z][A-Za-z0-9_]{4,31}"
@@ -53,10 +53,16 @@ class DiscoveredChat:
     title: str
     chat_type: str
     username: Optional[str] = None
+    # Supergrupo com tópicos ativados (#99).
+    is_forum: bool = False
 
     def __post_init__(self):
         if not re.fullmatch(r"-\d+", self.chat_id) or self.chat_type not in _DISCOVERABLE_CHAT_TYPES:
             raise ValueError("Invalid discovered chat (expected a channel or group with a negative numeric id)")
+
+    @property
+    def kind(self) -> ChatType:
+        return ChatType(self.chat_type)
 
     @property
     def is_registrable(self) -> bool:

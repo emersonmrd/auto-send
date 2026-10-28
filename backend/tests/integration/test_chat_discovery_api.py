@@ -1,7 +1,7 @@
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from src.domain.channels.channel import Channel
+from src.domain.channels.channel import Channel, ChatType
 from src.domain.channels.chat_discovery import DiscoveredChat
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.profiles.profile import Profile
@@ -74,8 +74,8 @@ async def test_discover_lists_chats_marking_registered_and_registrable(client):
     assert resp.status_code == 200
     assert resp.json() == {
         "chats": [
-            {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True, "already_registered": True},
-            {"chat_id": "-444444444", "title": "Grupo comum", "type": "group", "username": None, "registrable": False, "already_registered": False},
+            {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True, "is_forum": False, "already_registered": True},
+            {"chat_id": "-444444444", "title": "Grupo comum", "type": "group", "username": None, "registrable": False, "is_forum": False, "already_registered": False},
         ]
     }
     assert TOKEN not in resp.text
@@ -109,7 +109,7 @@ async def test_resolve_returns_the_chat(client):
     resp = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": "t.me/canalnovidades"})
 
     assert resp.status_code == 200
-    assert resp.json() == {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True}
+    assert resp.json() == {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True, "is_forum": False}
     assert gateway.resolved == ["@canalnovidades"]
 
 
@@ -170,7 +170,8 @@ async def test_create_channel_succeeds_when_bot_is_admin_with_post_permission(cl
         json={"title": "Canal de Novidades", "chat_id": "-1001234567890"},
     )
     assert resp.status_code == 201
-    assert gateway.resolved == ["-1001234567890"]
+    # ensure_bot_can_post e depois o getChat que informa o tipo (#99).
+    assert gateway.resolved == ["-1001234567890", "-1001234567890"]
 
 
 async def test_create_channel_returns_400_when_bot_is_not_admin_and_does_not_save(client):
@@ -205,9 +206,11 @@ async def test_create_channel_returns_503_when_telegram_is_unreachable_and_does_
 
 
 async def test_update_channel_checks_telegram_only_when_chat_id_changes(client):
-    await channel_repo.save(Channel(id="c-edit", profile_id="p-1", title="Original", chat_id="-1001111111111"))
+    await channel_repo.save(
+        Channel(id="c-edit", profile_id="p-1", title="Original", chat_id="-1001111111111", chat_type=ChatType.CHANNEL)
+    )
 
-    # 1. Só o nome muda: não consulta o Telegram
+    # 1. Só o nome muda num canal que já tem tipo: não consulta o Telegram
     gateway = use_gateway(StubGateway(error=TelegramUnavailableError("Could not reach Telegram, try again")))
     resp_rename = await client.put(
         "/api/v1/channels/c-edit",
@@ -267,3 +270,75 @@ async def test_update_channel_returns_409_when_target_chat_id_already_used_in_sa
     assert resp.status_code == 409
     assert resp.json() == {"detail": "Channel already registered for this profile"}
     assert (await channel_repo.get_by_id("c-dup-2")).chat_id == "-1002222222222"
+
+
+# Issue #99: tipo do chat e fórum
+FORUM = DiscoveredChat(chat_id="-1009876543210", title="Grupo VIP", chat_type="supergroup", is_forum=True)
+
+
+class ForumGateway(StubGateway):
+    async def discover_chats(self, bot_token):
+        return [FORUM]
+
+    async def resolve_chat(self, bot_token, identifier):
+        return FORUM
+
+
+async def test_discover_and_resolve_report_forums(client):
+    use_gateway(ForumGateway())
+
+    discovered = await client.post("/api/v1/profiles/p-1/discover-chats")
+    resolved = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": FORUM.chat_id})
+
+    assert discovered.json()["chats"][0]["is_forum"] is True
+    assert resolved.json()["is_forum"] is True
+
+
+async def test_create_channel_saves_and_lists_the_kind_reported_by_telegram(client):
+    use_gateway(ForumGateway())
+
+    created = await client.post("/api/v1/profiles/p-1/channels", json={"title": "Grupo VIP", "chat_id": FORUM.chat_id})
+    listed = await client.get("/api/v1/profiles/p-1/channels")
+
+    assert created.status_code == 201
+    assert (created.json()["chat_type"], created.json()["is_forum"]) == ("supergroup", True)
+    [item] = listed.json()
+    assert (item["chat_type"], item["is_forum"]) == ("supergroup", True)
+
+
+async def test_channel_linked_before_chat_types_is_listed_without_kind_and_gets_it_on_edit(client):
+    await channel_repo.save(Channel(id="c-old", profile_id="p-1", title="Grupo VIP", chat_id=FORUM.chat_id))
+    use_gateway(ForumGateway())
+
+    before = (await client.get("/api/v1/profiles/p-1/channels")).json()[0]
+    edited = await client.put("/api/v1/channels/c-old", json={"name": "Grupo VIP", "telegram_channel_id": FORUM.chat_id})
+    after = (await client.get("/api/v1/profiles/p-1/channels")).json()[0]
+
+    assert (before["chat_type"], before["is_forum"]) == (None, False)
+    assert edited.status_code == 200
+    assert (edited.json()["chat_type"], edited.json()["is_forum"]) == ("supergroup", True)
+    assert (after["chat_type"], after["is_forum"]) == ("supergroup", True)
+
+
+async def test_update_unknown_channel_is_404(client):
+    use_gateway(StubGateway())
+    resp = await client.put("/api/v1/channels/c-x", json={"name": "X", "telegram_channel_id": FORUM.chat_id})
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Channel not found"}
+
+
+async def test_rename_of_a_legacy_channel_works_while_the_circuit_is_open(client):
+    # Depois de um 429 num disparo, o circuito fica aberto: renomear continua sendo local (#99).
+    from src.infrastructure.resilience import CircuitBreaker
+    from src.infrastructure.telegram_gateway_http import TelegramGatewayHttp
+
+    breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0)
+    await breaker.record_failure(retry_after=30)
+    use_gateway(TelegramGatewayHttp(base_url="http://127.0.0.1:9", circuit_breaker=breaker))
+    await channel_repo.save(Channel(id="c-old", profile_id="p-1", title="Antigo", chat_id="-1001111111111"))
+
+    resp = await client.put("/api/v1/channels/c-old", json={"name": "Renomeado", "telegram_channel_id": "-1001111111111"})
+
+    assert resp.status_code == 200
+    assert (resp.json()["name"], resp.json()["chat_type"]) == ("Renomeado", None)
+    assert (await channel_repo.get_by_id("c-old")).title == "Renomeado"

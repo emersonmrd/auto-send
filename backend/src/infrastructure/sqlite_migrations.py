@@ -129,6 +129,15 @@ def _migration_007_broadcast_poll_data(cursor: sqlite3.Cursor) -> None:
     _add_column_if_missing(cursor, "broadcasts", "poll_data", "TEXT")
 
 
+def _migration_008_channel_chat_type_and_forum(cursor: sqlite3.Cursor) -> None:
+    # Sem default para chat_type: canal antigo fica sem tipo até a próxima edição consultar o Telegram.
+    for col_name, col_def in (
+        ("chat_type", "VARCHAR"),
+        ("is_forum", "BOOLEAN DEFAULT 0"),
+    ):
+        _add_column_if_missing(cursor, "channels", col_name, col_def)
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -164,6 +173,11 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         version=7,
         description="Campo poll_data em broadcasts para suporte a enquetes (#97)",
         apply=_migration_007_broadcast_poll_data,
+    ),
+    MigrationStep(
+        version=8,
+        description="Tipo do chat e fórum em channels (#99)",
+        apply=_migration_008_channel_chat_type_and_forum,
     ),
 )
 

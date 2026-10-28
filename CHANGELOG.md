@@ -10,6 +10,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Rota `POST /api/v1/broadcasts/abort-upload/{tracking_id}`: cancelar um envio na tela interrompe o disparo no backend, apaga a mídia temporária e marca o broadcast como `CANCELLED`, guardando os canais que já receberam (#86).
 - Teste automatizado garantindo que os modelos de mensagem sobrevivem a atualizações futuras do banco de dados, e menção explícita aos modelos de mensagem no `COMO_USAR.txt` do pacote portátil (#92).
 - Validação automatizada no CI (`Decide what to run`) e script `validate_pr_checklist.py` garantindo que toda Pull Request contenha a seção `## Checklist`, skills utilizadas e confirmação de merge humano (#95).
+- Tipo do chat nos canais: o vínculo lê do Telegram se o destino é canal, supergrupo ou fórum e mostra o selo (📢 Canal, 👥 Grupo, 💬 Fórum) nos canais destino e na busca. Grupo comum ganha uma explicação passo a passo de como convertê-lo em supergrupo, e a busca não lista mais o grupo comum que já virou supergrupo. Canais vinculados antes desta versão recebem o tipo na próxima edição. Contrato: `chat_type` e `is_forum` nas respostas de canal e `is_forum` nos chats descobertos (campos novos, compatíveis); migração 8 do banco (#99).
 
 ### Fixed
 - Cancelar o envio várias vezes não publica mais a mensagem repetida no canal: antes, o backend continuava o disparo depois que o navegador fechava a conexão (#86).

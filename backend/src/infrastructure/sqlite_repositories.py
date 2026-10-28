@@ -16,7 +16,7 @@ from src.domain.broadcast.broadcast_message import (
     PollType,
 )
 from src.domain.broadcast.message_template import MessageTemplate
-from src.domain.channels.channel import Channel
+from src.domain.channels.channel import Channel, ChatType
 from src.domain.profiles.bot_credentials import BotCredentials
 from src.domain.profiles.profile import Profile
 from src.domain.ports.broadcast_repository import IBroadcastRepository
@@ -47,6 +47,8 @@ class ChannelModel(Base):
     invite_link = Column(String, default="")
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    chat_type = Column(String, nullable=True)
+    is_forum = Column(Boolean, default=False)
 
 class BroadcastModel(Base):
     __tablename__ = "broadcasts"
@@ -161,6 +163,8 @@ class SqlAlchemyChannelRepository(IChannelRepository):
                     existing.chat_id = channel.chat_id
                     existing.invite_link = channel.invite_link
                     existing.is_active = channel.is_active
+                    existing.chat_type = channel.chat_type.value if channel.chat_type else None
+                    existing.is_forum = channel.is_forum
                 else:
                     db_obj = ChannelModel(
                         id=channel.id,
@@ -170,6 +174,8 @@ class SqlAlchemyChannelRepository(IChannelRepository):
                         invite_link=channel.invite_link,
                         is_active=channel.is_active,
                         created_at=channel.created_at,
+                        chat_type=channel.chat_type.value if channel.chat_type else None,
+                        is_forum=channel.is_forum,
                     )
                     session.add(db_obj)
 
@@ -186,6 +192,8 @@ class SqlAlchemyChannelRepository(IChannelRepository):
             invite_link=obj.invite_link,
             is_active=obj.is_active,
             created_at=created_dt,
+            chat_type=ChatType(obj.chat_type) if obj.chat_type else None,
+            is_forum=bool(obj.is_forum),
         )
 
     async def get_by_id(self, channel_id: str) -> Optional[Channel]:

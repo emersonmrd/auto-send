@@ -98,6 +98,43 @@ async def test_discover_drops_chats_the_bot_has_left(monkeypatch):
     assert [c.chat_id for c in chats] == ["-1002222222222"]
 
 
+async def test_discover_hides_a_basic_group_that_migrated_to_a_supergroup(monkeypatch):
+    # Ordem real do getUpdates depois da conversão: o grupo antigo, o supergrupo novo
+    # (com migrate_from_chat_id) e, por último, o aviso no grupo antigo (migrate_to_chat_id).
+    old_group = {**chat(-444444444, "Grupo", type_="group"), "all_members_are_administrators": False}
+    supergroup = chat(-1005555555555, "Grupo", type_="supergroup")
+    use_transport(
+        monkeypatch,
+        lambda r: updates(
+            {"my_chat_member": {"chat": old_group, "new_chat_member": {"status": "member"}}},
+            {"message": {"chat": old_group, "group_chat_created": True}},
+            {"my_chat_member": {"chat": supergroup, "new_chat_member": {"status": "member"}}},
+            {"message": {"chat": supergroup, "migrate_from_chat_id": -444444444}},
+            {"message": {"chat": old_group, "migrate_to_chat_id": -1005555555555}},
+        ),
+    )
+
+    chats = await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+    assert [(c.chat_id, c.chat_type) for c in chats] == [("-1005555555555", "supergroup")]
+
+
+@pytest.mark.parametrize("marker", ["migrate_from_chat_id", "migrate_to_chat_id"])
+async def test_discover_hides_a_migrated_group_with_either_migration_message(monkeypatch, marker):
+    old_group = chat(-444444444, "Grupo", type_="group")
+    supergroup = chat(-1005555555555, "Grupo", type_="supergroup")
+    migration = (
+        {"message": {"chat": supergroup, "migrate_from_chat_id": -444444444}}
+        if marker == "migrate_from_chat_id"
+        else {"message": {"chat": old_group, "migrate_to_chat_id": -1005555555555}}
+    )
+    use_transport(monkeypatch, lambda r: updates({"message": {"chat": old_group, "text": "oi"}}, migration))
+
+    chats = await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+    assert "-444444444" not in [c.chat_id for c in chats]
+
+
 async def test_resolve_calls_get_chat_with_the_username(monkeypatch):
     requests = use_transport(
         monkeypatch,
@@ -125,6 +162,30 @@ async def test_resolve_calls_get_chat_with_the_numeric_chat_id(monkeypatch):
     assert request.url.path == f"/bot{TOKEN}/getChat"
     assert request.url.params["chat_id"] == "-1001234567890"
     assert result == DiscoveredChat(chat_id="-1001234567890", title="Canal Privado", chat_type="channel")
+
+
+async def test_resolve_reads_is_forum_from_a_supergroup_with_topics(monkeypatch):
+    forum = {**chat(-1009876543210, "Grupo com Tópicos", type_="supergroup"), "is_forum": True}
+    use_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True, "result": forum}))
+
+    result = await TelegramGatewayHttp(base_url="https://api.telegram.org").resolve_chat(TOKEN, ChatIdentifier("-1009876543210"))
+
+    assert result == DiscoveredChat(chat_id="-1009876543210", title="Grupo com Tópicos", chat_type="supergroup", is_forum=True)
+
+
+async def test_discover_reads_is_forum_and_treats_a_missing_flag_as_false(monkeypatch):
+    forum = {**chat(-1009876543210, "Fórum", type_="supergroup"), "is_forum": True}
+    use_transport(
+        monkeypatch,
+        lambda r: updates(
+            {"message": {"chat": forum}},
+            {"channel_post": {"chat": chat(-1001111111111, "Canal A")}},
+        ),
+    )
+
+    result = await TelegramGatewayHttp(base_url="https://api.telegram.org").discover_chats(TOKEN)
+
+    assert {c.chat_id: c.is_forum for c in result} == {"-1009876543210": True, "-1001111111111": False}
 
 
 async def test_discover_with_active_webhook_raises_a_typed_error_without_token(monkeypatch):
@@ -215,10 +276,24 @@ async def test_429_opens_the_circuit_with_retry_after(monkeypatch):
         await gateway.discover_chats(TOKEN)
     assert cb.state == CircuitState.OPEN
 
-    with pytest.raises(CircuitBreakerOpenException) as exc:
+    # Circuito aberto sai pela porta como TelegramUnavailableError, como no ensure_bot_can_post (#99).
+    with pytest.raises(TelegramUnavailableError, match=r"^Could not reach Telegram, try again$"):
         await gateway.discover_chats(TOKEN)
+    with pytest.raises(CircuitBreakerOpenException) as exc:
+        await cb.can_execute()
     assert exc.value.retry_after == pytest.approx(25.0)
     assert len(requests) == 1
+
+
+async def test_resolve_with_open_circuit_raises_telegram_unavailable_without_calling_telegram(monkeypatch):
+    cb = CircuitBreaker(failure_threshold=1, recovery_timeout=60.0, time_func=FakeClock().time)
+    await cb.record_failure(retry_after=30)
+    requests = use_transport(monkeypatch, lambda r: httpx.Response(200, json={"ok": True, "result": chat(-1001234567890, "Canal")}))
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org", circuit_breaker=cb)
+
+    with pytest.raises(TelegramUnavailableError, match=r"^Could not reach Telegram, try again$"):
+        await gateway.resolve_chat(TOKEN, ChatIdentifier("-1001234567890"))
+    assert requests == []
 
 
 @pytest.mark.parametrize("error", [httpx.ConnectTimeout("timed out"), httpx.ConnectError("connection refused")])

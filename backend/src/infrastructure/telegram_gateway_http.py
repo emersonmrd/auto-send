@@ -515,12 +515,18 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         # a descoberta só lê. Updates ficam no Telegram por 24 h, por isso a tela pede uma mensagem no canal.
         result = await self._call_chat_api(bot_token, "getUpdates", {"timeout": "0"})
         chats: Dict[int, DiscoveredChat] = {}
+        # Grupo comum convertido em supergrupo: o id antigo morreu e não pode aparecer como "converta antes" (#99).
+        migrated: set = set()
         for update in result if isinstance(result, list) else []:
             for kind in _CHAT_UPDATE_KINDS:
                 payload = update.get(kind)
                 if not isinstance(payload, dict):
                     continue
                 raw_chat = payload.get("chat") or {}
+                if payload.get("migrate_to_chat_id") is not None:
+                    migrated.add(raw_chat.get("id"))
+                if payload.get("migrate_from_chat_id") is not None:
+                    migrated.add(payload["migrate_from_chat_id"])
                 status = (payload.get("new_chat_member") or {}).get("status")
                 if kind == "my_chat_member" and status in _BOT_LEFT_STATUSES:
                     chats.pop(raw_chat.get("id"), None)
@@ -528,7 +534,7 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                 discovered = self._to_discovered_chat(raw_chat)
                 if discovered is not None:
                     chats[raw_chat["id"]] = discovered
-        return list(chats.values())
+        return [chat for chat_id, chat in chats.items() if chat_id not in migrated]
 
     async def resolve_chat(self, bot_token: str, identifier: ChatIdentifier) -> DiscoveredChat:
         result = await self._call_chat_api(bot_token, "getChat", {"chat_id": identifier.as_chat_id()})
@@ -578,7 +584,11 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         return data.get("result")
 
     async def _call_chat_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
-        await self.circuit_breaker.can_execute()
+        try:
+            await self.circuit_breaker.can_execute()
+        except CircuitBreakerOpenException:
+            # Pela porta só saem erros de ChatDiscoveryError, como no _call_member_api (#99).
+            raise TelegramUnavailableError("Could not reach Telegram, try again") from None
         effective_url = await self.resolve_effective_base_url()
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -617,6 +627,7 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
                 title=raw_chat.get("title") or "",
                 chat_type=raw_chat.get("type", ""),
                 username=raw_chat.get("username"),
+                is_forum=raw_chat.get("is_forum") is True,
             )
         except ValueError:
             # Conversa privada ou dado incompleto: não é um chat que possa virar canal.

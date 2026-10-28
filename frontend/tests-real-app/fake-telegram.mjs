@@ -16,9 +16,13 @@ let nextMessageId = 1;
 const DISCOVERED_CHANNEL = { id: -1002222222222, title: "Canal Descoberto", type: "channel" };
 const PUBLIC_CHANNEL = { id: -1003333333333, title: "Canal Público", type: "channel", username: "canalpublico" };
 // Canais privados que respondem ao getChat pelo chat_id (#12): um só alcançável por link de post/ID e o canal de teste.
+// O getChat por ID também responde pelos canais da busca e pelo público, como o Telegram (#99: tipo do chat no vínculo).
 const CHATS_BY_ID = {
   "-1004444444444": { id: -1004444444444, title: "Canal Privado", type: "channel" },
   "-1001234567890": { id: -1001234567890, title: "Canal de Teste", type: "channel" },
+  "-1005555555555": { id: -1005555555555, title: "Supergrupo de Teste", type: "supergroup" },
+  [String(DISCOVERED_CHANNEL.id)]: DISCOVERED_CHANNEL,
+  [String(PUBLIC_CHANNEL.id)]: PUBLIC_CHANNEL,
 };
 
 function readBody(req) {

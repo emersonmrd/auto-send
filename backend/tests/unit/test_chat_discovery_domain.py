@@ -1,4 +1,7 @@
+import dataclasses
+
 import pytest
+from src.domain.channels.channel import ChatType
 from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
 
 INVALID = r"^Invalid chat identifier \(use @username, t\.me/username, a post link t\.me/c/\.\.\. or the -100\.\.\. chat ID\)$"
@@ -135,3 +138,16 @@ def test_trailing_newline_is_not_accepted():
     with pytest.raises(ValueError):
         DiscoveredChat(chat_id="-1001234567890\n", title="X", chat_type="channel")
     assert DiscoveredChat(chat_id="-123", title="X", chat_type="group").is_registrable is False
+
+
+def test_discovered_chat_is_not_a_forum_by_default():
+    defaults = {f.name: f.default for f in dataclasses.fields(DiscoveredChat)}
+    assert defaults["is_forum"] is False
+    forum = DiscoveredChat(chat_id="-1009876543210", title="Grupo", chat_type="supergroup", is_forum=True)
+    assert forum.is_forum is True
+
+
+@pytest.mark.parametrize("raw, expected", [("channel", ChatType.CHANNEL), ("supergroup", ChatType.SUPERGROUP), ("group", ChatType.GROUP)])
+def test_discovered_chat_kind_maps_the_telegram_type(raw, expected):
+    chat_id = "-123456789" if raw == "group" else "-1001234567890"
+    assert DiscoveredChat(chat_id=chat_id, title="X", chat_type=raw).kind is expected

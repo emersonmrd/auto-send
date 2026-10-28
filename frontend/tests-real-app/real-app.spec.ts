@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { test, expect, type Page } from "@playwright/test";
-import { FAKE_TELEGRAM_PORT, REAL_BOT_TOKEN, REAL_CHANNEL_ID, RUN_DIR, USES_REAL_TELEGRAM } from "./env";
+import { FAKE_TELEGRAM_PORT, REAL_BOT_TOKEN, REAL_CHANNEL_ID, REAL_SUPERGROUP_ID, RUN_DIR, USES_REAL_TELEGRAM } from "./env";
 
 // Fluxos de quem usa o app, contra o backend real servindo o frontend exportado (playwright.real-app.config.ts).
 // Com a API falsa do Telegram, cada fluxo também confere o que chegou ao Telegram.
@@ -208,28 +208,35 @@ test.describe.serial("aplicação real", () => {
     await expect(panel.getByRole("alert")).toContainText("Link de convite não serve");
 
     const calls = await telegramCalls(page);
-    // A busca só lê (getUpdates, getChat); a vinculação de cada canal confere se o bot é admin (getMe + getChatMember, #2).
+    // A busca só lê (getUpdates, getChat); a vinculação de cada canal confere se o bot é admin (getMe + getChatMember, #2)
+    // e depois lê o tipo do chat (getChat pelo ID, #99).
     expect(calls.map((c) => c.method)).toEqual([
       "getUpdates",
       "getMe",
       "getChatMember",
       "getChat",
-      "getMe",
-      "getChatMember",
       "getChat",
       "getMe",
       "getChatMember",
+      "getChat",
+      "getChat",
+      "getMe",
+      "getChatMember",
+      "getChat",
     ]);
     // A busca só lê: sem offset nenhum update é confirmado, sem allowed_updates a configuração do bot fica igual.
     expect(calls[0].query).toEqual({ timeout: "0" });
-    expect(calls[3].query).toEqual({ chat_id: "@canalpublico" });
-    expect(calls[6].query).toEqual({ chat_id: "-1004444444444" });
+    expect(calls[3].query).toEqual({ chat_id: "-1002222222222" });
+    expect(calls[4].query).toEqual({ chat_id: "@canalpublico" });
+    expect(calls[8].query).toEqual({ chat_id: "-1004444444444" });
 
-    // Os dois canais vinculados pela busca aparecem na barra de canais do perfil.
+    // Os canais vinculados pela busca aparecem na barra de canais do perfil, com o tipo lido do Telegram (#99).
     await page.goto("/");
     await page.getByText(profileName, { exact: true }).first().click();
     await expect(page.getByText("Canal Descoberto").first()).toBeVisible();
     await expect(page.getByText("Canal Público").first()).toBeVisible();
+    const chip = page.getByRole("button").filter({ hasText: "Canal Descoberto" }).first();
+    await expect(chip.getByRole("img", { name: "Canal", exact: true })).toBeVisible();
   });
 
   // Também roda com o Telegram real: o bot de teste está no canal de teste, e o getChat por ID não depende de mensagens.
@@ -284,5 +291,26 @@ test.describe.serial("aplicação real", () => {
   test("não deixa mídia temporária depois de enviar e cancelar", () => {
     // AGENTS.md §10: o arquivo em temp_media é apagado depois do envio, com sucesso ou erro, e no cancelamento.
     expect(fs.readdirSync(path.join(RUN_DIR, "media"))).toEqual([]);
+  });
+
+  // Por último: com mais um destino vinculado, os envios acima iriam para dois chats.
+  test("vincula um supergrupo e mostra o tipo lido do Telegram (#99)", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
+    const supergroupId = REAL_SUPERGROUP_ID || "-1005555555555";
+    await openProfile(page);
+    await page.getByRole("button", { name: "Adicionar Canal" }).click();
+    await page.getByPlaceholder("Ex: Canal de Novidades").fill("Supergrupo de Teste");
+    await page.getByPlaceholder("-1001234567890").fill(supergroupId);
+    await page.getByRole("button", { name: "Vincular Canal" }).click();
+
+    const chip = page.getByRole("button").filter({ hasText: "Supergrupo de Teste" }).first();
+    // Supergrupo com tópicos aparece como fórum; o de teste real pode ter ou não.
+    await expect(chip.getByRole("img", { name: /^(Grupo|Fórum)$/ })).toBeVisible();
+    if (!USES_REAL_TELEGRAM) {
+      await expect(chip.getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
+      const calls = await telegramCalls(page);
+      expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat"]);
+      expect(calls[2].query).toEqual({ chat_id: supergroupId });
+    }
   });
 });

@@ -18,6 +18,9 @@ export const REAL_CHANNEL_ID =
   process.env.E2E_CHANNEL_TEST3 ||
   "";
 
+// Supergrupo de teste (#99), com o bot de teste como administrador; sem ele, a suíte usa o supergrupo da API falsa.
+export const REAL_SUPERGROUP_ID = process.env.E2E_SUPERGROUP_AUTOSEND || "";
+
 // Com bot e canal de teste no ambiente, a suíte usa o Telegram de verdade em vez da API falsa.
 export const USES_REAL_TELEGRAM = Boolean(REAL_BOT_TOKEN && REAL_CHANNEL_ID);
 // Banco e mídia temporários do backend da suíte, recriados a cada execução.
