@@ -12,6 +12,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Cancelar o envio várias vezes não publica mais a mensagem repetida no canal: antes, o backend continuava o disparo depois que o navegador fechava a conexão (#86).
 - A barra de progresso não estaciona mais em 97% enquanto o Telegram processa o vídeo: a segunda fase mostra animação contínua, cronômetro e tamanho do arquivo, e crava 100% na confirmação (#86).
 - O card de progresso do envio tem a mesma largura da caixa de texto do compositor e não mostra mais o prefixo "Fase 1/2", que sobrou de quando havia duas fases (#87).
+- O gateway do Telegram fica estritamente isolado em porta fechada local durante os testes de contrato OpenAPI, impedindo fallback para a API pública na nuvem e eliminando timeouts intermitentes no Schemathesis (#91).
 
 
 ## [0.6.1] - 2026-10-27

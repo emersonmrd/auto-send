@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 import schemathesis  # noqa: E402
+import pytest  # noqa: E402
 from schemathesis.checks import not_a_server_error, response_schema_conformance  # noqa: E402
 
 from src.presentation.main import (  # noqa: E402
@@ -45,6 +46,13 @@ from src.presentation.main import (  # noqa: E402
 asyncio.run(init_db())
 # Porta fechada: nenhuma chamada sai para a Telegram API real durante o fuzzing.
 telegram_gateway.base_url = "http://127.0.0.1:9"
+
+
+async def _closed_port_base_url() -> str:
+    return "http://127.0.0.1:9"
+
+
+telegram_gateway.resolve_effective_base_url = _closed_port_base_url  # type: ignore[method-assign]
 
 schema = schemathesis.openapi.from_asgi("/openapi.json", app)
 
@@ -114,6 +122,13 @@ def test_frontend_types_mirror_backend_response_models():
             f"{ts_name} não declara todos os campos de {model_cls.__name__}: "
             f"faltando {backend_fields - interfaces[ts_name]}"
         )
+
+
+@pytest.mark.asyncio
+async def test_telegram_gateway_is_isolated_during_contract_testing():
+    """Garante que o gateway está isolado em porta fechada local e nunca vaza para https://api.telegram.org."""
+    url = await telegram_gateway.resolve_effective_base_url()
+    assert url == "http://127.0.0.1:9", f"Gateway não isolado: {url}"
 
 
 @schema.parametrize()
