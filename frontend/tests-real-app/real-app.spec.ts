@@ -85,7 +85,8 @@ test.describe.serial("aplicação real", () => {
     if (!USES_REAL_TELEGRAM) {
       await expect(page.getByText("@teste_0001_bot").first()).toBeVisible();
       const calls = await telegramCalls(page);
-      expect(calls.map((c) => c.method)).toEqual(["getMe"]);
+      // Issue #102: cadastro/validação de perfil confere getMe, getWebhookInfo e sonda getUpdates
+      expect([...new Set(calls.map((c) => c.method))].sort()).toEqual(["getMe", "getUpdates", "getWebhookInfo"]);
     }
   });
 

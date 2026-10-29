@@ -86,6 +86,18 @@ const server = http.createServer(async (req, res) => {
   if (token.startsWith(REJECTED_TOKEN_PREFIX)) {
     return send(res, 401, { ok: false, error_code: 401, description: "Unauthorized" });
   }
+  if (method === "getWebhookInfo") {
+    if (token.startsWith(WEBHOOK_TOKEN_PREFIX)) {
+      return send(res, 200, {
+        ok: true,
+        result: { url: "https://external.app/webhook", has_custom_certificate: false, pending_update_count: 0 },
+      });
+    }
+    return send(res, 200, {
+      ok: true,
+      result: { url: "", has_custom_certificate: false, pending_update_count: 0 },
+    });
+  }
   if (method === "getMe") {
     return send(res, 200, {
       ok: true,
