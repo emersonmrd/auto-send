@@ -54,14 +54,14 @@ test.describe("extractApiError", () => {
         { detail: "Telegram API error (400): Bad Request: have no rights to send a message" },
         "fallback"
       )
-    ).toBe("O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar.");
+    ).toBe("O bot não tem permissão para enviar isto neste chat. Em canal, ele precisa ser administrador com permissão de publicar; em grupo, confira se as permissões do grupo deixam enviar esse tipo de mensagem (texto, mídia ou enquete).");
 
     expect(
       extractApiError(
         { detail: "Telegram API error (400): Bad Request: not enough rights to send text messages to the chat" },
         "fallback"
       )
-    ).toBe("O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar.");
+    ).toBe("O bot não tem permissão para enviar isto neste chat. Em canal, ele precisa ser administrador com permissão de publicar; em grupo, confira se as permissões do grupo deixam enviar esse tipo de mensagem (texto, mídia ou enquete).");
 
     expect(
       extractApiError(
@@ -75,7 +75,7 @@ test.describe("extractApiError", () => {
         { detail: "Telegram API error (403): Forbidden: bot was kicked from the channel chat" },
         "fallback"
       )
-    ).toBe("O bot não é membro ou foi removido deste canal. Adicione-o novamente como administrador.");
+    ).toBe("O bot não é membro ou foi removido deste chat. Adicione-o de novo (em canal, como administrador).");
 
     expect(
       extractApiError(
@@ -148,7 +148,7 @@ test.describe("extractApiError", () => {
 
     expect(
       formatDeliveryFailureReason("OTHER", "Bad Request: have no rights to send a message")
-    ).toBe("O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar.");
+    ).toBe("O bot não tem permissão para enviar isto neste chat. Em canal, ele precisa ser administrador com permissão de publicar; em grupo, confira se as permissões do grupo deixam enviar esse tipo de mensagem (texto, mídia ou enquete).");
 
     expect(
       formatDeliveryFailureReason(null, "Bad Request: chat not found")

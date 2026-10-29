@@ -52,9 +52,9 @@ def redact_bot_token(text: str, bot_token: Optional[str] = None) -> str:
 TELEGRAM_ERROR_TRANSLATIONS_PT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"chat not found", re.I), "Canal ou grupo não encontrado. Verifique se o ID ou @username está correto e se o bot é membro."),
     (re.compile(r"group chat was upgraded to a supergroup", re.I), "O grupo foi promovido para supergrupo e o identificador mudou. Atualize o canal com o novo ID (-100...)."),
-    (re.compile(r"not enough rights|have no rights|chat_write_forbidden|need administrator rights", re.I), "O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar."),
+    (re.compile(r"not enough rights|have no rights|chat_write_forbidden|need administrator rights", re.I), "O bot não tem permissão para enviar isto neste chat. Em canal, ele precisa ser administrador com permissão de publicar; em grupo, confira se as permissões do grupo deixam enviar esse tipo de mensagem (texto, mídia ou enquete)."),
     (re.compile(r"bot was blocked by the user", re.I), "O bot foi bloqueado pelo usuário."),
-    (re.compile(r"bot was kicked|bot is not a member", re.I), "O bot não é membro ou foi removido deste canal. Adicione-o novamente como administrador."),
+    (re.compile(r"bot was kicked|bot is not a member", re.I), "O bot não é membro ou foi removido deste chat. Adicione-o de novo (em canal, como administrador)."),
     (re.compile(r"message is too long", re.I), "A mensagem excede o limite de caracteres permitido pelo Telegram (máximo 4.096 caracteres)."),
     (re.compile(r"message caption is too long", re.I), "A legenda da mídia excede o limite de 1.024 caracteres do Telegram."),
     (re.compile(r"message text is empty", re.I), "O texto da mensagem não pode estar vazio."),
@@ -564,7 +564,9 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         if status in ("member", "restricted"):
             # Administrador só é exigência de canal; em grupo, basta poder enviar mensagens (#100).
             chat = await self._call_member_api(bot_token, "getChat", {"chat_id": chat_id})
-            if isinstance(chat, dict) and chat.get("type") in _GROUP_CHAT_TYPES:
+            # Restrito com is_member=False saiu do grupo: o motivo é adicioná-lo de novo, não as permissões.
+            in_group = status == "member" or member.get("is_member") is not False
+            if in_group and isinstance(chat, dict) and chat.get("type") in _GROUP_CHAT_TYPES:
                 if self._member_can_send_in_group(member, chat):
                     return
                 raise BotCannotSendInGroupError("Bot cannot send messages in this group")
@@ -572,10 +574,11 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
 
     @staticmethod
     def _member_can_send_in_group(member: Dict[str, Any], chat: Dict[str, Any]) -> bool:
+        group_allows = (chat.get("permissions") or {}).get("can_send_messages", True) is not False
         if member.get("status") == "restricted":
-            # Membro restrito tem permissões próprias, que valem no lugar das do grupo.
-            return member.get("is_member") is not False and member.get("can_send_messages") is True
-        return (chat.get("permissions") or {}).get("can_send_messages", True) is not False
+            # A exceção do membro restrito não passa do que o grupo permite: as duas precisam liberar.
+            return group_allows and member.get("can_send_messages") is True
+        return group_allows
 
     async def _call_member_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
         try:

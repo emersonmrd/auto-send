@@ -407,9 +407,12 @@ async def test_ensure_bot_can_post_accepts_a_member_bot_in_a_group(monkeypatch, 
     [
         ({"status": "member"}, {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": False}}),
         ({"status": "restricted", "is_member": True, "can_send_messages": False}, {"id": -1001234567890, "type": "supergroup"}),
-        ({"status": "restricted", "is_member": False, "can_send_messages": True}, {"id": -1001234567890, "type": "supergroup"}),
+        (
+            {"status": "restricted", "is_member": True, "can_send_messages": True},
+            {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": False}},
+        ),
     ],
-    ids=["group-forbids-members", "restricted-without-messages", "restricted-not-member"],
+    ids=["group-forbids-members", "restricted-without-messages", "restricted-but-group-forbids"],
 )
 async def test_ensure_bot_can_post_explains_when_the_group_does_not_let_the_bot_send(monkeypatch, member, chat):
     use_transport(monkeypatch, member_handler(member, chat))
@@ -428,6 +431,16 @@ async def test_ensure_bot_can_post_still_requires_admin_outside_groups(monkeypat
     use_transport(monkeypatch, member_handler({"status": "member"}, chat))
 
     with pytest.raises(BotNotChannelAdminError, match=r"^Bot is not administrator in the channel$") as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert type(exc.value) is BotNotChannelAdminError
+
+
+async def test_restricted_bot_that_left_the_group_gets_the_generic_reason(monkeypatch):
+    # is_member=False: o bot não está mais no grupo; o motivo é adicioná-lo de novo, não as permissões.
+    member = {"status": "restricted", "is_member": False, "can_send_messages": True}
+    use_transport(monkeypatch, member_handler(member, {"id": -1001234567890, "type": "supergroup"}))
+
+    with pytest.raises(BotNotChannelAdminError) as exc:
         await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
     assert type(exc.value) is BotNotChannelAdminError
 
