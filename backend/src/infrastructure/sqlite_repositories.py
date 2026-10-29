@@ -368,6 +368,18 @@ class SqlAlchemyBroadcastRepository(IBroadcastRepository):
             objs = res.scalars().all()
             return [self._to_entity(o) for o in objs]
 
+    async def reconcile_orphan_dispatching(self) -> int:
+        from sqlalchemy import select
+        async with self.session_factory() as session:
+            async with session.begin():
+                res = await session.execute(
+                    select(BroadcastModel).where(BroadcastModel.status == "DISPATCHING")
+                )
+                objs = res.scalars().all()
+                for obj in objs:
+                    obj.status = "FAILED"
+                return len(objs)
+
     def _to_entity(self, obj: BroadcastModel) -> BroadcastMessage:
         import json
         media = None

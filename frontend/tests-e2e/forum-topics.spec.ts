@@ -86,4 +86,37 @@ test.describe("Suporte a tópicos de fóruns de supergrupos (#101)", () => {
     await expect(chatIdInput).toHaveValue("-1001234567890");
     await expect(topicIdInput).toHaveValue("45");
   });
+
+  test("Campo ID do Tópico aceita apenas dígitos positivos e sanitiza caracteres inválidos e negativos", async ({ page }) => {
+    await openComposerWithTopics(page);
+
+    await page.getByRole("button", { name: "Adicionar Canal", exact: true }).click();
+    const topicIdInput = page.locator("#field-new-channel-topic-id");
+
+    // Tentativa de digitar valor negativo com letras
+    await topicIdInput.fill("-12abc34");
+    // Apenas dígitos positivos permanecem
+    await expect(topicIdInput).toHaveValue("1234");
+  });
+
+  test("Exibe aviso de envio em andamento e desabilita confirmação no modal de exclusão", async ({ page }) => {
+    await openComposerWithTopics(page);
+
+    await page.route("**/api/v1/channels/c-topic-1/affected-broadcasts", (route) =>
+      json(route, 200, {
+        will_be_cancelled: [],
+        will_lose_target: [],
+        in_flight_count: 1,
+      }),
+    );
+
+    const chipGeral = page.getByRole("button").filter({ hasText: "Grupo VIP (#Geral)" }).first();
+    await chipGeral.getByRole("button", { name: "Excluir Canal" }).click();
+
+    await expect(page.getByTestId("channel-delete-in-flight-warning")).toBeVisible();
+    await expect(page.getByTestId("channel-delete-in-flight-warning")).toContainText("Há 1 envio em andamento para este canal");
+
+    const confirmBtn = page.getByRole("button", { name: "Confirmar Exclusão" });
+    await expect(confirmBtn).toBeDisabled();
+  });
 });

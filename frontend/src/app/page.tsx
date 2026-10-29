@@ -115,6 +115,8 @@ import {
   Bookmark,
   BookmarkPlus,
   BarChart2,
+  ChevronDown,
+  Search,
 } from "lucide-react";
 
 export default function Home() {
@@ -316,6 +318,10 @@ export default function Home() {
   const [showDeleteChannelModal, setShowDeleteChannelModal] = useState(false);
   const [deletingChannel, setDeletingChannel] = useState<Channel | null>(null);
   const [isDeletingChannel, setIsDeletingChannel] = useState(false);
+
+  // Modal de Listar / Gerenciar Destinos (quando houver múltiplos canais)
+  const [showDestinationsModal, setShowDestinationsModal] = useState(false);
+  const [destinationsSearch, setDestinationsSearch] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sendAbortControllerRef = useRef<AbortController | null>(null);
@@ -1890,9 +1896,14 @@ export default function Home() {
   const handleCreateChannel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isCreatingChannel) return;
+    const rawTopic = newChannelTopicId.trim();
+    const threadIdNum = rawTopic ? parseInt(rawTopic, 10) : null;
+    if (threadIdNum !== null && (isNaN(threadIdNum) || threadIdNum <= 0)) {
+      showToast("O ID do tópico deve ser um número inteiro positivo.", "error");
+      return;
+    }
     setIsCreatingChannel(true);
     try {
-      const threadIdNum = newChannelTopicId.trim() ? parseInt(newChannelTopicId.trim(), 10) : null;
       if (await addChannel(newChannelTitle, newChannelChatId, threadIdNum, newChannelTopicName)) {
         setShowAddChannelModal(false);
         setNewChannelTitle("");
@@ -1947,9 +1958,15 @@ export default function Home() {
       return;
     }
 
+    const rawTopic = editChannelTopicId.trim();
+    const threadIdNum = rawTopic ? parseInt(rawTopic, 10) : null;
+    if (threadIdNum !== null && (isNaN(threadIdNum) || threadIdNum <= 0)) {
+      setFeedback({ type: "error", message: "O ID do tópico deve ser um número inteiro positivo." });
+      return;
+    }
+
     setIsSavingChannel(true);
     try {
-      const threadIdNum = editChannelTopicId.trim() ? parseInt(editChannelTopicId.trim(), 10) : null;
       const res = await fetch(`${API_BASE_URL}/api/v1/channels/${editingChannel.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -2307,106 +2324,123 @@ export default function Home() {
               </div>
 
               {/* Badges / Checkboxes de Canais e Botão da Fila */}
-              <div className="flex items-center space-x-2">
-                <span className="text-xs text-gray-400 mr-1 flex items-center gap-1">
+              <div className="flex items-center space-x-2 min-w-0">
+                <span className="text-xs text-gray-400 mr-1 flex items-center gap-1 shrink-0">
                   <Tv className="w-3.5 h-3.5" /> Canais Destino:
                 </span>
-                {channels.map((c) => {
-                  const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
-                  const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
-                  const topicBadge = c.topic_name ? ` (#${c.topic_name})` : c.message_thread_id ? ` (#${c.message_thread_id})` : "";
-                  return (
-                    <div
-                      key={c.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={() => {
-                        if (isChecked) {
-                          setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
-                        } else {
-                          setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          if (isChecked) {
-                            setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
-                          } else {
-                            setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
-                          }
-                        }
-                      }}
-                      className={`text-xs px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 cursor-pointer group select-none ${
-                        isChecked
-                          ? "bg-[#5288c1] border-[#5288c1] text-white"
-                          : "border-gray-600 text-gray-400 hover:border-gray-400 bg-[#1e2a38]/40"
-                      }`}
-                    >
-                      {isChecked && <Check className="w-3 h-3 shrink-0" />}
-                      <ChatKindBadge chatType={c.chat_type} isForum={c.is_forum} />
-                      <span className="truncate max-w-[160px]">{c.title}{topicBadge}</span>
-                      <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setPermissionsChannel(c);
+                {channels.length > 4 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowDestinationsModal(true)}
+                    className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-gray-200 hover:text-white px-3 py-1.5 rounded-full transition flex items-center gap-1.5 border border-[#3b6694]/50 font-medium shrink-0 cursor-pointer shadow-sm group"
+                    title="Abrir lista de canais de destino"
+                  >
+                    <Tv className="w-3.5 h-3.5 text-[#5288c1] group-hover:text-white transition-colors" />
+                    <span>
+                      Canais Destino ({selectedChannelIds.length}/{channels.length} selecionados)
+                    </span>
+                    <ChevronDown className="w-3 h-3 text-gray-400 group-hover:text-white transition-colors" />
+                  </button>
+                ) : (
+                  <div className="flex items-center space-x-2 overflow-x-auto max-w-[42vw] py-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
+                    {channels.map((c) => {
+                      const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
+                      const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
+                      const topicBadge = c.topic_name ? ` (#${c.topic_name})` : c.message_thread_id ? ` (#${c.message_thread_id})` : "";
+                      return (
+                        <div
+                          key={c.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            if (isChecked) {
+                              setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
+                            } else {
+                              setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
+                            }
                           }}
-                          // Enter/Espaço no botão não pode chegar ao chip, que trataria a tecla como seleção do destino.
-                          onKeyDown={(e) => e.stopPropagation()}
-                          className={`p-0.5 rounded transition ${
-                            isChecked
-                              ? "hover:bg-white/20 text-white"
-                              : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
-                          }`}
-                          aria-label={`O que o bot pode fazer em ${c.title}`}
-                          title={`O que o bot pode fazer em ${c.title}`}
-                        >
-                          <Info className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenEditChannel(c);
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              if (isChecked) {
+                                setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
+                              } else {
+                                setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
+                              }
+                            }
                           }}
-                          onKeyDown={(e) => e.stopPropagation()}
-                          className={`p-0.5 rounded transition ${
+                          className={`text-xs px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 cursor-pointer group select-none shrink-0 ${
                             isChecked
-                              ? "hover:bg-white/20 text-white"
-                              : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
+                              ? "bg-[#5288c1] border-[#5288c1] text-white"
+                              : "border-gray-600 text-gray-400 hover:border-gray-400 bg-[#1e2a38]/40"
                           }`}
-                          aria-label="Editar Canal"
-                          title="Editar Canal"
                         >
-                          <Edit className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleOpenDeleteChannel(c);
-                          }}
-                          onKeyDown={(e) => e.stopPropagation()}
-                          className={`p-0.5 rounded transition ${
-                            isChecked
-                              ? "hover:bg-red-500/30 text-white hover:text-red-200"
-                              : "hover:bg-red-900/40 text-gray-400 hover:text-red-400"
-                          }`}
-                          aria-label="Excluir Canal"
-                          title="Excluir Canal"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                          {isChecked && <Check className="w-3 h-3 shrink-0" />}
+                          <ChatKindBadge chatType={c.chat_type} isForum={c.is_forum} />
+                          <span className="truncate max-w-[160px]">{c.title}{topicBadge}</span>
+                          <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPermissionsChannel(c);
+                              }}
+                              // Enter/Espaço no botão não pode chegar ao chip, que trataria a tecla como seleção do destino.
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className={`p-0.5 rounded transition ${
+                                isChecked
+                                  ? "hover:bg-white/20 text-white"
+                                  : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
+                              }`}
+                              aria-label={`O que o bot pode fazer em ${c.title}`}
+                              title={`O que o bot pode fazer em ${c.title}`}
+                            >
+                              <Info className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenEditChannel(c);
+                              }}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className={`p-0.5 rounded transition ${
+                                isChecked
+                                  ? "hover:bg-white/20 text-white"
+                                  : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
+                              }`}
+                              aria-label="Editar Canal"
+                              title="Editar Canal"
+                            >
+                              <Edit className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenDeleteChannel(c);
+                              }}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className={`p-0.5 rounded transition ${
+                                isChecked
+                                  ? "hover:bg-red-500/30 text-white hover:text-red-200"
+                                  : "hover:bg-red-900/40 text-gray-400 hover:text-red-400"
+                              }`}
+                              aria-label="Excluir Canal"
+                              title="Excluir Canal"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 <button
                   onClick={() => setShowAddChannelModal(true)}
-                  className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#5288c1] hover:text-white px-2 py-1 rounded-full transition flex items-center gap-1"
+                  className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#5288c1] hover:text-white px-2 py-1 rounded-full transition flex items-center gap-1 shrink-0"
                 >
                   <Plus className="w-3 h-3" /> Adicionar Canal
                 </button>
@@ -3788,10 +3822,15 @@ export default function Home() {
                   </label>
                   <input
                     id="field-new-channel-topic-id"
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     placeholder="Ex: 42"
                     value={newChannelTopicId}
-                    onChange={(e) => setNewChannelTopicId(e.target.value)}
+                    onChange={(e) => {
+                      const clean = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
+                      setNewChannelTopicId(clean);
+                    }}
                     className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
                   />
                 </div>
@@ -3881,10 +3920,15 @@ export default function Home() {
                   </label>
                   <input
                     id="field-edit-channel-topic-id"
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     placeholder="Ex: 42"
                     value={editChannelTopicId}
-                    onChange={(e) => setEditChannelTopicId(e.target.value)}
+                    onChange={(e) => {
+                      const clean = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
+                      setEditChannelTopicId(clean);
+                    }}
                     className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
                   />
                 </div>
@@ -3975,6 +4019,17 @@ export default function Home() {
             <p className="text-xs text-gray-400 mb-4 leading-relaxed">
               O bot não enviará mais transmissões para este Chat ID ({deletingChannel.chat_id}).
             </p>
+            {affectedBroadcasts && affectedBroadcasts.in_flight_count > 0 && (
+              <div
+                data-testid="channel-delete-in-flight-warning"
+                className="mb-4 bg-amber-950/60 border border-amber-500/50 rounded-lg p-3 text-xs text-amber-200"
+              >
+                <strong className="block font-semibold mb-1">
+                  ⚠️ Há {affectedBroadcasts.in_flight_count === 1 ? "1 envio em andamento" : `${affectedBroadcasts.in_flight_count} envios em andamento`} para este canal.
+                </strong>
+                <span>Aguarde a conclusão antes de excluir o canal.</span>
+              </div>
+            )}
             {affectedBroadcasts &&
               (affectedBroadcasts.will_be_cancelled.length > 0 ||
                 affectedBroadcasts.will_lose_target.length > 0) && (
@@ -4019,7 +4074,8 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handleConfirmDeleteChannel}
-                disabled={isDeletingChannel}
+                disabled={isDeletingChannel || (affectedBroadcasts?.in_flight_count ?? 0) > 0}
+                title={(affectedBroadcasts?.in_flight_count ?? 0) > 0 ? "Aguarde o envio em andamento terminar para excluir" : "Confirmar Exclusão"}
                 className="px-4 py-2 text-xs bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center gap-1.5 shadow"
               >
                 {isDeletingChannel ? (
@@ -4033,6 +4089,188 @@ export default function Home() {
                     Confirmar Exclusão
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: LISTAR / SELECIONAR CANAIS DESTINO (#101 / UX) */}
+      {showDestinationsModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+          <div data-testid="destinations-modal" className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-lg w-full p-6 shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-700/50 mb-4">
+              <div className="flex items-center gap-2">
+                <Tv className="w-5 h-5 text-[#5288c1]" />
+                <h3 className="text-base font-semibold text-gray-100">
+                  Canais e Tópicos de Destino
+                </h3>
+                <span className="text-xs bg-[#242f3d] text-[#71aaeb] px-2 py-0.5 rounded-full font-mono">
+                  {selectedChannelIds.length}/{channels.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDestinationsModal(false);
+                  setDestinationsSearch("");
+                }}
+                className="text-gray-400 hover:text-white p-1 rounded transition"
+                title="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Ações Rápidas: Buscar e Selecionar Todos / Desmarcar Todos */}
+            <div className="flex items-center justify-between gap-3 mb-3">
+              {channels.length > 5 && (
+                <div className="relative flex-1">
+                  <Search className="w-3.5 h-3.5 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    placeholder="Filtrar por nome ou tópico..."
+                    value={destinationsSearch}
+                    onChange={(e) => setDestinationsSearch(e.target.value)}
+                    className="w-full bg-[#202b36] rounded-lg pl-8 pr-3 py-1.5 text-xs text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
+              )}
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allIds = channels.map(
+                      (c) => c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id)
+                    );
+                    setSelectedChannelIds(allIds);
+                  }}
+                  className="text-xs text-[#5288c1] hover:text-[#71aaeb] px-2 py-1 rounded bg-[#202b36] hover:bg-[#2b5278]/50 transition cursor-pointer"
+                >
+                  Selecionar Todos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedChannelIds([])}
+                  className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded bg-[#202b36] hover:bg-gray-700/50 transition cursor-pointer"
+                >
+                  Desmarcar Todos
+                </button>
+              </div>
+            </div>
+
+            {/* Lista com scroll vertical */}
+            <div className="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
+              {channels
+                .filter((c) => {
+                  if (!destinationsSearch.trim()) return true;
+                  const query = destinationsSearch.toLowerCase();
+                  return (
+                    c.title.toLowerCase().includes(query) ||
+                    (c.topic_name && c.topic_name.toLowerCase().includes(query)) ||
+                    c.chat_id.includes(query)
+                  );
+                })
+                .map((c) => {
+                  const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
+                  const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
+                  const topicBadge = c.topic_name ? ` (#${c.topic_name})` : c.message_thread_id ? ` (#${c.message_thread_id})` : "";
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => {
+                        if (isChecked) {
+                          setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
+                        } else {
+                          setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
+                        }
+                      }}
+                      className={`p-2.5 rounded-lg border transition flex items-center justify-between gap-3 cursor-pointer select-none group ${
+                        isChecked
+                          ? "bg-[#2b5278]/40 border-[#5288c1] text-white"
+                          : "bg-[#202b36]/60 border-gray-700/60 text-gray-300 hover:border-gray-500"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div
+                          className={`w-4 h-4 rounded flex items-center justify-center border transition shrink-0 ${
+                            isChecked
+                              ? "bg-[#5288c1] border-[#5288c1] text-white"
+                              : "border-gray-500 bg-[#17212b]"
+                          }`}
+                        >
+                          {isChecked && <Check className="w-3 h-3" />}
+                        </div>
+                        <ChatKindBadge chatType={c.chat_type} isForum={c.is_forum} />
+                        <span className="text-xs font-medium truncate">
+                          {c.title}{topicBadge}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0 opacity-80 group-hover:opacity-100">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPermissionsChannel(c);
+                          }}
+                          className="p-1 rounded text-gray-400 hover:text-[#71aaeb] hover:bg-white/10 transition cursor-pointer"
+                          title={`O que o bot pode fazer em ${c.title}`}
+                          aria-label={`O que o bot pode fazer em ${c.title}`}
+                        >
+                          <Info className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenEditChannel(c);
+                          }}
+                          className="p-1 rounded text-gray-400 hover:text-[#71aaeb] hover:bg-white/10 transition cursor-pointer"
+                          title="Editar Canal"
+                          aria-label="Editar Canal"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenDeleteChannel(c);
+                          }}
+                          className="p-1 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition cursor-pointer"
+                          title="Excluir Canal"
+                          aria-label="Excluir Canal"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Footer do Modal */}
+            <div className="pt-4 border-t border-gray-700/50 flex items-center justify-between gap-3 mt-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDestinationsModal(false);
+                  setShowAddChannelModal(true);
+                }}
+                className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#5288c1] hover:text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 font-medium cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" /> Adicionar Novo Canal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDestinationsModal(false);
+                  setDestinationsSearch("");
+                }}
+                className="px-4 py-1.5 text-xs bg-[#5288c1] hover:bg-[#4377b0] text-white rounded-lg font-medium transition shadow cursor-pointer"
+              >
+                Concluir
               </button>
             </div>
           </div>
