@@ -25,6 +25,10 @@ python3 -c "import sqlite3; c = sqlite3.connect('.mutmut-cache'); c.execute('PRA
 uvx --from mutmut==2.5.1 mutmut run --no-progress "${args[@]}" >/dev/null
 rc=$?
 results="$(uvx --from mutmut==2.5.1 mutmut results)"
+# O diff de cada sobrevivente sai antes de o cache sumir: sem ele, só sobra o id (kaizen de 2026-10-29, #107).
+for id in $(uvx --from mutmut==2.5.1 mutmut result-ids survived 2>/dev/null); do
+  uvx --from mutmut==2.5.1 mutmut show "$id"
+done
 rm -f .mutmut-cache*
 echo "$results" | sed -n '/Survived\|Timed out\|Untested/,$p'
 # Código de saída do mutmut 2 é bitmask: 1 fatal, 2 sobreviventes, 4 timeout, 8 suspeito (morto, só lento).
