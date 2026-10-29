@@ -1,6 +1,6 @@
 [project]
 name = "auto-send-backend"
-version = "0.6.1"
+version = "0.7.0"
 description = "Auto-Send backend: manage Telegram bots and schedule channel broadcasts"
 license = "MIT"
 requires-python = ">=3.12"
