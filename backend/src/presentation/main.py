@@ -37,6 +37,8 @@ from src.application.update_broadcast_use_case import UpdateBroadcastCommand, Up
 from src.application.register_channel_use_case import RegisterChannelCommand, RegisterChannelUseCase
 from src.application.update_channel_use_case import UpdateChannelCommand, UpdateChannelUseCase
 from src.application.resolve_chat_use_case import ResolveChatUseCase
+from src.application.read_bot_permissions_use_case import ReadBotPermissionsUseCase
+from src.domain.ports.bot_permissions_gateway import IBotPermissionsGateway
 from src.domain.channels.channel import Channel
 from src.domain.channels.chat_discovery import DiscoveredChat
 from src.domain.ports.chat_discovery_gateway import (
@@ -359,6 +361,17 @@ class ChannelCreateResponse(BaseModel):
 class ChannelListItemResponse(ChannelCreateResponse):
     is_active: bool
 
+class BotPermissionsResponse(BaseModel):
+    # O que o bot pode enviar ao destino, lido do Telegram em checked_at (#107).
+    chat_type: Optional[Literal["channel", "supergroup"]] = None
+    is_forum: bool
+    bot_status: Literal["creator", "administrator", "member", "restricted", "left", "kicked"]
+    can_send_messages: bool
+    can_send_photos: bool
+    can_send_videos: bool
+    can_send_polls: bool
+    checked_at: str
+
 class ChannelUpdateRequest(BaseModel):
     name: str
     telegram_channel_id: str
@@ -516,6 +529,9 @@ _ERR_422 = {422: {"model": ErrorResponse, "description": "Invalid payload or for
 _ERR_503 = {503: {"model": ErrorResponse, "description": "Could not reach Telegram, try again"}}
 
 def get_chat_discovery_gateway() -> IChatDiscoveryGateway:
+    return telegram_gateway
+
+def get_bot_permissions_gateway() -> IBotPermissionsGateway:
     return telegram_gateway
 
 @app.get("/api/v1/health", response_model=HealthResponse)
@@ -796,6 +812,35 @@ async def get_channel_affected_broadcasts(channel_id: str):
         "will_be_cancelled": will_be_cancelled,
         "will_lose_target": will_lose_target,
         "in_flight_count": in_flight_count,
+    }
+
+
+@app.get(
+    "/api/v1/channels/{channel_id}/bot-permissions",
+    response_model=BotPermissionsResponse,
+    responses={**_ERR_404, **_ERR_503},
+)
+async def get_channel_bot_permissions(
+    channel_id: str,
+    gateway: IBotPermissionsGateway = Depends(get_bot_permissions_gateway),
+):
+    try:
+        permissions = await ReadBotPermissionsUseCase(profile_repo, channel_repo, gateway).execute(channel_id)
+    except ChannelNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+    except ProfileNotFoundError:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    except (TelegramUnavailableError, CircuitBreakerOpenException):
+        raise HTTPException(status_code=503, detail="Could not reach Telegram, try again")
+    return {
+        "chat_type": permissions.chat_type.value if permissions.chat_type else None,
+        "is_forum": permissions.is_forum,
+        "bot_status": permissions.bot_status.value,
+        "can_send_messages": permissions.can_send_messages,
+        "can_send_photos": permissions.can_send_photos,
+        "can_send_videos": permissions.can_send_videos,
+        "can_send_polls": permissions.can_send_polls,
+        "checked_at": _format_datetime_utc(permissions.checked_at),
     }
 
 

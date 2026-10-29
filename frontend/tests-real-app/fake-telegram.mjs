@@ -1,5 +1,5 @@
 // Telegram Bot API falsa para o teste da aplicação real (verification affordance, akitaonrails/my-skills).
-// Imita só o que o gateway usa (getMe, sendMessage, sendPhoto, sendVideo, getUpdates, getChat) e registra cada chamada,
+// Imita só o que o gateway usa (getMe, sendMessage, sendPhoto, sendVideo, getUpdates, getChat, getChatMember) e registra cada chamada,
 // para o teste conferir o que o backend real mandou ao Telegram. Nunca grava o token: só os 4 últimos caracteres.
 //   GET    /__calls  -> chamadas registradas
 //   DELETE /__calls  -> limpa o registro
@@ -20,7 +20,13 @@ const PUBLIC_CHANNEL = { id: -1003333333333, title: "Canal Público", type: "cha
 const CHATS_BY_ID = {
   "-1004444444444": { id: -1004444444444, title: "Canal Privado", type: "channel" },
   "-1001234567890": { id: -1001234567890, title: "Canal de Teste", type: "channel" },
-  "-1005555555555": { id: -1005555555555, title: "Supergrupo de Teste", type: "supergroup" },
+  // Grupo que deixa membros enviarem texto, vídeo e enquete, mas não foto (#107: painel de permissões do bot).
+  "-1005555555555": {
+    id: -1005555555555,
+    title: "Supergrupo de Teste",
+    type: "supergroup",
+    permissions: { can_send_messages: true, can_send_photos: false, can_send_videos: true, can_send_polls: true },
+  },
   [String(DISCOVERED_CHANNEL.id)]: DISCOVERED_CHANNEL,
   [String(PUBLIC_CHANNEL.id)]: PUBLIC_CHANNEL,
 };
@@ -119,6 +125,10 @@ const server = http.createServer(async (req, res) => {
         user: { id: Number(token.split(":")[0]), is_bot: true, first_name: "Bot de Teste" },
       },
     });
+  }
+  // Como o Telegram, recusa enquete pública (não anônima) em canal; em supergrupo ela vai (#99).
+  if (method === "sendPoll" && fields.is_anonymous === false && CHATS_BY_ID[String(fields.chat_id)]?.type !== "supergroup") {
+    return send(res, 400, { ok: false, error_code: 400, description: "Bad Request: non-anonymous polls can't be sent to channel chats" });
   }
   if (["sendMessage", "sendPhoto", "sendVideo", "sendPoll"].includes(method)) {
     return send(res, 200, {
