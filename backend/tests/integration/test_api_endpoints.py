@@ -2696,3 +2696,107 @@ async def test_patch_text_of_an_existing_public_poll_keeps_working(client):
 
     assert resp.status_code == 200, resp.text
     assert (await broadcast_repo.get_by_id("b-legacy-poll")).text == "Agora com texto"
+
+
+async def test_create_profile_with_active_webhook_returns_friendly_warning(client, monkeypatch):
+    """Issue #102: ao criar perfil com bot que tem webhook ativo, responde 201 com aviso amigável."""
+    async def mock_validate(token):
+        return {
+            "username": "webhook_profile_bot",
+            "has_active_webhook": True,
+            "webhook_url": "https://external.service/webhook",
+            "has_active_polling": False,
+        }
+    monkeypatch.setattr(telegram_gateway, "validate_bot_token", mock_validate)
+
+    res = await client.post(
+        "/api/v1/profiles",
+        json={"name": "Perfil Webhook", "bot_token": "1234567890:BOT_WITH_WEBHOOK_1234567890"},
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["name"] == "Perfil Webhook"
+    assert data["bot_username"] == "webhook_profile_bot"
+    assert data["has_active_webhook"] is True
+    assert data["webhook_url"] == "https://external.service/webhook"
+    assert "Webhook ativo apontando para outro sistema" in data["warning"]
+    assert "@BotFather" in data["warning"]
+
+
+async def test_create_profile_with_polling_conflict_returns_friendly_warning(client, monkeypatch):
+    """Issue #102: ao criar perfil com bot em polling concorrente, responde 201 com aviso amigável."""
+    async def mock_validate(token):
+        return {
+            "username": "polling_profile_bot",
+            "has_active_webhook": False,
+            "webhook_url": None,
+            "has_active_polling": True,
+        }
+    monkeypatch.setattr(telegram_gateway, "validate_bot_token", mock_validate)
+
+    res = await client.post(
+        "/api/v1/profiles",
+        json={"name": "Perfil Polling", "bot_token": "1234567890:BOT_WITH_POLLING_1234567890"},
+    )
+    assert res.status_code == 201
+    data = res.json()
+    assert data["has_active_polling"] is True
+    assert "execução ativa em outro programa" in data["warning"]
+
+
+async def test_create_profile_with_duplicate_token_returns_friendly_warning(client, monkeypatch):
+    """Issue #102: ao criar perfil com token já existente no banco, responde 201 com aviso de duplicidade."""
+    async def mock_validate(token):
+        return {
+            "username": "shared_bot",
+            "has_active_webhook": False,
+            "webhook_url": None,
+            "has_active_polling": False,
+        }
+    monkeypatch.setattr(telegram_gateway, "validate_bot_token", mock_validate)
+
+    # 1. Cria primeiro perfil
+    res1 = await client.post(
+        "/api/v1/profiles",
+        json={"name": "Primeiro Perfil", "bot_token": "1234567890:DUPLICATE_TOKEN_1234567890"},
+    )
+    assert res1.status_code == 201
+    assert res1.json()["warning"] is None
+
+    # 2. Cria segundo perfil com o mesmo token
+    res2 = await client.post(
+        "/api/v1/profiles",
+        json={"name": "Segundo Perfil", "bot_token": "1234567890:DUPLICATE_TOKEN_1234567890"},
+    )
+    assert res2.status_code == 201
+    data2 = res2.json()
+    assert data2["is_duplicate_token"] is True
+    assert "já está vinculado a outro perfil" in data2["warning"]
+
+
+async def test_validate_bot_endpoint(client, monkeypatch):
+    """Issue #102: endpoint POST /api/v1/profiles/validate-bot permite sondar status do bot."""
+    async def mock_validate(token):
+        if token == "invalid":
+            raise ValueError("Telegram Bot Token validation failed: Unauthorized (401)")
+        return {
+            "username": "checked_bot",
+            "has_active_webhook": True,
+            "webhook_url": "https://n8n.io/webhook",
+            "has_active_polling": False,
+        }
+    monkeypatch.setattr(telegram_gateway, "validate_bot_token", mock_validate)
+
+    # Sucesso com webhook
+    res = await client.post("/api/v1/profiles/validate-bot", json={"bot_token": "1234567890:VALID_TOKEN_FOR_CHECK_12345"})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["is_valid"] is True
+    assert data["bot_username"] == "checked_bot"
+    assert data["has_active_webhook"] is True
+    assert data["webhook_url"] == "https://n8n.io/webhook"
+    assert "Webhook ativo" in data["warning"]
+
+    # Token inválido -> 422
+    res_err = await client.post("/api/v1/profiles/validate-bot", json={"bot_token": "invalid"})
+    assert res_err.status_code == 422

@@ -313,6 +313,55 @@ class ProfileResponse(BaseModel):
     bot_username: str
     avatar_url: Optional[str] = None
     is_active: bool
+    warning: Optional[str] = None
+    has_active_webhook: bool = False
+    webhook_url: Optional[str] = None
+    has_active_polling: bool = False
+    is_duplicate_token: bool = False
+
+class ValidateBotRequest(BaseModel):
+    bot_token: str
+
+    @field_validator("bot_token")
+    @classmethod
+    def validate_characters(cls, v: str) -> str:
+        if "\x00" in v or "\r" in v or "\n" in v:
+            raise ValueError("Value cannot contain null bytes or control characters")
+        return v.strip()
+
+class ValidateBotResponse(BaseModel):
+    is_valid: bool
+    bot_username: str
+    has_active_webhook: bool = False
+    webhook_url: Optional[str] = None
+    has_active_polling: bool = False
+    is_duplicate_token: bool = False
+    warning: Optional[str] = None
+
+
+def _format_bot_status_warning(
+    has_active_webhook: bool,
+    webhook_url: Optional[str],
+    has_active_polling: bool,
+    is_duplicate_token: bool,
+) -> Optional[str]:
+    warnings: list[str] = []
+    if has_active_webhook:
+        target = f" ({webhook_url})" if webhook_url else ""
+        warnings.append(
+            f"Aviso: Este bot possui um Webhook ativo apontando para outro sistema{target}. "
+            "O envio de mensagens pelo Auto-Send funcionará normalmente, mas a busca automática de canais "
+            "exigirá o vínculo manual por link/ID (ou a remoção do webhook no @BotFather)."
+        )
+    if has_active_polling:
+        warnings.append(
+            "Atenção: Este bot parece estar em execução ativa em outro programa. "
+            "Para evitar conflitos de recebimento, recomenda-se fechar o outro programa ou usar um bot exclusivo no Auto-Send."
+        )
+    if is_duplicate_token:
+        warnings.append("Aviso: Este token de bot já está vinculado a outro perfil cadastrado neste Auto-Send.")
+
+    return " ".join(warnings) if warnings else None
 
 class ProfileListItemResponse(ProfileResponse):
     created_at: str
@@ -593,6 +642,44 @@ async def list_profiles():
     ]
 
 @app.post(
+    "/api/v1/profiles/validate-bot",
+    response_model=ValidateBotResponse,
+    responses={**_ERR_400, **_ERR_422},
+)
+async def validate_bot(req: ValidateBotRequest):
+    try:
+        bot_info = await telegram_gateway.validate_bot_token(req.bot_token)
+        bot_username = bot_info.get("username", "")
+        has_webhook = bool(bot_info.get("has_active_webhook", False))
+        webhook_url = bot_info.get("webhook_url")
+        has_polling = bool(bot_info.get("has_active_polling", False))
+
+        all_profiles = await profile_repo.list_all()
+        is_duplicate = any(p.credentials.token == req.bot_token for p in all_profiles)
+
+        warning = _format_bot_status_warning(has_webhook, webhook_url, has_polling, is_duplicate)
+
+        return {
+            "is_valid": True,
+            "bot_username": bot_username,
+            "has_active_webhook": has_webhook,
+            "webhook_url": webhook_url,
+            "has_active_polling": has_polling,
+            "is_duplicate_token": is_duplicate,
+            "warning": warning,
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=redact_bot_token(str(e), bot_token=req.bot_token),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=redact_bot_token(str(e), bot_token=req.bot_token),
+        )
+
+@app.post(
     "/api/v1/profiles",
     status_code=status.HTTP_201_CREATED,
     response_model=ProfileResponse,
@@ -603,6 +690,14 @@ async def create_profile(req: ProfileCreateRequest):
         # Validação do Bot no Telegram
         bot_info = await telegram_gateway.validate_bot_token(req.bot_token)
         bot_username = bot_info.get("username", "")
+        has_webhook = bool(bot_info.get("has_active_webhook", False))
+        webhook_url = bot_info.get("webhook_url")
+        has_polling = bool(bot_info.get("has_active_polling", False))
+
+        all_profiles = await profile_repo.list_all()
+        is_duplicate = any(p.credentials.token == req.bot_token for p in all_profiles)
+
+        warning = _format_bot_status_warning(has_webhook, webhook_url, has_polling, is_duplicate)
 
         creds = BotCredentials(token=req.bot_token, bot_username=bot_username)
         profile = Profile(
@@ -618,6 +713,11 @@ async def create_profile(req: ProfileCreateRequest):
             "bot_username": bot_username,
             "avatar_url": profile.avatar_url,
             "is_active": profile.is_active,
+            "warning": warning,
+            "has_active_webhook": has_webhook,
+            "webhook_url": webhook_url,
+            "has_active_polling": has_polling,
+            "is_duplicate_token": is_duplicate,
         }
     except ValueError as e:
         raise HTTPException(
@@ -643,9 +743,19 @@ async def update_profile(profile_id: str, req: ProfileCreateRequest):
     try:
         # Se o token mudou, revalida no Telegram
         bot_username = profile.credentials.bot_username
+        has_webhook = False
+        webhook_url = None
+        has_polling = False
         if req.bot_token != profile.credentials.token:
             bot_info = await telegram_gateway.validate_bot_token(req.bot_token)
             bot_username = bot_info.get("username", "")
+            has_webhook = bool(bot_info.get("has_active_webhook", False))
+            webhook_url = bot_info.get("webhook_url")
+            has_polling = bool(bot_info.get("has_active_polling", False))
+
+        all_profiles = await profile_repo.list_all()
+        is_duplicate = any(p.credentials.token == req.bot_token and p.id != profile_id for p in all_profiles)
+        warning = _format_bot_status_warning(has_webhook, webhook_url, has_polling, is_duplicate)
 
         profile.name = req.name
         profile.credentials = BotCredentials(token=req.bot_token, bot_username=bot_username)
@@ -659,6 +769,11 @@ async def update_profile(profile_id: str, req: ProfileCreateRequest):
             "bot_username": bot_username,
             "avatar_url": profile.avatar_url,
             "is_active": profile.is_active,
+            "warning": warning,
+            "has_active_webhook": has_webhook,
+            "webhook_url": webhook_url,
+            "has_active_polling": has_polling,
+            "is_duplicate_token": is_duplicate,
         }
     except ValueError as e:
         raise HTTPException(
