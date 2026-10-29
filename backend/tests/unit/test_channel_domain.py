@@ -51,6 +51,57 @@ def test_channel_without_classification_has_unknown_chat_type_and_no_forum():
     assert _channel().chat_type is None
 
 
+def test_channel_defaults_for_topic_fields():
+    # Issue #101: canais sem tópico têm message_thread_id e topic_name como None
+    defaults = {f.name: f.default for f in dataclasses.fields(Channel) if f.name in ("message_thread_id", "topic_name")}
+    assert defaults == {"message_thread_id": None, "topic_name": None}
+    c = _channel()
+    assert c.message_thread_id is None
+    assert c.topic_name is None
+    assert c.destination_id == "-1001234567890"
+
+
+def test_channel_with_valid_topic():
+    c = _channel(message_thread_id=45, topic_name="Anúncios")
+    assert c.message_thread_id == 45
+    assert c.topic_name == "Anúncios"
+    assert c.destination_id == "-1001234567890:45"
+
+
+def test_channel_normalizes_empty_topic_name_to_none():
+    c = _channel(message_thread_id=45, topic_name="   ")
+    assert c.topic_name is None
+
+
+def test_channel_allows_message_thread_id_1():
+    # Tópico 1 é o tópico Geral padrão em fóruns do Telegram; deve ser aceito
+    c = _channel(message_thread_id=1, topic_name="General")
+    assert c.message_thread_id == 1
+    assert c.destination_id == "-1001234567890:1"
+
+
+@pytest.mark.parametrize("invalid_thread_id", [0, -1, -45, "abc", "45", True, False, 45.5])
+def test_channel_rejects_non_positive_message_thread_id(invalid_thread_id):
+    with pytest.raises(ValueError, match=r"^message_thread_id must be a positive integer$"):
+        _channel(message_thread_id=invalid_thread_id)
+
+
+def test_set_topic():
+    c = _channel(chat_type=ChatType.SUPERGROUP, is_forum=True)
+    c.set_topic(45, "Anúncios")
+    assert (c.message_thread_id, c.topic_name) == (45, "Anúncios")
+    c.set_topic(1, "General")
+    assert (c.message_thread_id, c.topic_name) == (1, "General")
+    with pytest.raises(ValueError, match=r"^message_thread_id must be a positive integer$"):
+        c.set_topic(0, "Invalid")
+    with pytest.raises(ValueError, match=r"^message_thread_id must be a positive integer$"):
+        c.set_topic("45", "Invalid")
+    with pytest.raises(ValueError, match=r"^message_thread_id must be a positive integer$"):
+        c.set_topic(True, "Invalid")
+    c.set_topic(None, None)
+    assert (c.message_thread_id, c.topic_name) == (None, None)
+
+
 @pytest.mark.parametrize(
     "chat_type, is_forum",
     [(ChatType.CHANNEL, False), (ChatType.SUPERGROUP, False), (ChatType.SUPERGROUP, True)],
@@ -87,9 +138,9 @@ def test_classify_rejects_an_invalid_kind_and_keeps_the_previous_one():
 
 
 def test_relink_moves_to_the_new_chat_and_forgets_the_old_kind():
-    c = _channel(chat_type=ChatType.SUPERGROUP, is_forum=True)
+    c = _channel(chat_type=ChatType.SUPERGROUP, is_forum=True, message_thread_id=45, topic_name="Anúncios")
     c.relink("-1009876543210")
-    assert (c.chat_id, c.chat_type, c.is_forum) == ("-1009876543210", None, False)
+    assert (c.chat_id, c.chat_type, c.is_forum, c.message_thread_id, c.topic_name) == ("-1009876543210", None, False, None, None)
 
 
 def test_relink_rejects_an_invalid_chat_id_and_keeps_the_channel():

@@ -92,6 +92,24 @@ def test_identifier_built_directly_keeps_a_valid_value():
     assert ChatIdentifier("-1001234567890").as_chat_id() == "-1001234567890"
 
 
+def test_identifier_default_message_thread_id_is_none():
+    import dataclasses
+    defaults = {f.name: f.default for f in dataclasses.fields(ChatIdentifier)}
+    assert defaults["message_thread_id"] is None
+    ident = ChatIdentifier("-1001234567890")
+    assert ident.message_thread_id is None
+
+
+def test_discovered_chat_default_topics_are_none():
+    import dataclasses
+    defaults = {f.name: f.default for f in dataclasses.fields(DiscoveredChat)}
+    assert defaults["message_thread_id"] is None
+    assert defaults["topic_name"] is None
+    chat = DiscoveredChat(chat_id="-1001234567890", title="Canal", chat_type="channel")
+    assert chat.message_thread_id is None
+    assert chat.topic_name is None
+
+
 def test_identifier_is_immutable():
     identifier = ChatIdentifier.parse("@meucanal")
     with pytest.raises(AttributeError):
@@ -143,8 +161,29 @@ def test_trailing_newline_is_not_accepted():
 def test_discovered_chat_is_not_a_forum_by_default():
     defaults = {f.name: f.default for f in dataclasses.fields(DiscoveredChat)}
     assert defaults["is_forum"] is False
+    assert defaults["message_thread_id"] is None
+    assert defaults["topic_name"] is None
     forum = DiscoveredChat(chat_id="-1009876543210", title="Grupo", chat_type="supergroup", is_forum=True)
     assert forum.is_forum is True
+    assert forum.message_thread_id is None
+    assert forum.topic_name is None
+
+
+def test_chat_identifier_with_topic():
+    # Link de tópico com mensagem: t.me/c/<chat>/<topic>/<msg>
+    ident = ChatIdentifier.parse("https://t.me/c/1234567890/45/100")
+    assert ident.as_chat_id() == "-1001234567890"
+    assert ident.message_thread_id == 45
+
+    # Link direto de tópico: t.me/c/<chat>/<topic>
+    ident2 = ChatIdentifier.parse("https://t.me/c/1234567890/45")
+    assert ident2.as_chat_id() == "-1001234567890"
+    assert ident2.message_thread_id == 45
+
+    # Chat ID puro não tem tópico
+    ident3 = ChatIdentifier.parse("-1001234567890")
+    assert ident3.as_chat_id() == "-1001234567890"
+    assert ident3.message_thread_id is None
 
 
 @pytest.mark.parametrize("raw, expected", [("channel", ChatType.CHANNEL), ("supergroup", ChatType.SUPERGROUP), ("group", ChatType.GROUP)])

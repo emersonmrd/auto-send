@@ -296,6 +296,8 @@ export default function Home() {
   const [showAddChannelModal, setShowAddChannelModal] = useState(false);
   const [newChannelTitle, setNewChannelTitle] = useState("");
   const [newChannelChatId, setNewChannelChatId] = useState("");
+  const [newChannelTopicId, setNewChannelTopicId] = useState("");
+  const [newChannelTopicName, setNewChannelTopicName] = useState("");
   const [isCreatingChannel, setIsCreatingChannel] = useState(false);
   const pendingChannelChatIdsRef = useRef<Set<string>>(new Set());
 
@@ -306,6 +308,8 @@ export default function Home() {
   const closePermissions = useCallback(() => setPermissionsChannel(null), []);
   const [editChannelTitle, setEditChannelTitle] = useState("");
   const [editChannelChatId, setEditChannelChatId] = useState("");
+  const [editChannelTopicId, setEditChannelTopicId] = useState("");
+  const [editChannelTopicName, setEditChannelTopicName] = useState("");
   const [isSavingChannel, setIsSavingChannel] = useState(false);
 
   // Modal de Excluir Canal
@@ -674,7 +678,7 @@ export default function Home() {
           const data: Channel[] = await res.json();
           setChannels(data);
           // Por padrão seleciona todos os canais
-          setSelectedChannelIds(data.map((c) => c.chat_id));
+          setSelectedChannelIds(data.map((c) => c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id)));
         } else if (!ignore) {
           setChannels([]);
         }
@@ -1819,17 +1823,47 @@ export default function Home() {
 
   // Criar Canal
   // Vincula um canal à perfil selecionado e recarrega a lista; usado pelo formulário e pela busca de canais do bot.
-  const addChannel = async (title: string, chatId: string): Promise<boolean> => {
+  const addChannel = async (
+    title: string,
+    chatId: string,
+    messageThreadId?: number | null,
+    topicName?: string | null
+  ): Promise<boolean> => {
     if (!selectedProfile) return false;
-    const cleanId = chatId.trim();
+    let cleanId = chatId.trim();
     if (!cleanId) return false;
-    if (pendingChannelChatIdsRef.current.has(cleanId)) return false;
-    pendingChannelChatIdsRef.current.add(cleanId);
+
+    // Se o usuário colou um link com tópico t.me/c/<id>/<topic> ou colocou :<topic>
+    let parsedThreadId = messageThreadId ?? null;
+    const linkMatch = cleanId.match(/(?:t\.me\/c\/|tg:\/\/privatepost\?channel=)(\d+)\/(\d+)/i);
+    if (linkMatch) {
+      cleanId = `-100${linkMatch[1]}`;
+      parsedThreadId = parseInt(linkMatch[2], 10);
+    } else if (cleanId.includes(":")) {
+      const parts = cleanId.split(":", 2);
+      cleanId = parts[0];
+      const parsed = parseInt(parts[1], 10);
+      if (!isNaN(parsed)) parsedThreadId = parsed;
+    }
+
+    const dedupeKey = parsedThreadId ? `${cleanId}:${parsedThreadId}` : cleanId;
+    if (pendingChannelChatIdsRef.current.has(dedupeKey)) return false;
+    pendingChannelChatIdsRef.current.add(dedupeKey);
     try {
+      const payload: Record<string, unknown> = {
+        title: title.trim(),
+        chat_id: cleanId,
+      };
+      if (parsedThreadId != null) {
+        payload.message_thread_id = parsedThreadId;
+      }
+      if (topicName && topicName.trim()) {
+        payload.topic_name = topicName.trim();
+      }
       const res = await fetch(`${API_BASE_URL}/api/v1/profiles/${selectedProfile.id}/channels`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: title.trim(), chat_id: cleanId }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         if (res.status === 409) {
@@ -1843,13 +1877,13 @@ export default function Home() {
       const chRes = await fetch(`${API_BASE_URL}/api/v1/profiles/${selectedProfile.id}/channels`);
       const data = await chRes.json();
       setChannels(data);
-      setSelectedChannelIds(data.map((c: Channel) => c.chat_id));
+      setSelectedChannelIds(data.map((c: Channel) => c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id)));
       return true;
     } catch {
       showToast("Falha de conexão com a API", "error");
       return false;
     } finally {
-      pendingChannelChatIdsRef.current.delete(cleanId);
+      pendingChannelChatIdsRef.current.delete(dedupeKey);
     }
   };
 
@@ -1858,10 +1892,13 @@ export default function Home() {
     if (isCreatingChannel) return;
     setIsCreatingChannel(true);
     try {
-      if (await addChannel(newChannelTitle, newChannelChatId)) {
+      const threadIdNum = newChannelTopicId.trim() ? parseInt(newChannelTopicId.trim(), 10) : null;
+      if (await addChannel(newChannelTitle, newChannelChatId, threadIdNum, newChannelTopicName)) {
         setShowAddChannelModal(false);
         setNewChannelTitle("");
         setNewChannelChatId("");
+        setNewChannelTopicId("");
+        setNewChannelTopicName("");
       }
     } finally {
       setIsCreatingChannel(false);
@@ -1869,7 +1906,12 @@ export default function Home() {
   };
 
   const handleAddDiscoveredChat = async (chat: DiscoveredChat): Promise<boolean> => {
-    const added = await addChannel(chat.title || chat.chat_id, chat.chat_id);
+    const added = await addChannel(
+      chat.title || chat.chat_id,
+      chat.chat_id,
+      chat.message_thread_id,
+      chat.topic_name
+    );
     if (added) showToast(`Canal "${chat.title || chat.chat_id}" vinculado.`, "success");
     return added;
   };
@@ -1879,6 +1921,8 @@ export default function Home() {
     setEditingChannel(channel);
     setEditChannelTitle(channel.title);
     setEditChannelChatId(channel.chat_id);
+    setEditChannelTopicId(channel.message_thread_id != null ? String(channel.message_thread_id) : "");
+    setEditChannelTopicName(channel.topic_name || "");
     setAffectedBroadcasts(null);
     setShowEditChannelModal(true);
     fetch(`${API_BASE_URL}/api/v1/channels/${channel.id}/affected-broadcasts`)
@@ -1905,12 +1949,15 @@ export default function Home() {
 
     setIsSavingChannel(true);
     try {
+      const threadIdNum = editChannelTopicId.trim() ? parseInt(editChannelTopicId.trim(), 10) : null;
       const res = await fetch(`${API_BASE_URL}/api/v1/channels/${editingChannel.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: editChannelTitle.trim(),
           telegram_channel_id: editChannelChatId.trim(),
+          message_thread_id: threadIdNum,
+          topic_name: editChannelTopicName.trim() || null,
         }),
       });
 
@@ -1919,12 +1966,15 @@ export default function Home() {
           type: "success",
           message: `Canal "${editChannelTitle.trim()}" atualizado com sucesso!`,
         });
-        const oldChatId = editingChannel.chat_id;
+        const oldTargetId = editingChannel.destination_id || (editingChannel.message_thread_id ? `${editingChannel.chat_id}:${editingChannel.message_thread_id}` : editingChannel.chat_id);
         const newChatId = editChannelChatId.trim();
+        const newTargetId = threadIdNum ? `${newChatId}:${threadIdNum}` : newChatId;
         setShowEditChannelModal(false);
         setEditingChannel(null);
         setEditChannelTitle("");
         setEditChannelChatId("");
+        setEditChannelTopicId("");
+        setEditChannelTopicName("");
 
         // Recarregar canais do perfil
         const chRes = await fetch(`${API_BASE_URL}/api/v1/profiles/${selectedProfile.id}/channels`);
@@ -1933,9 +1983,9 @@ export default function Home() {
           setChannels(data);
         }
         setSelectedChannelIds((prev) =>
-          prev.map((id) => (id === oldChatId ? newChatId : id))
+          prev.map((id) => (id === oldTargetId || id === editingChannel.chat_id ? newTargetId : id))
         );
-        if (oldChatId !== newChatId) {
+        if (oldTargetId !== newTargetId) {
           await fetchScheduledQueue(selectedProfile.id);
         }
       } else {
@@ -1996,7 +2046,8 @@ export default function Home() {
         } else {
           setChannels((prev) => prev.filter((c) => c.id !== deletedId));
         }
-        setSelectedChannelIds((prev) => prev.filter((id) => id !== deletedChatId));
+        const deletedTargetId = deletingChannel?.destination_id || (deletingChannel?.message_thread_id ? `${deletedChatId}:${deletingChannel.message_thread_id}` : deletedChatId);
+        setSelectedChannelIds((prev) => prev.filter((id) => id !== deletedTargetId && id !== deletedChatId));
         await fetchScheduledQueue(selectedProfile.id);
       } else {
         const err = await res.json().catch(() => null);
@@ -2261,7 +2312,9 @@ export default function Home() {
                   <Tv className="w-3.5 h-3.5" /> Canais Destino:
                 </span>
                 {channels.map((c) => {
-                  const isChecked = selectedChannelIds.includes(c.chat_id);
+                  const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
+                  const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
+                  const topicBadge = c.topic_name ? ` (#${c.topic_name})` : c.message_thread_id ? ` (#${c.message_thread_id})` : "";
                   return (
                     <div
                       key={c.id}
@@ -2269,18 +2322,18 @@ export default function Home() {
                       tabIndex={0}
                       onClick={() => {
                         if (isChecked) {
-                          setSelectedChannelIds(selectedChannelIds.filter((id) => id !== c.chat_id));
+                          setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
                         } else {
-                          setSelectedChannelIds([...selectedChannelIds, c.chat_id]);
+                          setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
                           if (isChecked) {
-                            setSelectedChannelIds(selectedChannelIds.filter((id) => id !== c.chat_id));
+                            setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
                           } else {
-                            setSelectedChannelIds([...selectedChannelIds, c.chat_id]);
+                            setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
                           }
                         }
                       }}
@@ -2292,7 +2345,7 @@ export default function Home() {
                     >
                       {isChecked && <Check className="w-3 h-3 shrink-0" />}
                       <ChatKindBadge chatType={c.chat_type} isForum={c.is_forum} />
-                      <span className="truncate max-w-[140px]">{c.title}</span>
+                      <span className="truncate max-w-[160px]">{c.title}{topicBadge}</span>
                       <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
@@ -3686,7 +3739,7 @@ export default function Home() {
               <ChatDiscoveryPanel
                 apiBaseUrl={API_BASE_URL}
                 profileId={selectedProfile.id}
-                registeredChatIds={channels.map((c) => c.chat_id)}
+                registeredChatIds={channels.map((c) => c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id))}
                 onAdd={handleAddDiscoveredChat}
               />
             )}
@@ -3713,12 +3766,48 @@ export default function Home() {
                   required
                   placeholder="-1001234567890"
                   value={newChannelChatId}
-                  onChange={(e) => setNewChannelChatId(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setNewChannelChatId(val);
+                    const linkMatch = val.match(/(?:t\.me\/c\/|tg:\/\/privatepost\?channel=)(\d+)\/(\d+)/i);
+                    if (linkMatch) {
+                      setNewChannelChatId(`-100${linkMatch[1]}`);
+                      setNewChannelTopicId(linkMatch[2]);
+                    }
+                  }}
                   className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
                 />
                 <span className="text-[11px] text-gray-500 mt-1 block">
                   Certifique-se de que o bot do perfil já foi adicionado como Admin no canal.
                 </span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="field-new-channel-topic-id" className="text-xs text-gray-400 block mb-1">
+                    ID do Tópico (Opcional)
+                  </label>
+                  <input
+                    id="field-new-channel-topic-id"
+                    type="number"
+                    placeholder="Ex: 42"
+                    value={newChannelTopicId}
+                    onChange={(e) => setNewChannelTopicId(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="field-new-channel-topic-name" className="text-xs text-gray-400 block mb-1">
+                    Nome do Tópico (Opcional)
+                  </label>
+                  <input
+                    id="field-new-channel-topic-name"
+                    type="text"
+                    placeholder="Ex: Anúncios"
+                    value={newChannelTopicName}
+                    onChange={(e) => setNewChannelTopicName(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
@@ -3785,6 +3874,34 @@ export default function Home() {
                   O bot do perfil deve permanecer como Administrador neste canal.
                 </span>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label htmlFor="field-edit-channel-topic-id" className="text-xs text-gray-400 block mb-1">
+                    ID do Tópico (Opcional)
+                  </label>
+                  <input
+                    id="field-edit-channel-topic-id"
+                    type="number"
+                    placeholder="Ex: 42"
+                    value={editChannelTopicId}
+                    onChange={(e) => setEditChannelTopicId(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="field-edit-channel-topic-name" className="text-xs text-gray-400 block mb-1">
+                    Nome do Tópico (Opcional)
+                  </label>
+                  <input
+                    id="field-edit-channel-topic-name"
+                    type="text"
+                    placeholder="Ex: Anúncios"
+                    value={editChannelTopicName}
+                    onChange={(e) => setEditChannelTopicName(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
+              </div>
               {editChannelChatId.trim() !== editingChannel.chat_id &&
                 affectedBroadcasts &&
                 affectedBroadcasts.will_be_cancelled.length + affectedBroadcasts.will_lose_target.length > 0 && (() => {
@@ -3815,6 +3932,8 @@ export default function Home() {
                   setEditingChannel(null);
                   setEditChannelTitle("");
                   setEditChannelChatId("");
+                  setEditChannelTopicId("");
+                  setEditChannelTopicName("");
                 }}
                 disabled={isSavingChannel}
                 className="px-3 py-1.5 text-xs text-gray-400 hover:text-white disabled:opacity-50"

@@ -352,7 +352,17 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
         message: BroadcastMessage,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         file_id: Optional[str] = None,
+        message_thread_id: Optional[int] = None,
     ) -> bool:
+        if ":" in chat_id:
+            parts = chat_id.split(":", 1)
+            try:
+                parsed_thread_id = int(parts[1])
+                chat_id = parts[0]
+                if message_thread_id is None:
+                    message_thread_id = parsed_thread_id
+            except ValueError:
+                pass
         self.last_error = None
         self.last_failure_category = None
         self.last_failure_detail = None
@@ -396,6 +406,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
                         "allows_multiple_answers": poll.allows_multiple_answers,
                         "type": poll.poll_type.value,
                     }
+                    if message_thread_id is not None:
+                        payload["message_thread_id"] = message_thread_id
                     if poll.is_closed:
                         payload["is_closed"] = True
                     if poll.poll_type == PollType.QUIZ:
@@ -415,6 +427,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
                         "text": message.text,
                         "parse_mode": "HTML"
                     }
+                    if message_thread_id is not None:
+                        payload["message_thread_id"] = message_thread_id
                     if reply_markup:
                         payload["reply_markup"] = reply_markup
                     resp = await client.post(send_url, json=payload)
@@ -433,6 +447,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
                         "caption": message.text,
                         "parse_mode": "HTML"
                     }
+                    if message_thread_id is not None:
+                        data["message_thread_id"] = str(message_thread_id)
                     if not message.text:
                         data.pop("caption", None)
                         data.pop("parse_mode", None)
@@ -497,6 +513,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
                         "text": message.text,
                         "parse_mode": "HTML"
                     }
+                    if message_thread_id is not None:
+                        text_payload["message_thread_id"] = message_thread_id
                     if reply_markup:
                         text_payload["reply_markup"] = reply_markup
                     resp1 = await client.post(text_url, json=text_payload)
@@ -510,6 +528,8 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
                     # 2. Envia a mídia (foto ou vídeo) logo em seguida
                     media_url = f"{effective_url}/bot{bot_token}/{media_endpoint}"
                     media_data = {"chat_id": chat_id}
+                    if message_thread_id is not None:
+                        media_data["message_thread_id"] = str(message_thread_id)
                     if reply_markup:
                         media_data["reply_markup"] = json.dumps(reply_markup)
                     if not is_photo:
@@ -765,13 +785,26 @@ async def dispatch_broadcast_to_channel(
     message: BroadcastMessage,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     file_id: Optional[str] = None,
+    message_thread_id: Optional[int] = None,
 ) -> ChannelDeliveryResult:
     """Despacha para um canal e retorna o resultado estruturado por canal sem vazar o token (§2, §9)."""
+    target_id = chat_id
+    if ":" in chat_id:
+        parts = chat_id.split(":", 1)
+        try:
+            parsed_thread_id = int(parts[1])
+            chat_id = parts[0]
+            if message_thread_id is None:
+                message_thread_id = parsed_thread_id
+        except ValueError:
+            pass
     send_kwargs: Dict[str, Any] = {}
     if progress_callback is not None:
         send_kwargs["progress_callback"] = progress_callback
     if file_id is not None:
         send_kwargs["file_id"] = file_id
+    if message_thread_id is not None:
+        send_kwargs["message_thread_id"] = message_thread_id
     try:
         ok = await gateway.send_broadcast(
             bot_token=bot_token,
@@ -781,25 +814,25 @@ async def dispatch_broadcast_to_channel(
         )
     except CircuitBreakerOpenException as exc:
         return ChannelDeliveryResult.failure(
-            chat_id,
+            target_id,
             category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
             detail=redact_bot_token(str(exc), bot_token=bot_token),
         )
     except httpx.RequestError as exc:
         return ChannelDeliveryResult.failure(
-            chat_id,
+            target_id,
             category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
             detail=f"Network error ({type(exc).__name__})",
         )
     except Exception as exc:
         return ChannelDeliveryResult.failure(
-            chat_id,
+            target_id,
             category=DeliveryFailureCategory.OTHER,
             detail=redact_bot_token(str(exc), bot_token=bot_token),
         )
 
     if ok:
-        return ChannelDeliveryResult.success(chat_id)
+        return ChannelDeliveryResult.success(target_id)
 
     raw_cat = getattr(gateway, "last_failure_category", None)
     raw_detail = getattr(gateway, "last_failure_detail", None)
@@ -818,4 +851,4 @@ async def dispatch_broadcast_to_channel(
     else:
         category = DeliveryFailureCategory.OTHER
 
-    return ChannelDeliveryResult.failure(chat_id, category=category, detail=detail)
+    return ChannelDeliveryResult.failure(target_id, category=category, detail=detail)

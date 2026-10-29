@@ -40,9 +40,13 @@ function ChatRow({
   return (
     <li className="flex items-center justify-between gap-2 rounded-lg bg-[#242f3d] px-3 py-2">
       <div className="min-w-0">
-        <p className="truncate text-sm text-gray-100">{chat.title || chat.chat_id}</p>
+        <p className="truncate text-sm text-gray-100">
+          {chat.title || chat.chat_id}
+          {chat.topic_name ? ` (#${chat.topic_name})` : chat.message_thread_id ? ` (#Tópico ${chat.message_thread_id})` : ""}
+        </p>
         <p className="truncate text-[11px] text-gray-400">
           {kind ? `${kind.emoji} ${kind.label}` : chat.type}: {chat.username ? `@${chat.username} (${chat.chat_id})` : chat.chat_id}
+          {chat.message_thread_id ? ` • Tópico ${chat.message_thread_id}` : ""}
         </p>
       </div>
       {alreadyRegistered ? (
@@ -107,7 +111,10 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
     if (webhookActive) identifierRef.current?.focus();
   }, [webhookActive]);
 
-  const isRegistered = (chatId: string) => registeredChatIds.includes(chatId);
+  const isRegistered = (chat: DiscoveredChat) => {
+    const destId = chat.message_thread_id ? `${chat.chat_id}:${chat.message_thread_id}` : chat.chat_id;
+    return registeredChatIds.includes(destId) || (!chat.message_thread_id && registeredChatIds.includes(chat.chat_id));
+  };
   const handleResolve = () => {
     if (identifier.trim()) resolve(identifier);
   };
@@ -138,7 +145,7 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
         ) : (
           <ul className="max-h-48 space-y-1.5 overflow-y-auto">
             {chats.map((chat) => (
-              <ChatRow key={chat.chat_id} chat={chat} alreadyRegistered={isRegistered(chat.chat_id)} onAdd={onAdd} />
+              <ChatRow key={chat.message_thread_id ? `${chat.chat_id}:${chat.message_thread_id}` : chat.chat_id} chat={chat} alreadyRegistered={isRegistered(chat)} onAdd={onAdd} />
             ))}
           </ul>
         ))}
@@ -181,7 +188,7 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
 
       {resolved && (
         <ul>
-          <ChatRow chat={resolved} alreadyRegistered={isRegistered(resolved.chat_id)} onAdd={onAdd} />
+          <ChatRow chat={resolved} alreadyRegistered={isRegistered(resolved)} onAdd={onAdd} />
         </ul>
       )}
 

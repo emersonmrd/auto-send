@@ -185,6 +185,7 @@ scheduler_service = AutomationSchedulerService(
     broadcast_repo=broadcast_repo,
     profile_repo=profile_repo,
     telegram_gateway=telegram_gateway,
+    channel_repo=channel_repo,
 )
 
 async def init_db(target_engine=None, migration_steps: tuple[MigrationStep, ...] = MIGRATIONS) -> None:
@@ -397,6 +398,8 @@ class ChannelCreateRequest(BaseModel):
     title: str
     chat_id: str
     invite_link: Optional[str] = ""
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
 
 class ChannelCreateResponse(BaseModel):
     id: str
@@ -407,6 +410,9 @@ class ChannelCreateResponse(BaseModel):
     # Tipo informado pelo Telegram (#99); None em canal vinculado antes disso, até a próxima edição.
     chat_type: Optional[Literal["channel", "supergroup"]] = None
     is_forum: bool = False
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
+    destination_id: Optional[str] = None
 
 class ChannelListItemResponse(ChannelCreateResponse):
     is_active: bool
@@ -425,6 +431,8 @@ class BotPermissionsResponse(BaseModel):
 class ChannelUpdateRequest(BaseModel):
     name: str
     telegram_channel_id: str
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
 
 class ChannelUpdateResponse(BaseModel):
     id: str
@@ -435,6 +443,9 @@ class ChannelUpdateResponse(BaseModel):
     chat_id: str
     chat_type: Optional[Literal["channel", "supergroup"]] = None
     is_forum: bool = False
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
+    destination_id: Optional[str] = None
 
 class BroadcastPatchRequest(BaseModel):
     text: Optional[str] = None
@@ -862,7 +873,12 @@ async def create_channel(
     gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway),
 ):
     command = RegisterChannelCommand(
-        profile_id=profile_id, title=req.title, chat_id=req.chat_id, invite_link=req.invite_link or ""
+        profile_id=profile_id,
+        title=req.title,
+        chat_id=req.chat_id,
+        invite_link=req.invite_link or "",
+        message_thread_id=req.message_thread_id,
+        topic_name=req.topic_name,
     )
     try:
         channel = await RegisterChannelUseCase(profile_repo, channel_repo, gateway).execute(command)
@@ -891,6 +907,9 @@ def _channel_kind(channel: Channel) -> dict:
     return {
         "chat_type": channel.chat_type.value if channel.chat_type else None,
         "is_forum": channel.is_forum,
+        "message_thread_id": channel.message_thread_id,
+        "topic_name": channel.topic_name,
+        "destination_id": channel.destination_id,
     }
 
 
@@ -908,18 +927,23 @@ async def get_channel_affected_broadcasts(channel_id: str):
     in_flight_count = sum(
         1
         for b in all_broadcasts
-        if b.status == BroadcastStatus.DISPATCHING and channel.chat_id in b.target_channel_ids
+        if b.status == BroadcastStatus.DISPATCHING
+        and (channel.chat_id in b.target_channel_ids or channel.destination_id in b.target_channel_ids)
     )
     will_be_cancelled = []
     will_lose_target = []
     pending = [
         b
         for b in all_broadcasts
-        if b.is_pending_or_scheduled() and channel.chat_id in b.target_channel_ids
+        if b.is_pending_or_scheduled()
+        and (channel.chat_id in b.target_channel_ids or channel.destination_id in b.target_channel_ids)
     ]
     pending.sort(key=lambda b: (b.scheduled_at or b.created_at))
     for b in pending:
-        remaining = [cid for cid in b.target_channel_ids if cid != channel.chat_id]
+        remaining = [
+            cid for cid in b.target_channel_ids
+            if cid != channel.chat_id and cid != channel.destination_id
+        ]
         if not remaining:
             will_be_cancelled.append(_to_affected_item(b))
         else:
@@ -970,7 +994,13 @@ async def update_channel(
     req: ChannelUpdateRequest,
     gateway: IChatDiscoveryGateway = Depends(get_chat_discovery_gateway),
 ):
-    command = UpdateChannelCommand(channel_id=channel_id, title=req.name, chat_id=req.telegram_channel_id)
+    command = UpdateChannelCommand(
+        channel_id=channel_id,
+        title=req.name,
+        chat_id=req.telegram_channel_id,
+        message_thread_id=req.message_thread_id,
+        topic_name=req.topic_name,
+    )
     try:
         channel = await UpdateChannelUseCase(profile_repo, channel_repo, broadcast_repo, gateway).execute(command)
     except ChannelNotFoundError:
@@ -1009,7 +1039,8 @@ async def delete_channel(channel_id: str):
 
     all_broadcasts = await broadcast_repo.list_by_profile(channel.profile_id)
     if any(
-        b.status == BroadcastStatus.DISPATCHING and channel.chat_id in b.target_channel_ids
+        b.status == BroadcastStatus.DISPATCHING
+        and (channel.chat_id in b.target_channel_ids or channel.destination_id in b.target_channel_ids)
         for b in all_broadcasts
     ):
         raise HTTPException(
@@ -1018,7 +1049,9 @@ async def delete_channel(channel_id: str):
         )
 
     for b in all_broadcasts:
-        if b.is_pending_or_scheduled() and b.remove_target_channel(channel.chat_id):
+        if b.is_pending_or_scheduled() and (
+            b.remove_target_channel(channel.destination_id) or b.remove_target_channel(channel.chat_id)
+        ):
             if b.status == BroadcastStatus.CANCELLED:
                 scheduler_service.cancel_scheduled_broadcast(b.id)
                 _cleanup_broadcast_media(b)
@@ -1112,6 +1145,8 @@ class DiscoveredChatResponse(BaseModel):
     # Canal ou supergrupo (-100...); grupo comum aparece, mas não pode ser vinculado.
     registrable: bool
     is_forum: bool = False
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
 
 class DiscoveredChatListItem(DiscoveredChatResponse):
     already_registered: bool
@@ -1135,6 +1170,8 @@ def _chat_response(chat: DiscoveredChat) -> dict:
         "username": chat.username,
         "registrable": chat.is_registrable,
         "is_forum": chat.is_forum,
+        "message_thread_id": chat.message_thread_id,
+        "topic_name": chat.topic_name,
     }
 
 @app.post(
@@ -1191,13 +1228,26 @@ async def _dispatch_and_record(
     message: BroadcastMessage,
     progress_callback=None,
     file_id: Optional[str] = None,
+    message_thread_id: Optional[int] = None,
 ) -> tuple[ChannelDeliveryResult, Optional[str]]:
+    target_id = chat_id
+    if ":" in chat_id:
+        parts = chat_id.split(":", 1)
+        try:
+            parsed_thread_id = int(parts[1])
+            chat_id = parts[0]
+            if message_thread_id is None:
+                message_thread_id = parsed_thread_id
+        except ValueError:
+            pass
     raised_exc = False
     send_kwargs = {}
     if progress_callback is not None:
         send_kwargs["progress_callback"] = progress_callback
     if file_id is not None:
         send_kwargs["file_id"] = file_id
+    if message_thread_id is not None:
+        send_kwargs["message_thread_id"] = message_thread_id
     try:
         ok = await gateway.send_broadcast(
             bot_token=bot_token,
@@ -1208,30 +1258,30 @@ async def _dispatch_and_record(
     except CircuitBreakerOpenException as exc:
         raised_exc = True
         res = ChannelDeliveryResult.failure(
-            chat_id,
+            target_id,
             category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
             detail=redact_bot_token(str(exc), bot_token=bot_token),
         )
-        return res, _format_legacy_channel_error(chat_id, res, raised_exc, None, bot_token)
+        return res, _format_legacy_channel_error(target_id, res, raised_exc, None, bot_token)
     except Exception as exc:
         import httpx as _httpx
         raised_exc = True
         if isinstance(exc, _httpx.RequestError):
             res = ChannelDeliveryResult.failure(
-                chat_id,
+                target_id,
                 category=DeliveryFailureCategory.TELEGRAM_UNAVAILABLE,
                 detail=redact_bot_token(str(exc), bot_token=bot_token) or f"Network error ({type(exc).__name__})",
             )
         else:
             res = ChannelDeliveryResult.failure(
-                chat_id,
+                target_id,
                 category=DeliveryFailureCategory.OTHER,
                 detail=redact_bot_token(str(exc), bot_token=bot_token),
             )
-        return res, _format_legacy_channel_error(chat_id, res, raised_exc, None, bot_token)
+        return res, _format_legacy_channel_error(target_id, res, raised_exc, None, bot_token)
 
     if ok:
-        return ChannelDeliveryResult.success(chat_id), None
+        return ChannelDeliveryResult.success(target_id), None
 
     from src.infrastructure.telegram_gateway_http import classify_telegram_error
     raw_cat = getattr(gateway, "last_failure_category", None)
@@ -1251,8 +1301,8 @@ async def _dispatch_and_record(
     else:
         category = DeliveryFailureCategory.OTHER
 
-    res = ChannelDeliveryResult.failure(chat_id, category=category, detail=detail)
-    return res, _format_legacy_channel_error(chat_id, res, False, raw_error, bot_token)
+    res = ChannelDeliveryResult.failure(target_id, category=category, detail=detail)
+    return res, _format_legacy_channel_error(target_id, res, False, raw_error, bot_token)
 def _serialize_delivery_results(results: List[ChannelDeliveryResult]) -> List[dict]:
     return [
         {
@@ -1616,8 +1666,18 @@ async def create_broadcast(
 
     # Cenário de Disparo Imediato
     bot_token = ""
+    channels_map: dict[str, Optional[int]] = {}
+    try:
+        profile_channels = await channel_repo.list_by_profile(profile_id)
+        for c in profile_channels:
+            if c.message_thread_id is not None:
+                channels_map[c.destination_id] = c.message_thread_id
+                channels_map[c.chat_id] = c.message_thread_id
+    except Exception:
+        pass
 
     async def send(chat_id: str, progress_callback, file_id: Optional[str]):
+        thread_id = channels_map.get(chat_id)
         res, legacy_err = await _dispatch_and_record(
             gateway=telegram_gateway,
             bot_token=bot_token,
@@ -1625,6 +1685,7 @@ async def create_broadcast(
             message=broadcast,
             progress_callback=progress_callback,
             file_id=file_id,
+            message_thread_id=thread_id,
         )
         uploaded = getattr(telegram_gateway, "last_uploaded_file_id", None) if res.delivered else None
         return res, legacy_err, uploaded
@@ -1834,13 +1895,24 @@ async def dispatch_broadcast_now(broadcast_id: str):
     dispatched_count = 0
     errors: List[str] = []
     delivery_results: List[ChannelDeliveryResult] = []
+    channels_map: dict[str, Optional[int]] = {}
+    try:
+        profile_channels = await channel_repo.list_by_profile(broadcast.profile_id)
+        for c in profile_channels:
+            if c.message_thread_id is not None:
+                channels_map[c.destination_id] = c.message_thread_id
+                channels_map[c.chat_id] = c.message_thread_id
+    except Exception:
+        pass
     try:
         for chat_id in broadcast.target_channel_ids:
+            thread_id = channels_map.get(chat_id)
             res, legacy_err = await _dispatch_and_record(
                 gateway=telegram_gateway,
                 bot_token=profile.credentials.token,
                 chat_id=chat_id,
                 message=broadcast,
+                message_thread_id=thread_id,
             )
             delivery_results.append(res)
             if res.delivered:

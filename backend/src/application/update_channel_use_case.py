@@ -1,3 +1,4 @@
+from typing import Optional
 from dataclasses import dataclass
 from src.application.channel_classification import classify_from_telegram
 from src.application.errors import (
@@ -19,6 +20,8 @@ class UpdateChannelCommand:
     channel_id: str
     title: str
     chat_id: str
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
 
 
 class UpdateChannelUseCase:
@@ -41,6 +44,15 @@ class UpdateChannelUseCase:
         # Chat_id inválido levanta ValueError antes de qualquer chamada ao Telegram.
         Channel.check_chat_id(command.chat_id)
 
+        siblings = await self.channel_repo.list_by_profile(channel.profile_id)
+        if any(
+            c.id != channel.id
+            and c.chat_id == command.chat_id
+            and c.message_thread_id == command.message_thread_id
+            for c in siblings
+        ):
+            raise ChannelAlreadyRegisteredError()
+
         old_chat_id = channel.chat_id
         if command.chat_id != old_chat_id:
             await self._move_to_new_chat(channel, old_chat_id, command.chat_id)
@@ -50,13 +62,11 @@ class UpdateChannelUseCase:
                 await classify_from_telegram(channel, profile.credentials.token, self.discovery_gateway)
 
         channel.title = command.title
+        channel.set_topic(command.message_thread_id, command.topic_name)
         await self.channel_repo.save(channel)
         return channel
 
     async def _move_to_new_chat(self, channel: Channel, old_chat_id: str, new_chat_id: str) -> None:
-        siblings = await self.channel_repo.list_by_profile(channel.profile_id)
-        if any(c.id != channel.id and c.chat_id == new_chat_id for c in siblings):
-            raise ChannelAlreadyRegisteredError()
         broadcasts = await self.broadcast_repo.list_by_profile(channel.profile_id)
         if any(b.status == BroadcastStatus.DISPATCHING and old_chat_id in b.target_channel_ids for b in broadcasts):
             raise ChannelDispatchingError()

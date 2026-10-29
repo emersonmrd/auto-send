@@ -804,3 +804,32 @@ async def test_migration_008_adds_chat_type_and_forum_to_existing_channels(tmp_p
         assert (reloaded.chat_type, reloaded.is_forum) == (ChatType.SUPERGROUP, True)
     finally:
         await test_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_migration_009_adds_message_thread_id_and_topic_name_to_existing_channels(tmp_path, monkeypatch):
+    """Issue #101: migração 9 adiciona suporte a tópicos de fóruns na tabela channels."""
+    assert CURRENT_SCHEMA_VERSION >= 9
+
+    db_path = tmp_path / "autosend.db"
+    create_v040_sqlite_db(str(db_path))
+    test_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    session_factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(main_module, "engine", test_engine)
+
+    try:
+        await main_module.init_db()
+
+        assert {"message_thread_id", "topic_name"} <= get_table_columns(str(db_path), "channels")
+
+        repo = SqlAlchemyChannelRepository(session_factory)
+        [legacy] = await repo.list_by_profile("prof-acme")
+        assert (legacy.message_thread_id, legacy.topic_name) == (None, None)
+
+        legacy.set_topic(45, "Anúncios")
+        await repo.save(legacy)
+        reloaded = await repo.get_by_id(legacy.id)
+        assert reloaded is not None
+        assert (reloaded.message_thread_id, reloaded.topic_name) == (45, "Anúncios")
+    finally:
+        await test_engine.dispose()

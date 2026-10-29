@@ -18,6 +18,9 @@ export function chatKind(chatType: DiscoveredChat["type"] | null, isForum: boole
 export function allowsPublicPoll(targetChatIds: string[], channels: Pick<Channel, "chat_id" | "chat_type">[]): boolean {
   return (
     targetChatIds.length > 0 &&
-    targetChatIds.every((id) => channels.find((c) => c.chat_id === id)?.chat_type === "supergroup")
+    targetChatIds.every((id) => {
+      const pureChatId = id.includes(":") ? id.split(":")[0] : id;
+      return channels.find((c) => c.chat_id === pureChatId || c.chat_id === id)?.chat_type === "supergroup";
+    })
   );
 }
