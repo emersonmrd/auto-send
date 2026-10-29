@@ -198,7 +198,7 @@ test.describe("Suporte a tópicos de fóruns de supergrupos (#101)", () => {
     await page.route("**/api/v1/profiles/profile-1/channels", (route) => {
       if (route.request().method() === "POST") {
         const body = route.request().postDataJSON();
-        const newChan = {
+        const newChan: Channel = {
           id: "c6",
           profile_id: "profile-1",
           title: body.title,
