@@ -119,4 +119,122 @@ test.describe("Suporte a tópicos de fóruns de supergrupos (#101)", () => {
     const confirmBtn = page.getByRole("button", { name: "Confirmar Exclusão" });
     await expect(confirmBtn).toBeDisabled();
   });
+
+  test("Quando há mais de 4 canais, modal de destinos gerencia canais com submodais em primeiro plano", async ({ page }) => {
+    const fiveChannels: Channel[] = [
+      { id: "c1", profile_id: "profile-1", title: "Canal 1", chat_id: "-1001", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1001" },
+      { id: "c2", profile_id: "profile-1", title: "Canal 2", chat_id: "-1002", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1002" },
+      { id: "c3", profile_id: "profile-1", title: "Canal 3", chat_id: "-1003", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1003" },
+      { id: "c4", profile_id: "profile-1", title: "Canal 4", chat_id: "-1004", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1004" },
+      { id: "c5", profile_id: "profile-1", title: "Canal 5", chat_id: "-1005", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1005" },
+    ];
+
+    await page.route("**/api/v1/profiles", (route) =>
+      json(route, 200, [
+        { id: "profile-1", name: "Bot VIP", bot_username: "vip_bot", avatar_url: null, is_active: true, created_at: "2026-10-19T10:00:00Z" },
+      ]),
+    );
+    await page.route("**/api/v1/profiles/profile-1/scheduled-broadcasts", (route) => json(route, 200, []));
+    await page.route("**/api/v1/profiles/profile-1/channels", (route) => json(route, 200, fiveChannels));
+    await page.route("**/api/v1/channels/c1/affected-broadcasts", (route) =>
+      json(route, 200, { will_be_cancelled: [], will_lose_target: [], in_flight_count: 0 }),
+    );
+
+    await page.goto("/");
+    await page.getByText("Bot VIP", { exact: true }).first().click();
+
+    // Botão de seletor compacto visível
+    const destinationsBtn = page.getByRole("button", { name: /Canais Destino/ });
+    await expect(destinationsBtn).toBeVisible();
+    await destinationsBtn.click();
+
+    const destinationsModal = page.getByTestId("destinations-modal");
+    await expect(destinationsModal).toBeVisible();
+
+    // 1. Abrir edição de canal a partir do modal de destinos
+    const editBtn = destinationsModal.getByRole("button", { name: "Editar Canal" }).first();
+    await editBtn.click();
+    const editHeading = page.getByRole("heading", { name: /Editar Canal/ });
+    await expect(editHeading).toBeVisible();
+    // Cancela a edição e confere que o modal de destinos continua ativo
+    await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+    await expect(destinationsModal).toBeVisible();
+
+    // 2. Abrir exclusão de canal a partir do modal de destinos
+    const deleteBtn = destinationsModal.getByRole("button", { name: "Excluir Canal" }).first();
+    await deleteBtn.click();
+    const deleteHeading = page.getByRole("heading", { name: /Excluir Canal/ });
+    await expect(deleteHeading).toBeVisible();
+    // Cancela a exclusão e confere que o modal de destinos continua ativo
+    await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+    await expect(destinationsModal).toBeVisible();
+
+    // 3. Abrir "+ Adicionar Novo Canal" a partir do modal de destinos
+    const addBtn = destinationsModal.getByRole("button", { name: "Adicionar Novo Canal" });
+    await addBtn.click();
+    const addHeading = page.getByRole("heading", { name: /Adicionar Canal/ });
+    await expect(addHeading).toBeVisible();
+    // Cancela o cadastro e confere que o modal de destinos continua ativo
+    await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+    await expect(destinationsModal).toBeVisible();
+  });
+
+  test("Quando adiciona novo canal a partir do modal de destinos, o modal permanece ativo com o novo canal listado", async ({ page }) => {
+    const initialChannels: Channel[] = [
+      { id: "c1", profile_id: "profile-1", title: "Canal 1", chat_id: "-1001", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1001" },
+      { id: "c2", profile_id: "profile-1", title: "Canal 2", chat_id: "-1002", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1002" },
+      { id: "c3", profile_id: "profile-1", title: "Canal 3", chat_id: "-1003", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1003" },
+      { id: "c4", profile_id: "profile-1", title: "Canal 4", chat_id: "-1004", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1004" },
+      { id: "c5", profile_id: "profile-1", title: "Canal 5", chat_id: "-1005", invite_link: "", is_active: true, chat_type: "channel", is_forum: false, message_thread_id: null, topic_name: null, destination_id: "-1005" },
+    ];
+    let currentChannels = [...initialChannels];
+
+    await page.route("**/api/v1/profiles", (route) =>
+      json(route, 200, [
+        { id: "profile-1", name: "Bot VIP", bot_username: "vip_bot", avatar_url: null, is_active: true, created_at: "2026-10-19T10:00:00Z" },
+      ]),
+    );
+    await page.route("**/api/v1/profiles/profile-1/scheduled-broadcasts", (route) => json(route, 200, []));
+    await page.route("**/api/v1/profiles/profile-1/channels", (route) => {
+      if (route.request().method() === "POST") {
+        const body = route.request().postDataJSON();
+        const newChan = {
+          id: "c6",
+          profile_id: "profile-1",
+          title: body.title,
+          chat_id: body.chat_id,
+          invite_link: "",
+          is_active: true,
+          chat_type: "channel",
+          is_forum: false,
+          message_thread_id: null,
+          topic_name: null,
+          destination_id: body.chat_id,
+        };
+        currentChannels = [...currentChannels, newChan];
+        return json(route, 201, newChan);
+      }
+      return json(route, 200, currentChannels);
+    });
+
+    await page.goto("/");
+    await page.getByText("Bot VIP", { exact: true }).first().click();
+
+    const destinationsBtn = page.getByRole("button", { name: /Canais Destino/ });
+    await destinationsBtn.click();
+    const destinationsModal = page.getByTestId("destinations-modal");
+    await expect(destinationsModal).toBeVisible();
+
+    // Clica em Adicionar Novo Canal a partir do rodapé do modal
+    await destinationsModal.getByRole("button", { name: "Adicionar Novo Canal" }).click();
+
+    // Preenche o formulário do submodal
+    await page.locator("#field-new-channel-title").fill("Canal Extra 6");
+    await page.locator("#field-new-channel-chat-id").fill("-1001006");
+    await page.getByRole("button", { name: "Vincular Canal" }).click();
+
+    // Modal de adicionar fecha e o modal de destinos permanece aberto contendo o novo canal
+    await expect(destinationsModal).toBeVisible();
+    await expect(destinationsModal.getByText("Canal Extra 6")).toBeVisible();
+  });
 });

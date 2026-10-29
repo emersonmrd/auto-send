@@ -3761,106 +3761,123 @@ export default function Home() {
 
       {/* MODAL: ADICIONAR CANAL */}
       {showAddChannelModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
           <form
             onSubmit={handleCreateChannel}
-            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-md w-full p-6 shadow-2xl"
+            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-lg w-full p-6 shadow-2xl flex flex-col max-h-[88vh]"
           >
-            <h3 className="text-base font-semibold text-gray-100 mb-4 flex items-center gap-2">
-              <Tv className="w-4 h-4 text-[#5288c1]" /> Adicionar Canal para {selectedProfile?.name}
-            </h3>
-            {selectedProfile && (
-              <ChatDiscoveryPanel
-                apiBaseUrl={API_BASE_URL}
-                profileId={selectedProfile.id}
-                registeredChatIds={channels.map((c) => c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id))}
-                onAdd={handleAddDiscoveredChat}
-              />
-            )}
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="field-new-channel-title" className="text-xs text-gray-400 block mb-1">Título do Canal</label>
-                <input
-                  id="field-new-channel-title"
-                  type="text"
-                  required
-                  placeholder="Ex: Canal de Novidades"
-                  value={newChannelTitle}
-                  onChange={(e) => setNewChannelTitle(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                />
-              </div>
-              <div>
-                <label htmlFor="field-new-channel-chat-id" className="text-xs text-gray-400 block mb-1">
-                  Chat ID do Telegram (começa com -100...)
-                </label>
-                <input
-                  id="field-new-channel-chat-id"
-                  type="text"
-                  required
-                  placeholder="-1001234567890"
-                  value={newChannelChatId}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setNewChannelChatId(val);
-                    const linkMatch = val.match(/(?:t\.me\/c\/|tg:\/\/privatepost\?channel=)(\d+)\/(\d+)/i);
-                    if (linkMatch) {
-                      setNewChannelChatId(`-100${linkMatch[1]}`);
-                      setNewChannelTopicId(linkMatch[2]);
-                    }
-                  }}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                />
-                <span className="text-[11px] text-gray-500 mt-1 block">
-                  Certifique-se de que o bot do perfil já foi adicionado como Admin no canal.
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="field-new-channel-topic-id" className="text-xs text-gray-400 block mb-1">
-                    ID do Tópico (Opcional)
-                  </label>
-                  <input
-                    id="field-new-channel-topic-id"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="Ex: 42"
-                    value={newChannelTopicId}
-                    onChange={(e) => {
-                      const clean = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
-                      setNewChannelTopicId(clean);
-                    }}
-                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="field-new-channel-topic-name" className="text-xs text-gray-400 block mb-1">
-                    Nome do Tópico (Opcional)
-                  </label>
-                  <input
-                    id="field-new-channel-topic-name"
-                    type="text"
-                    placeholder="Ex: Anúncios"
-                    value={newChannelTopicName}
-                    onChange={(e) => setNewChannelTopicName(e.target.value)}
-                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end gap-2">
+            {/* Header Fixo */}
+            <div className="flex items-center justify-between pb-3 border-b border-gray-700/50 mb-3 shrink-0">
+              <h3 className="text-base font-semibold text-gray-100 flex items-center gap-2">
+                <Tv className="w-4 h-4 text-[#5288c1]" /> Adicionar Canal para {selectedProfile?.name}
+              </h3>
               <button
                 type="button"
                 onClick={() => setShowAddChannelModal(false)}
-                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white"
+                className="text-gray-400 hover:text-white p-1 rounded transition cursor-pointer"
+                title="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Conteúdo com Rolagem Vertical */}
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1.5 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
+              {selectedProfile && (
+                <ChatDiscoveryPanel
+                  apiBaseUrl={API_BASE_URL}
+                  profileId={selectedProfile.id}
+                  registeredChatIds={channels.map((c) => c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id))}
+                  onAdd={handleAddDiscoveredChat}
+                />
+              )}
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="field-new-channel-title" className="text-xs text-gray-400 block mb-1">Título do Canal</label>
+                  <input
+                    id="field-new-channel-title"
+                    type="text"
+                    required
+                    placeholder="Ex: Canal de Novidades"
+                    value={newChannelTitle}
+                    onChange={(e) => setNewChannelTitle(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="field-new-channel-chat-id" className="text-xs text-gray-400 block mb-1">
+                    Chat ID do Telegram (começa com -100...)
+                  </label>
+                  <input
+                    id="field-new-channel-chat-id"
+                    type="text"
+                    required
+                    placeholder="-1001234567890"
+                    value={newChannelChatId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNewChannelChatId(val);
+                      const linkMatch = val.match(/(?:t\.me\/c\/|tg:\/\/privatepost\?channel=)(\d+)\/(\d+)/i);
+                      if (linkMatch) {
+                        setNewChannelChatId(`-100${linkMatch[1]}`);
+                        setNewChannelTopicId(linkMatch[2]);
+                      }
+                    }}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                  <span className="text-[11px] text-gray-500 mt-1 block">
+                    Certifique-se de que o bot do perfil já foi adicionado como Admin no canal.
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="field-new-channel-topic-id" className="text-xs text-gray-400 block mb-1">
+                      ID do Tópico (Opcional)
+                    </label>
+                    <input
+                      id="field-new-channel-topic-id"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Ex: 42"
+                      value={newChannelTopicId}
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
+                        setNewChannelTopicId(clean);
+                      }}
+                      className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="field-new-channel-topic-name" className="text-xs text-gray-400 block mb-1">
+                      Nome do Tópico (Opcional)
+                    </label>
+                    <input
+                      id="field-new-channel-topic-name"
+                      type="text"
+                      placeholder="Ex: Anúncios"
+                      value={newChannelTopicName}
+                      onChange={(e) => setNewChannelTopicName(e.target.value)}
+                      className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Fixo */}
+            <div className="pt-3 border-t border-gray-700/50 flex justify-end gap-2 shrink-0 mt-3">
+              <button
+                type="button"
+                onClick={() => setShowAddChannelModal(false)}
+                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={isCreatingChannel}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-1.5 px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
               >
                 {isCreatingChannel && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                 {isCreatingChannel ? "Vinculando..." : "Vincular Canal"}
@@ -3872,103 +3889,127 @@ export default function Home() {
 
       {/* MODAL: EDITAR CANAL */}
       {showEditChannelModal && editingChannel && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
           <form
             onSubmit={handleSaveEditChannel}
-            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-md w-full p-6 shadow-2xl"
+            className="bg-[#17212b] border border-[#242f3d] rounded-xl max-w-md w-full p-6 shadow-2xl flex flex-col max-h-[88vh]"
           >
-            <h3 className="text-base font-semibold text-gray-100 mb-2 flex items-center gap-2">
-              <Edit className="w-4 h-4 text-[#5288c1]" /> Editar Canal
-            </h3>
-            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-              Atualize o título ou o Chat ID do canal do Telegram.
-            </p>
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="field-edit-channel-title" className="text-xs text-gray-400 block mb-1">Título do Canal</label>
-                <input
-                  id="field-edit-channel-title"
-                  type="text"
-                  required
-                  placeholder="Ex: Canal de Novidades"
-                  value={editChannelTitle}
-                  onChange={(e) => setEditChannelTitle(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                />
-              </div>
-              <div>
-                <label htmlFor="field-edit-channel-chat-id" className="text-xs text-gray-400 block mb-1">
-                  Chat ID do Telegram (começa com -100...)
-                </label>
-                <input
-                  id="field-edit-channel-chat-id"
-                  type="text"
-                  required
-                  placeholder="-1001234567890"
-                  value={editChannelChatId}
-                  onChange={(e) => setEditChannelChatId(e.target.value)}
-                  className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                />
-                <span className="text-[11px] text-gray-500 mt-1 block">
-                  O bot do perfil deve permanecer como Administrador neste canal.
-                </span>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label htmlFor="field-edit-channel-topic-id" className="text-xs text-gray-400 block mb-1">
-                    ID do Tópico (Opcional)
-                  </label>
-                  <input
-                    id="field-edit-channel-topic-id"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    placeholder="Ex: 42"
-                    value={editChannelTopicId}
-                    onChange={(e) => {
-                      const clean = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
-                      setEditChannelTopicId(clean);
-                    }}
-                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="field-edit-channel-topic-name" className="text-xs text-gray-400 block mb-1">
-                    Nome do Tópico (Opcional)
-                  </label>
-                  <input
-                    id="field-edit-channel-topic-name"
-                    type="text"
-                    placeholder="Ex: Anúncios"
-                    value={editChannelTopicName}
-                    onChange={(e) => setEditChannelTopicName(e.target.value)}
-                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
-                  />
-                </div>
-              </div>
-              {editChannelChatId.trim() !== editingChannel.chat_id &&
-                affectedBroadcasts &&
-                affectedBroadcasts.will_be_cancelled.length + affectedBroadcasts.will_lose_target.length > 0 && (() => {
-                  const allAffected = [
-                    ...affectedBroadcasts.will_be_cancelled,
-                    ...affectedBroadcasts.will_lose_target,
-                  ];
-                  return (
-                    <div
-                      data-testid="channel-edit-affected-broadcasts"
-                      className="bg-amber-950/50 border border-amber-500/40 rounded-lg p-3 text-xs text-amber-200"
-                    >
-                      <strong className="block font-semibold">
-                        {allAffected.length === 1
-                          ? "1 agendamento pendente passará a usar o novo ID:"
-                          : `${allAffected.length} agendamentos pendentes passarão a usar o novo ID:`}
-                      </strong>
-                      {renderAffectedItemsList(allAffected)}
-                    </div>
-                  );
-                })()}
+            {/* Header Fixo */}
+            <div className="flex items-center justify-between pb-3 border-b border-gray-700/50 mb-3 shrink-0">
+              <h3 className="text-base font-semibold text-gray-100 flex items-center gap-2">
+                <Edit className="w-4 h-4 text-[#5288c1]" /> Editar Canal
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditChannelModal(false);
+                  setEditingChannel(null);
+                  setEditChannelTitle("");
+                  setEditChannelChatId("");
+                  setEditChannelTopicId("");
+                  setEditChannelTopicName("");
+                }}
+                className="text-gray-400 hover:text-white p-1 rounded transition cursor-pointer"
+                title="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <div className="mt-6 flex justify-end gap-2">
+
+            {/* Conteúdo com Rolagem */}
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
+              <p className="text-xs text-gray-400 leading-relaxed">
+                Atualize o título ou o Chat ID do canal do Telegram.
+              </p>
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="field-edit-channel-title" className="text-xs text-gray-400 block mb-1">Título do Canal</label>
+                  <input
+                    id="field-edit-channel-title"
+                    type="text"
+                    required
+                    placeholder="Ex: Canal de Novidades"
+                    value={editChannelTitle}
+                    onChange={(e) => setEditChannelTitle(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="field-edit-channel-chat-id" className="text-xs text-gray-400 block mb-1">
+                    Chat ID do Telegram (começa com -100...)
+                  </label>
+                  <input
+                    id="field-edit-channel-chat-id"
+                    type="text"
+                    required
+                    placeholder="-1001234567890"
+                    value={editChannelChatId}
+                    onChange={(e) => setEditChannelChatId(e.target.value)}
+                    className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                  />
+                  <span className="text-[11px] text-gray-500 mt-1 block">
+                    O bot do perfil deve permanecer como Administrador neste canal.
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label htmlFor="field-edit-channel-topic-id" className="text-xs text-gray-400 block mb-1">
+                      ID do Tópico (Opcional)
+                    </label>
+                    <input
+                      id="field-edit-channel-topic-id"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder="Ex: 42"
+                      value={editChannelTopicId}
+                      onChange={(e) => {
+                        const clean = e.target.value.replace(/\D/g, "").replace(/^0+/, "");
+                        setEditChannelTopicId(clean);
+                      }}
+                      className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="field-edit-channel-topic-name" className="text-xs text-gray-400 block mb-1">
+                      Nome do Tópico (Opcional)
+                    </label>
+                    <input
+                      id="field-edit-channel-topic-name"
+                      type="text"
+                      placeholder="Ex: Anúncios"
+                      value={editChannelTopicName}
+                      onChange={(e) => setEditChannelTopicName(e.target.value)}
+                      className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
+                    />
+                  </div>
+                </div>
+                {editChannelChatId.trim() !== editingChannel.chat_id &&
+                  affectedBroadcasts &&
+                  affectedBroadcasts.will_be_cancelled.length + affectedBroadcasts.will_lose_target.length > 0 && (() => {
+                    const allAffected = [
+                      ...affectedBroadcasts.will_be_cancelled,
+                      ...affectedBroadcasts.will_lose_target,
+                    ];
+                    return (
+                      <div
+                        data-testid="channel-edit-affected-broadcasts"
+                        className="bg-amber-950/50 border border-amber-500/40 rounded-lg p-3 text-xs text-amber-200"
+                      >
+                        <strong className="block font-semibold">
+                          {allAffected.length === 1
+                            ? "1 agendamento pendente passará a usar o novo ID:"
+                            : `${allAffected.length} agendamentos pendentes passarão a usar o novo ID:`}
+                        </strong>
+                        {renderAffectedItemsList(allAffected)}
+                      </div>
+                    );
+                  })()}
+              </div>
+            </div>
+
+            {/* Footer Fixo */}
+            <div className="pt-3 border-t border-gray-700/50 flex justify-end gap-2 shrink-0 mt-3">
               <button
                 type="button"
                 onClick={() => {
@@ -3980,14 +4021,14 @@ export default function Home() {
                   setEditChannelTopicName("");
                 }}
                 disabled={isSavingChannel}
-                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white disabled:opacity-50"
+                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white disabled:opacity-50 cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={isSavingChannel}
-                className="px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center gap-1.5"
+                className="px-4 py-2 text-xs bg-[#5288c1] hover:bg-[#4374a5] text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center gap-1.5 cursor-pointer shadow"
               >
                 {isSavingChannel ? (
                   <>
@@ -4008,58 +4049,60 @@ export default function Home() {
 
       {/* MODAL: EXCLUIR CANAL */}
       {showDeleteChannelModal && deletingChannel && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
-          <div className="bg-[#17212b] border border-red-500/40 rounded-xl max-w-md w-full p-6 shadow-2xl">
-            <h3 className="text-base font-semibold text-red-400 mb-2 flex items-center gap-2">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4 animate-in fade-in duration-200">
+          <div className="bg-[#17212b] border border-red-500/40 rounded-xl max-w-md w-full p-6 shadow-2xl flex flex-col max-h-[88vh]">
+            <h3 className="text-base font-semibold text-red-400 mb-2 flex items-center gap-2 shrink-0">
               <Trash2 className="w-4 h-4 text-red-400" /> Excluir Canal
             </h3>
-            <p className="text-sm text-gray-200 mb-2 leading-relaxed">
-              Deseja realmente remover o canal <strong>{deletingChannel.title}</strong> deste bot?
-            </p>
-            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-              O bot não enviará mais transmissões para este Chat ID ({deletingChannel.chat_id}).
-            </p>
-            {affectedBroadcasts && affectedBroadcasts.in_flight_count > 0 && (
-              <div
-                data-testid="channel-delete-in-flight-warning"
-                className="mb-4 bg-amber-950/60 border border-amber-500/50 rounded-lg p-3 text-xs text-amber-200"
-              >
-                <strong className="block font-semibold mb-1">
-                  ⚠️ Há {affectedBroadcasts.in_flight_count === 1 ? "1 envio em andamento" : `${affectedBroadcasts.in_flight_count} envios em andamento`} para este canal.
-                </strong>
-                <span>Aguarde a conclusão antes de excluir o canal.</span>
-              </div>
-            )}
-            {affectedBroadcasts &&
-              (affectedBroadcasts.will_be_cancelled.length > 0 ||
-                affectedBroadcasts.will_lose_target.length > 0) && (
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
+              <p className="text-sm text-gray-200 leading-relaxed">
+                Deseja realmente remover o canal <strong>{deletingChannel.title}</strong> deste bot?
+              </p>
+              <p className="text-xs text-gray-400 leading-relaxed">
+                O bot não enviará mais transmissões para este Chat ID ({deletingChannel.chat_id}).
+              </p>
+              {affectedBroadcasts && affectedBroadcasts.in_flight_count > 0 && (
                 <div
-                  data-testid="channel-delete-affected-broadcasts"
-                  className="mb-5 space-y-3 bg-[#202b36] border border-red-500/30 rounded-lg p-3 text-xs"
+                  data-testid="channel-delete-in-flight-warning"
+                  className="bg-amber-950/60 border border-amber-500/50 rounded-lg p-3 text-xs text-amber-200"
                 >
-                  {affectedBroadcasts.will_be_cancelled.length > 0 && (
-                    <div className="text-red-200">
-                      <strong className="block font-semibold">
-                        {affectedBroadcasts.will_be_cancelled.length === 1
-                          ? "1 agendamento será cancelado (tinha só este canal):"
-                          : `${affectedBroadcasts.will_be_cancelled.length} agendamentos serão cancelados (tinham só este canal):`}
-                      </strong>
-                      {renderAffectedItemsList(affectedBroadcasts.will_be_cancelled)}
-                    </div>
-                  )}
-                  {affectedBroadcasts.will_lose_target.length > 0 && (
-                    <div className="text-amber-200">
-                      <strong className="block font-semibold">
-                        {affectedBroadcasts.will_lose_target.length === 1
-                          ? "1 agendamento perde este destino (continua nos demais canais):"
-                          : `${affectedBroadcasts.will_lose_target.length} agendamentos perdem este destino (continuam nos demais canais):`}
-                      </strong>
-                      {renderAffectedItemsList(affectedBroadcasts.will_lose_target)}
-                    </div>
-                  )}
+                  <strong className="block font-semibold mb-1">
+                    ⚠️ Há {affectedBroadcasts.in_flight_count === 1 ? "1 envio em andamento" : `${affectedBroadcasts.in_flight_count} envios em andamento`} para este canal.
+                  </strong>
+                  <span>Aguarde a conclusão antes de excluir o canal.</span>
                 </div>
               )}
-            <div className="flex justify-end gap-2">
+              {affectedBroadcasts &&
+                (affectedBroadcasts.will_be_cancelled.length > 0 ||
+                  affectedBroadcasts.will_lose_target.length > 0) && (
+                  <div
+                    data-testid="channel-delete-affected-broadcasts"
+                    className="space-y-3 bg-[#202b36] border border-red-500/30 rounded-lg p-3 text-xs"
+                  >
+                    {affectedBroadcasts.will_be_cancelled.length > 0 && (
+                      <div className="text-red-200">
+                        <strong className="block font-semibold">
+                          {affectedBroadcasts.will_be_cancelled.length === 1
+                            ? "1 agendamento será cancelado (tinha só este canal):"
+                            : `${affectedBroadcasts.will_be_cancelled.length} agendamentos serão cancelados (tinham só este canal):`}
+                        </strong>
+                        {renderAffectedItemsList(affectedBroadcasts.will_be_cancelled)}
+                      </div>
+                    )}
+                    {affectedBroadcasts.will_lose_target.length > 0 && (
+                      <div className="text-amber-200">
+                        <strong className="block font-semibold">
+                          {affectedBroadcasts.will_lose_target.length === 1
+                            ? "1 agendamento perde este destino (continua nos demais canais):"
+                            : `${affectedBroadcasts.will_lose_target.length} agendamentos perdem este destino (continuam nos demais canais):`}
+                        </strong>
+                        {renderAffectedItemsList(affectedBroadcasts.will_lose_target)}
+                      </div>
+                    )}
+                  </div>
+                )}
+            </div>
+            <div className="flex justify-end gap-2 pt-3 border-t border-gray-700/50 shrink-0 mt-3">
               <button
                 type="button"
                 onClick={() => {
@@ -4067,7 +4110,7 @@ export default function Home() {
                   setDeletingChannel(null);
                 }}
                 disabled={isDeletingChannel}
-                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white disabled:opacity-50"
+                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white disabled:opacity-50 cursor-pointer"
               >
                 Cancelar
               </button>
@@ -4076,7 +4119,7 @@ export default function Home() {
                 onClick={handleConfirmDeleteChannel}
                 disabled={isDeletingChannel || (affectedBroadcasts?.in_flight_count ?? 0) > 0}
                 title={(affectedBroadcasts?.in_flight_count ?? 0) > 0 ? "Aguarde o envio em andamento terminar para excluir" : "Confirmar Exclusão"}
-                className="px-4 py-2 text-xs bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center gap-1.5 shadow"
+                className="px-4 py-2 text-xs bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium transition disabled:opacity-50 flex items-center gap-1.5 shadow cursor-pointer"
               >
                 {isDeletingChannel ? (
                   <>
@@ -4255,7 +4298,6 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => {
-                  setShowDestinationsModal(false);
                   setShowAddChannelModal(true);
                 }}
                 className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-[#5288c1] hover:text-white px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 font-medium cursor-pointer"
