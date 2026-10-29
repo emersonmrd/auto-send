@@ -54,6 +54,21 @@ export interface Channel {
   is_forum: boolean;
 }
 
+// Situação do bot no destino, como o getChatMember a informa (#107).
+export type BotMemberStatus = "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
+
+// GET /api/v1/channels/{channel_id}/bot-permissions (#107).
+export interface BotPermissions {
+  chat_type: ChannelChatType | null;
+  is_forum: boolean;
+  bot_status: BotMemberStatus;
+  can_send_messages: boolean;
+  can_send_photos: boolean;
+  can_send_videos: boolean;
+  can_send_polls: boolean;
+  checked_at: string;
+}
+
 export interface ChannelCreateResponse {
   id: string;
   profile_id: string;

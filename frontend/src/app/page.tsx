@@ -18,6 +18,7 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
 import ChatKindBadge from "@/components/ChatKindBadge";
+import BotPermissionsDialog from "@/components/BotPermissionsDialog";
 import { allowsPublicPoll } from "@/lib/chatKind";
 import ConfirmDialog, { ConfirmDialogProps } from "@/components/ConfirmDialog";
 import {
@@ -297,6 +298,8 @@ export default function Home() {
   // Modal de Editar Canal
   const [showEditChannelModal, setShowEditChannelModal] = useState(false);
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
+  const [permissionsChannel, setPermissionsChannel] = useState<Channel | null>(null);
+  const closePermissions = useCallback(() => setPermissionsChannel(null), []);
   const [editChannelTitle, setEditChannelTitle] = useState("");
   const [editChannelChatId, setEditChannelChatId] = useState("");
   const [isSavingChannel, setIsSavingChannel] = useState(false);
@@ -2240,6 +2243,24 @@ export default function Home() {
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
+                            setPermissionsChannel(c);
+                          }}
+                          // Enter/Espaço no botão não pode chegar ao chip, que trataria a tecla como seleção do destino.
+                          onKeyDown={(e) => e.stopPropagation()}
+                          className={`p-0.5 rounded transition ${
+                            isChecked
+                              ? "hover:bg-white/20 text-white"
+                              : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
+                          }`}
+                          aria-label={`O que o bot pode fazer em ${c.title}`}
+                          title={`O que o bot pode fazer em ${c.title}`}
+                        >
+                          <Info className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             handleOpenEditChannel(c);
                           }}
                           className={`p-0.5 rounded transition ${
@@ -2247,6 +2268,7 @@ export default function Home() {
                               ? "hover:bg-white/20 text-white"
                               : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
                           }`}
+                          aria-label="Editar Canal"
                           title="Editar Canal"
                         >
                           <Edit className="w-3 h-3" />
@@ -2262,6 +2284,7 @@ export default function Home() {
                               ? "hover:bg-red-500/30 text-white hover:text-red-200"
                               : "hover:bg-red-900/40 text-gray-400 hover:text-red-400"
                           }`}
+                          aria-label="Excluir Canal"
                           title="Excluir Canal"
                         >
                           <Trash2 className="w-3 h-3" />
@@ -3538,6 +3561,10 @@ export default function Home() {
             </div>
           </form>
         </div>
+      )}
+
+      {permissionsChannel && (
+        <BotPermissionsDialog apiBaseUrl={API_BASE_URL} channel={permissionsChannel} onClose={closePermissions} />
       )}
 
       {/* MODAL: ADICIONAR CANAL */}

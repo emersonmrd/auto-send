@@ -4,7 +4,11 @@ import logging
 import re
 from typing import Any, Callable, Dict, List, Optional
 import httpx
+from datetime import datetime, timezone
+from src.domain.channels.bot_permissions import BotMemberStatus, BotPermissions, SendPermissions
+from src.domain.channels.channel import ChatType
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
+from src.domain.ports.bot_permissions_gateway import IBotPermissionsGateway
 from src.domain.ports.chat_discovery_gateway import (
     BotInUseError,
     BotNotChannelAdminError,
@@ -124,7 +128,7 @@ def classify_telegram_error(
     return DeliveryFailureCategory.OTHER, clean_desc or (f"HTTP {status_code}" if status_code else "Unknown error")
 
 
-class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
+class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissionsGateway):
     def __init__(
         self,
         base_url: Optional[str] = None,
@@ -569,6 +573,45 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             if in_group and isinstance(chat, dict) and chat.get("type") in _GROUP_CHAT_TYPES:
                 return
         raise BotNotChannelAdminError("Bot is not administrator in the channel")
+
+    async def read_bot_permissions(self, bot_token: str, chat_id: str) -> BotPermissions:
+        me = await self._call_member_api(bot_token, "getMe", {})
+        bot_id = me.get("id") if isinstance(me, dict) else None
+        if not bot_id:
+            raise TelegramUnavailableError("Could not reach Telegram, try again")
+        member = await self._call_member_api(bot_token, "getChatMember", {"chat_id": chat_id, "user_id": str(bot_id)})
+        chat = await self._call_member_api(bot_token, "getChat", {"chat_id": chat_id})
+        member = member if isinstance(member, dict) else {}
+        chat = chat if isinstance(chat, dict) else {}
+        if chat.get("type") not in (ChatType.CHANNEL.value, ChatType.SUPERGROUP.value):
+            raise BotNotChannelAdminError("Bot is not administrator in the channel")
+        chat_type = ChatType(chat["type"])
+        try:
+            status = BotMemberStatus(member.get("status"))
+        except ValueError:
+            status = BotMemberStatus.LEFT
+        # Restrito com is_member=False saiu do grupo.
+        if status is BotMemberStatus.RESTRICTED and member.get("is_member") is False:
+            status = BotMemberStatus.LEFT
+        return BotPermissions.evaluate(
+            chat_type=chat_type,
+            is_forum=chat_type is ChatType.SUPERGROUP and chat.get("is_forum") is True,
+            bot_status=status,
+            # Mesma leitura do vínculo: administrador sem o campo pode publicar.
+            can_post_messages=member.get("can_post_messages", True) is not False,
+            own=self._to_send_permissions(member) if status is BotMemberStatus.RESTRICTED else None,
+            chat_default=self._to_send_permissions(chat.get("permissions") or {}),
+            checked_at=datetime.now(timezone.utc),
+        )
+
+    @staticmethod
+    def _to_send_permissions(raw: Dict[str, Any]) -> SendPermissions:
+        return SendPermissions(
+            can_send_messages=raw.get("can_send_messages") is True,
+            can_send_photos=raw.get("can_send_photos") is True,
+            can_send_videos=raw.get("can_send_videos") is True,
+            can_send_polls=raw.get("can_send_polls") is True,
+        )
 
     async def _call_member_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
         try:

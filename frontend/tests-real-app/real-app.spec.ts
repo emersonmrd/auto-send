@@ -19,6 +19,8 @@ const REJECTED_TOKEN = "100000000:AAFakeTokenTheTelegramRejects_0001";
 const WEBHOOK_TOKEN = "200000000:AAFakeTokenWithAnActiveWebhook_0002";
 const botToken = REAL_BOT_TOKEN || FAKE_TOKEN;
 const channelId = REAL_CHANNEL_ID || "-1001234567890";
+// Supergrupo de teste (#99, #100): o real, se houver, ou o da API falsa.
+const SUPERGROUP_ID = REAL_SUPERGROUP_ID || "-1005555555555";
 const profileName = `Perfil ${Date.now()}`;
 // PNG 1x1 válido.
 // O backend confere a assinatura (caixa ftyp de um MP4) antes de aceitar o vídeo (#39).
@@ -35,6 +37,27 @@ async function telegramCalls(page: Page): Promise<TelegramCall[]> {
 
 async function clearTelegramCalls(page: Page) {
   if (!USES_REAL_TELEGRAM) await page.request.delete(`http://127.0.0.1:${FAKE_TELEGRAM_PORT}/__calls`);
+}
+
+// Deixa marcados só os destinos pedidos. Com a API falsa a suíte vincula mais canais (busca, link, webhook)
+// do que com o Telegram real, então desmarcar um destino só não basta.
+async function selectOnlyDestinations(page: Page, titles: string[]) {
+  const chips = page.getByRole("button").filter({ has: page.getByRole("button", { name: /^O que o bot pode fazer em / }) });
+  for (const chip of await chips.all()) {
+    const title = await chip.getByRole("button", { name: /^O que o bot pode fazer em / }).getAttribute("aria-label");
+    const wanted = titles.some((t) => title === `O que o bot pode fazer em ${t}`);
+    const selected = (await chip.locator("svg.lucide-check").count()) > 0;
+    if (wanted !== selected) await chip.click();
+  }
+}
+
+async function fillPoll(page: Page, question: string) {
+  await page.getByLabel("Criar Enquete").click();
+  const dialog = page.getByRole("dialog", { name: "Criar Enquete do Telegram" });
+  await dialog.getByPlaceholder("Ex: Qual tema vocês querem no próximo conteúdo?").fill(question);
+  await dialog.getByPlaceholder("Opção 1").fill("Sim");
+  await dialog.getByPlaceholder("Opção 2").fill("Não");
+  return dialog;
 }
 
 async function openProfile(page: Page) {
@@ -298,7 +321,7 @@ test.describe.serial("aplicação real", () => {
   // Por último: com mais um destino vinculado, os envios acima iriam para dois chats.
   test("vincula um supergrupo com o bot só como membro e mostra o tipo lido do Telegram (#99, #100)", async ({ page }) => {
     test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
-    const supergroupId = REAL_SUPERGROUP_ID || "-1005555555555";
+    const supergroupId = SUPERGROUP_ID;
     await openProfile(page);
     await page.getByRole("button", { name: "Adicionar Canal" }).click();
     await page.getByPlaceholder("Ex: Canal de Novidades").fill("Supergrupo de Teste");
@@ -314,6 +337,81 @@ test.describe.serial("aplicação real", () => {
       // Bot só membro (#100): o getChat do ensure_bot_can_post confere que é grupo; o segundo lê o tipo (#99).
       expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat", "getChat"]);
       expect(calls[2].query).toEqual({ chat_id: supergroupId });
+    }
+  });
+
+  test("o painel do supergrupo mostra a situação do bot e o que o grupo deixa enviar (#107)", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
+    await openProfile(page);
+    await page.getByRole("button", { name: "O que o bot pode fazer em Supergrupo de Teste", exact: true }).click();
+
+    const dialog = page.getByRole("dialog", { name: "O que o bot pode fazer em Supergrupo de Teste" });
+    await expect(dialog).toContainText(/Criador|Administrador|Membro|Restrito/);
+    await expect(dialog).toContainText(/Lido do Telegram em/);
+    if (!USES_REAL_TELEGRAM) {
+      await expect(dialog).toContainText("👥 Grupo");
+      await expect(dialog).toContainText("Membro");
+      await expect(dialog.getByRole("img", { name: "não pode enviar" })).toHaveCount(1);
+      await expect(dialog).toContainText("o grupo não deixa membros enviarem fotos");
+      const calls = await telegramCalls(page);
+      expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat"]);
+      expect(calls[2].query).toEqual({ chat_id: "-1005555555555" });
+    }
+  });
+
+  // Grupo × canal: daqui em diante o supergrupo está vinculado, e a página abre com todos os destinos marcados.
+  test("envia texto só para o supergrupo (#100)", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
+    await openProfile(page);
+    await selectOnlyDestinations(page, ["Supergrupo de Teste"]);
+    await page.getByPlaceholder("Escreva a mensagem do canal").fill("Teste de texto no supergrupo");
+    await page.getByLabel("Enviar Agora").click();
+
+    await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
+    if (!USES_REAL_TELEGRAM) {
+      const [call] = await telegramCalls(page);
+      expect(call.method).toBe("sendMessage");
+      expect(call.fields).toMatchObject({ chat_id: SUPERGROUP_ID, text: "Teste de texto no supergrupo" });
+    }
+  });
+
+  test("enquete com votos visíveis vai para o supergrupo (#99)", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
+    await openProfile(page);
+    await selectOnlyDestinations(page, ["Supergrupo de Teste"]);
+    const dialog = await fillPoll(page, "Enquete pública no supergrupo?");
+    await dialog.getByRole("checkbox", { name: /Voto Anônimo/ }).uncheck();
+    await dialog.getByRole("button", { name: "Salvar", exact: true }).click();
+    await expect(page.getByText("(Votos visíveis)")).toBeVisible();
+
+    await page.getByLabel("Enviar Agora").click();
+
+    await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
+    if (!USES_REAL_TELEGRAM) {
+      const [call] = await telegramCalls(page);
+      expect(call.method).toBe("sendPoll");
+      expect(call.fields).toMatchObject({ chat_id: SUPERGROUP_ID, question: "Enquete pública no supergrupo?", is_anonymous: false });
+    }
+  });
+
+  test("com canal e supergrupo nos destinos, a enquete sai anônima para os dois (#99)", async ({ page }) => {
+    test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
+    await openProfile(page);
+    await selectOnlyDestinations(page, ["Canal de Teste", "Supergrupo de Teste"]);
+    const dialog = await fillPoll(page, "Enquete anônima no canal e no grupo?");
+    const anonymous = dialog.getByRole("checkbox", { name: /Voto Anônimo/ });
+    // O Telegram recusa enquete pública em canal: com um canal entre os destinos, o voto anônimo fica travado.
+    await expect(anonymous).toBeChecked();
+    await expect(anonymous).toBeDisabled();
+    await dialog.getByRole("button", { name: "Salvar", exact: true }).click();
+
+    await page.getByLabel("Enviar Agora").click();
+
+    await expect(page.getByText("Disparado com sucesso para 2 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
+    if (!USES_REAL_TELEGRAM) {
+      const polls = (await telegramCalls(page)).filter((c) => c.method === "sendPoll");
+      expect(polls.map((c) => c.fields.chat_id).sort()).toEqual([channelId, SUPERGROUP_ID].sort());
+      expect(polls.map((c) => c.fields.is_anonymous)).toEqual([true, true]);
     }
   });
 });
