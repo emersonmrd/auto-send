@@ -142,6 +142,8 @@ test.describe.serial("aplicação real", () => {
     if (USES_REAL_TELEGRAM && !hasRealVideo) {
       test.skip(true, "precisa de um vídeo válido para o Telegram real");
     }
+    // O Telegram real leva mais de 30 s (o timeout padrão do teste) para receber o vídeo de 7,9 MB.
+    test.setTimeout(90_000);
     const videoBuffer = USES_REAL_TELEGRAM && hasRealVideo ? fs.readFileSync(realVideoPath) : FAKE_MP4;
 
     await openProfile(page);
