@@ -2263,6 +2263,7 @@ export default function Home() {
                             e.stopPropagation();
                             handleOpenEditChannel(c);
                           }}
+                          onKeyDown={(e) => e.stopPropagation()}
                           className={`p-0.5 rounded transition ${
                             isChecked
                               ? "hover:bg-white/20 text-white"
@@ -2279,6 +2280,7 @@ export default function Home() {
                             e.stopPropagation();
                             handleOpenDeleteChannel(c);
                           }}
+                          onKeyDown={(e) => e.stopPropagation()}
                           className={`p-0.5 rounded transition ${
                             isChecked
                               ? "hover:bg-red-500/30 text-white hover:text-red-200"

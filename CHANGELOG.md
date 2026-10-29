@@ -17,6 +17,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Antes de cada envio (imediato, "enviar agora" ou agendado), o backend confere se o bot pode mandar aquele conteúdo ao destino: texto, foto, vídeo ou enquete. Sem permissão, o destino aparece como falha com o motivo em português (ex.: "O bot não pode enviar fotos neste grupo"), nenhum envio é tentado a ele, e os outros destinos recebem normalmente. Se o Telegram não responder à consulta, o envio segue como antes (#107).
 
 ### Fixed
+- Botões "Editar Canal" e "Excluir Canal" nos chips de destino agora abrem a edição e o diálogo de exclusão ao pressionar Enter ou Espaço, sem alternar a seleção do destino (#114).
 - Enquete criada pela API sem o campo `poll_is_anonymous` saía pública: o FastAPI trata booleano de formulário ausente como `false`. Agora a ausência vale como voto anônimo, o padrão documentado (#99).
 - Cancelar o envio várias vezes não publica mais a mensagem repetida no canal: antes, o backend continuava o disparo depois que o navegador fechava a conexão (#86).
 - A barra de progresso não estaciona mais em 97% enquanto o Telegram processa o vídeo: a segunda fase mostra animação contínua, cronômetro e tamanho do arquivo, e crava 100% na confirmação (#86).
