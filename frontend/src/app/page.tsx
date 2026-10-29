@@ -2328,21 +2328,7 @@ export default function Home() {
                 <span className="text-xs text-gray-400 mr-1 flex items-center gap-1 shrink-0">
                   <Tv className="w-3.5 h-3.5" /> Canais Destino:
                 </span>
-                {channels.length > 4 ? (
-                  <button
-                    type="button"
-                    onClick={() => setShowDestinationsModal(true)}
-                    className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-gray-200 hover:text-white px-3 py-1.5 rounded-full transition flex items-center gap-1.5 border border-[#3b6694]/50 font-medium shrink-0 cursor-pointer shadow-sm group"
-                    title="Abrir lista de canais de destino"
-                  >
-                    <Tv className="w-3.5 h-3.5 text-[#5288c1] group-hover:text-white transition-colors" />
-                    <span>
-                      Canais Destino ({selectedChannelIds.length}/{channels.length} selecionados)
-                    </span>
-                    <ChevronDown className="w-3 h-3 text-gray-400 group-hover:text-white transition-colors" />
-                  </button>
-                ) : (
-                  <div className="flex items-center space-x-2 overflow-x-auto max-w-[42vw] py-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
+                <div className="flex items-center space-x-2 overflow-x-auto max-w-[38vw] py-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
                     {channels.map((c) => {
                       const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
                       const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
@@ -2436,6 +2422,19 @@ export default function Home() {
                       );
                     })}
                   </div>
+                {channels.length > 4 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDestinationsModal(true)}
+                    className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-gray-200 hover:text-white px-2.5 py-1 rounded-full transition flex items-center gap-1.5 border border-[#3b6694]/50 font-medium shrink-0 cursor-pointer shadow-sm group"
+                    title="Abrir lista de canais de destino em modal com busca e rolagem vertical"
+                  >
+                    <Tv className="w-3.5 h-3.5 text-[#5288c1] group-hover:text-white transition-colors" />
+                    <span>
+                      Canais Destino ({selectedChannelIds.length}/{channels.length})
+                    </span>
+                    <ChevronDown className="w-3 h-3 text-gray-400 group-hover:text-white transition-colors" />
+                  </button>
                 )}
 
                 <button
