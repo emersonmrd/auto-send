@@ -41,9 +41,12 @@ async def setup_db(monkeypatch):
     monkeypatch.setattr(telegram_gateway, "resolve_chat", _default_resolve)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    try:
+        yield
+    finally:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await engine.dispose()
 
 @pytest_asyncio.fixture
 async def client():
