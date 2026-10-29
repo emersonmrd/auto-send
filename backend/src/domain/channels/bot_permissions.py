@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional
+from typing import Iterable, Optional
 
 from src.domain.channels.channel import Channel, ChatType
 
@@ -15,6 +15,15 @@ class BotMemberStatus(str, Enum):
     RESTRICTED = "restricted"
     LEFT = "left"
     KICKED = "kicked"
+
+
+class SendContent(str, Enum):
+    """Cada tipo de envio que o Telegram libera em separado (#107)."""
+
+    TEXT = "text"
+    PHOTO = "photo"
+    VIDEO = "video"
+    POLL = "poll"
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,20 @@ class BotPermissions:
         Channel._check_kind(self.chat_type, self.is_forum)
         if self.checked_at.utcoffset() != timedelta(0):
             raise ValueError("checked_at must be in UTC")
+
+    @property
+    def is_outside_chat(self) -> bool:
+        return self.bot_status in (BotMemberStatus.LEFT, BotMemberStatus.KICKED)
+
+    def denied(self, contents: Iterable[SendContent]) -> Optional[SendContent]:
+        """O primeiro conteúdo, na ordem dada, que o bot não pode enviar; None se pode todos."""
+        allowed = {
+            SendContent.TEXT: self.can_send_messages,
+            SendContent.PHOTO: self.can_send_photos,
+            SendContent.VIDEO: self.can_send_videos,
+            SendContent.POLL: self.can_send_polls,
+        }
+        return next((c for c in contents if not allowed[c]), None)
 
     @classmethod
     def evaluate(

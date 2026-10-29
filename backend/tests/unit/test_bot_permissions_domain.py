@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from src.domain.channels.bot_permissions import BotMemberStatus, BotPermissions, SendPermissions
+from src.domain.channels.bot_permissions import BotMemberStatus, BotPermissions, SendContent, SendPermissions
 from src.domain.channels.channel import ChatType
 
 NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
@@ -154,3 +154,41 @@ def test_basic_group_has_no_bot_permissions():
 def test_only_supergroups_can_be_forums():
     with pytest.raises(ValueError, match=r"^Only supergroups can be forums$"):
         evaluate(ChatType.CHANNEL, is_forum=True)
+
+
+# #107 parte B: o envio confere, antes de tentar, se o bot pode mandar cada conteúdo da mensagem.
+def test_send_content_values():
+    assert [c.value for c in SendContent] == ["text", "photo", "video", "poll"]
+
+
+@pytest.mark.parametrize(
+    "content, sends_",
+    [
+        (SendContent.TEXT, SendPermissions(can_send_messages=True)),
+        (SendContent.PHOTO, SendPermissions(can_send_photos=True)),
+        (SendContent.VIDEO, SendPermissions(can_send_videos=True)),
+        (SendContent.POLL, SendPermissions(can_send_polls=True)),
+    ],
+)
+def test_each_content_is_allowed_only_by_its_own_permission(content, sends_):
+    p = evaluate(chat_default=sends_)
+    assert p.denied([content]) is None
+    others = [c for c in SendContent if c is not content]
+    assert [p.denied([c]) for c in others] == others
+
+
+def test_denied_returns_the_first_forbidden_content_in_the_given_order():
+    p = evaluate(chat_default=ONLY_TEXT)
+    assert p.denied([SendContent.TEXT, SendContent.VIDEO, SendContent.PHOTO]) is SendContent.VIDEO
+
+
+def test_nothing_required_is_never_denied():
+    assert evaluate(chat_default=NONE).denied([]) is None
+
+
+@pytest.mark.parametrize(
+    "status, outside",
+    [(s, s in (BotMemberStatus.LEFT, BotMemberStatus.KICKED)) for s in BotMemberStatus],
+)
+def test_is_outside_chat_only_when_left_or_kicked(status, outside):
+    assert evaluate(status=status).is_outside_chat is outside

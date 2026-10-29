@@ -35,6 +35,11 @@ async function telegramCalls(page: Page): Promise<TelegramCall[]> {
   return res.json();
 }
 
+// Só os envios: antes de cada um o backend lê as permissões do bot (getMe, getChatMember, getChat, #107).
+async function sentCalls(page: Page): Promise<TelegramCall[]> {
+  return (await telegramCalls(page)).filter((c) => c.method.startsWith("send"));
+}
+
 async function clearTelegramCalls(page: Page) {
   if (!USES_REAL_TELEGRAM) await page.request.delete(`http://127.0.0.1:${FAKE_TELEGRAM_PORT}/__calls`);
 }
@@ -114,7 +119,7 @@ test.describe.serial("aplicação real", () => {
 
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
     if (!USES_REAL_TELEGRAM) {
-      const [call] = await telegramCalls(page);
+      const [call] = await sentCalls(page);
       expect(call.method).toBe("sendMessage");
       expect(call.fields).toMatchObject({ chat_id: channelId, text: "Teste de texto da aplicação real" });
     }
@@ -136,7 +141,7 @@ test.describe.serial("aplicação real", () => {
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
 
     if (!USES_REAL_TELEGRAM) {
-      const [call] = await telegramCalls(page);
+      const [call] = await sentCalls(page);
       expect(call.method).toBe("sendPoll");
       expect(call.fields.chat_id).toBe(channelId);
       expect(call.fields.question).toBe("Qual seu framework favorito?");
@@ -152,7 +157,7 @@ test.describe.serial("aplicação real", () => {
 
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
     if (!USES_REAL_TELEGRAM) {
-      const [call] = await telegramCalls(page);
+      const [call] = await sentCalls(page);
       expect(call.method).toBe("sendPhoto");
       expect(call.fields).toMatchObject({ chat_id: channelId, caption: "Legenda da foto" });
       expect(Object.keys(call.files)).toEqual(["photo"]);
@@ -178,7 +183,7 @@ test.describe.serial("aplicação real", () => {
 
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 60_000 });
     if (!USES_REAL_TELEGRAM) {
-      const [call] = await telegramCalls(page);
+      const [call] = await sentCalls(page);
       expect(call.method).toBe("sendVideo");
       expect(call.fields).toMatchObject({ chat_id: channelId, caption: "Legenda do vídeo", supports_streaming: "true" });
       expect(Object.keys(call.files)).toEqual(["video"]);
@@ -369,7 +374,7 @@ test.describe.serial("aplicação real", () => {
 
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
     if (!USES_REAL_TELEGRAM) {
-      const [call] = await telegramCalls(page);
+      const [call] = await sentCalls(page);
       expect(call.method).toBe("sendMessage");
       expect(call.fields).toMatchObject({ chat_id: SUPERGROUP_ID, text: "Teste de texto no supergrupo" });
     }
@@ -388,7 +393,7 @@ test.describe.serial("aplicação real", () => {
 
     await expect(page.getByText("Disparado com sucesso para 1 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
     if (!USES_REAL_TELEGRAM) {
-      const [call] = await telegramCalls(page);
+      const [call] = await sentCalls(page);
       expect(call.method).toBe("sendPoll");
       expect(call.fields).toMatchObject({ chat_id: SUPERGROUP_ID, question: "Enquete pública no supergrupo?", is_anonymous: false });
     }
@@ -409,9 +414,27 @@ test.describe.serial("aplicação real", () => {
 
     await expect(page.getByText("Disparado com sucesso para 2 canal(is)!").first()).toBeVisible({ timeout: 30_000 });
     if (!USES_REAL_TELEGRAM) {
-      const polls = (await telegramCalls(page)).filter((c) => c.method === "sendPoll");
+      const polls = (await sentCalls(page)).filter((c) => c.method === "sendPoll");
       expect(polls.map((c) => c.fields.chat_id).sort()).toEqual([channelId, SUPERGROUP_ID].sort());
       expect(polls.map((c) => c.fields.is_anonymous)).toEqual([true, true]);
     }
+  });
+
+  test("foto para grupo que proíbe fotos: o grupo falha com o motivo e o canal recebe (#107)", async ({ page }) => {
+    // O supergrupo da API falsa proíbe fotos aos membros; o supergrupo real de teste pode liberar.
+    test.skip(USES_REAL_TELEGRAM, "depende das permissões do supergrupo da API falsa");
+    await openProfile(page);
+    await selectOnlyDestinations(page, ["Canal de Teste", "Supergrupo de Teste"]);
+    await page
+      .locator('input[type="file"]')
+      .setInputFiles({ name: "foto.png", mimeType: "image/png", buffer: PHOTO });
+    await page.getByPlaceholder("Escreva a mensagem do canal").fill("Foto para o canal e o grupo");
+    await page.getByLabel("Enviar Agora").click();
+
+    await expect(page.getByText(/Envio parcial \(1 enviado\(s\)\)/).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(/O bot não pode enviar fotos neste grupo/).first()).toBeVisible();
+    const sends = await sentCalls(page);
+    // Nenhuma tentativa ao grupo sem permissão: só o canal recebeu o sendPhoto.
+    expect(sends.map((c) => [c.method, c.fields.chat_id])).toEqual([["sendPhoto", channelId]]);
   });
 });

@@ -178,7 +178,8 @@ profile_repo = SqlAlchemyProfileRepository(session_factory)
 channel_repo = SqlAlchemyChannelRepository(session_factory)
 broadcast_repo = SqlAlchemyBroadcastRepository(session_factory)
 message_template_repo = SqlAlchemyMessageTemplateRepository(session_factory)
-telegram_gateway = TelegramGatewayHttp()
+# Confere as permissões do bot antes de cada envio (#107); os testes de gateway a desligam por padrão.
+telegram_gateway = TelegramGatewayHttp(check_send_permissions=True)
 
 scheduler_service = AutomationSchedulerService(
     broadcast_repo=broadcast_repo,

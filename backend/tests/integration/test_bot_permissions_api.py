@@ -108,3 +108,11 @@ async def test_telegram_unavailable_is_503(client, error):
     resp = await client.get("/api/v1/channels/c-1/bot-permissions")
     assert resp.status_code == 503
     assert resp.json() == {"detail": "Could not reach Telegram, try again"}
+
+
+async def test_the_app_checks_send_permissions_before_every_send():
+    # Envio imediato, dispatch-now e agendado passam pelo mesmo gateway (#107 parte B).
+    from src.presentation.main import scheduler_service, telegram_gateway
+
+    assert telegram_gateway.check_send_permissions is True
+    assert scheduler_service.telegram_gateway is telegram_gateway

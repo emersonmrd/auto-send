@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional
 from urllib.parse import urlparse
+from src.domain.channels.bot_permissions import SendContent
 
 # Margem para o datetime-local do navegador (sem segundos) e relógios levemente atrasados; vale para POST e PATCH.
 SCHEDULE_CLOCK_TOLERANCE = timedelta(seconds=60)
@@ -301,6 +302,18 @@ class BroadcastMessage:
             return DispatchStrategy.SINGLE_MEDIA_WITH_CAPTION
         
         return DispatchStrategy.SPLIT_TEXT_THEN_MEDIA
+
+    def required_contents(self) -> List[SendContent]:
+        """O que o bot precisa poder enviar no destino, na ordem do despacho (#107)."""
+        strategy = self.get_dispatch_strategy()
+        if strategy is DispatchStrategy.POLL:
+            return [SendContent.POLL]
+        if strategy is DispatchStrategy.TEXT_ONLY:
+            return [SendContent.TEXT]
+        media = SendContent.PHOTO if self.media.media_type is MediaType.PHOTO else SendContent.VIDEO
+        if strategy is DispatchStrategy.SPLIT_TEXT_THEN_MEDIA:
+            return [SendContent.TEXT, media]
+        return [media]
 
     def finish_dispatch(self, delivered: int, total: int) -> None:
         if not 0 <= delivered <= total:

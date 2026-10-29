@@ -137,6 +137,20 @@ test.describe("extractApiError", () => {
     ).toBe("Limite de requisições do Telegram excedido. Aguarde alguns instantes antes de tentar novamente.");
   });
 
+  test("traduz as recusas da conferência de permissões antes do envio (#107)", () => {
+    const cases: Array<[string, string]> = [
+      ["Bot cannot send text messages in this group", "mensagens de texto"],
+      ["Bot cannot send photos in this group", "fotos"],
+      ["Bot cannot send videos in this group", "vídeos"],
+      ["Bot cannot send polls in this group", "enquetes"],
+    ];
+    for (const [detail, noun] of cases) {
+      expect(formatDeliveryFailureReason("NO_POST_PERMISSION", detail)).toBe(
+        `O bot não pode enviar ${noun} neste grupo: as permissões do grupo não deixam. Veja o painel "i" do destino.`
+      );
+    }
+  });
+
   test("traduz erros do Telegram passados diretamente como detail ou no fallback do formatDeliveryFailureReason (Issue #57)", () => {
     expect(
       extractApiError({ detail: "Bad Request: chat not found" }, "fallback")
