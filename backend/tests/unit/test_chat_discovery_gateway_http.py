@@ -2,6 +2,7 @@ import pytest
 import httpx
 from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
 from src.domain.ports.chat_discovery_gateway import (
+    BotCannotSendInGroupError,
     BotInUseError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
@@ -366,6 +367,74 @@ async def test_ensure_bot_can_post_rejects_non_admin_or_admin_without_post_permi
     with pytest.raises(BotNotChannelAdminError, match=r"^Bot is not administrator in the channel$") as exc:
         await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
     assert TOKEN not in str(exc.value)
+
+
+# Issue #100: em grupo, o bot só precisa ser membro; administrador é exigência de canal.
+def member_handler(member: dict, chat: dict | None):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 123456789}})
+        if req.url.path.endswith("/getChatMember"):
+            return httpx.Response(200, json={"ok": True, "result": member})
+        if req.url.path.endswith("/getChat") and chat is not None:
+            return httpx.Response(200, json={"ok": True, "result": chat})
+        return httpx.Response(400, json={"ok": False, "error_code": 400, "description": "Bad Request: chat not found"})
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "member, chat",
+    [
+        ({"status": "member"}, {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": True}}),
+        ({"status": "member"}, {"id": -1001234567890, "type": "supergroup"}),
+        ({"status": "member"}, {"id": -123456789, "type": "group", "permissions": {"can_send_messages": True}}),
+        ({"status": "restricted", "is_member": True, "can_send_messages": True}, {"id": -1001234567890, "type": "supergroup"}),
+    ],
+    ids=["member-supergroup", "member-without-permissions-field", "member-basic-group", "restricted-allowed"],
+)
+async def test_ensure_bot_can_post_accepts_a_member_bot_in_a_group(monkeypatch, member, chat):
+    requests = use_transport(monkeypatch, member_handler(member, chat))
+
+    await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+
+    assert [r.url.path.rsplit("/", 1)[1] for r in requests] == ["getMe", "getChatMember", "getChat"]
+    assert requests[2].url.params["chat_id"] == "-1001234567890"
+
+
+@pytest.mark.parametrize(
+    "member, chat",
+    [
+        ({"status": "member"}, {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": False}}),
+        ({"status": "restricted", "is_member": True, "can_send_messages": False}, {"id": -1001234567890, "type": "supergroup"}),
+        ({"status": "restricted", "is_member": False, "can_send_messages": True}, {"id": -1001234567890, "type": "supergroup"}),
+    ],
+    ids=["group-forbids-members", "restricted-without-messages", "restricted-not-member"],
+)
+async def test_ensure_bot_can_post_explains_when_the_group_does_not_let_the_bot_send(monkeypatch, member, chat):
+    use_transport(monkeypatch, member_handler(member, chat))
+
+    with pytest.raises(BotCannotSendInGroupError, match=r"^Bot cannot send messages in this group$") as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert TOKEN not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "chat",
+    [{"id": -1001234567890, "type": "channel"}, None],
+    ids=["member-of-a-channel", "get-chat-fails"],
+)
+async def test_ensure_bot_can_post_still_requires_admin_outside_groups(monkeypatch, chat):
+    use_transport(monkeypatch, member_handler({"status": "member"}, chat))
+
+    with pytest.raises(BotNotChannelAdminError, match=r"^Bot is not administrator in the channel$") as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert type(exc.value) is BotNotChannelAdminError
+
+
+def test_group_refusal_is_a_kind_of_permission_refusal():
+    # Quem já trata BotNotChannelAdminError continua recusando o vínculo, só que com a mensagem genérica.
+    assert issubclass(BotCannotSendInGroupError, BotNotChannelAdminError)
 
 
 @pytest.mark.parametrize(

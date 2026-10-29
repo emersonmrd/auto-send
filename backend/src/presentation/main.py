@@ -40,6 +40,7 @@ from src.application.resolve_chat_use_case import ResolveChatUseCase
 from src.domain.channels.channel import Channel
 from src.domain.channels.chat_discovery import DiscoveredChat
 from src.domain.ports.chat_discovery_gateway import (
+    BotCannotSendInGroupError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
     IChatDiscoveryGateway,
@@ -738,6 +739,8 @@ async def create_channel(
         raise HTTPException(status_code=404, detail="Profile not found")
     except ChannelAlreadyRegisteredError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BotCannotSendInGroupError:
+        raise HTTPException(status_code=400, detail="Bot cannot send messages in this group")
     except BotNotChannelAdminError:
         raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
     except (TelegramUnavailableError, CircuitBreakerOpenException):
@@ -818,6 +821,8 @@ async def update_channel(
         raise HTTPException(status_code=404, detail="Profile not found")
     except ChannelAlreadyRegisteredError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except BotCannotSendInGroupError:
+        raise HTTPException(status_code=400, detail="Bot cannot send messages in this group")
     except BotNotChannelAdminError:
         raise HTTPException(status_code=400, detail="Bot is not administrator in the channel")
     except (TelegramUnavailableError, CircuitBreakerOpenException):

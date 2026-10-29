@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
 from src.domain.ports.chat_discovery_gateway import (
+    BotCannotSendInGroupError,
     BotInUseError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
@@ -32,6 +33,7 @@ PUBLIC_API_MAX_BYTES = 50 * 1024 * 1024
 # Tipos de update que trazem o chat onde o bot está (canal, supergrupo ou grupo).
 _CHAT_UPDATE_KINDS = ("my_chat_member", "channel_post", "edited_channel_post", "message", "edited_message")
 _BOT_LEFT_STATUSES = ("left", "kicked")
+_GROUP_CHAT_TYPES = ("group", "supergroup")
 _BOT_TOKEN_IN_URL_RE = re.compile(r"/bot[^/\s\"']+")
 _BARE_BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{10,}\b")
 
@@ -553,12 +555,27 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             "getChatMember",
             {"chat_id": chat_id, "user_id": str(bot_id)},
         )
-        status = member.get("status") if isinstance(member, dict) else None
+        member = member if isinstance(member, dict) else {}
+        status = member.get("status")
         if status == "creator":
             return
         if status == "administrator" and member.get("can_post_messages", True) is not False:
             return
+        if status in ("member", "restricted"):
+            # Administrador só é exigência de canal; em grupo, basta poder enviar mensagens (#100).
+            chat = await self._call_member_api(bot_token, "getChat", {"chat_id": chat_id})
+            if isinstance(chat, dict) and chat.get("type") in _GROUP_CHAT_TYPES:
+                if self._member_can_send_in_group(member, chat):
+                    return
+                raise BotCannotSendInGroupError("Bot cannot send messages in this group")
         raise BotNotChannelAdminError("Bot is not administrator in the channel")
+
+    @staticmethod
+    def _member_can_send_in_group(member: Dict[str, Any], chat: Dict[str, Any]) -> bool:
+        if member.get("status") == "restricted":
+            # Membro restrito tem permissões próprias, que valem no lugar das do grupo.
+            return member.get("is_member") is not False and member.get("can_send_messages") is True
+        return (chat.get("permissions") or {}).get("can_send_messages", True) is not False
 
     async def _call_member_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
         try:
