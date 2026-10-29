@@ -45,7 +45,9 @@ jobs:
         with:
           name: AutoSend-Portable
           path: dist/AutoSend-Portable.zip
-          retention-days: 7
+          # ~100 MB por execução: 7 dias encheram o storage do Actions. A release baixa o .zip nesta mesma execução
+          # e anexa uma cópia permanente à GitHub Release (backend/tests/test_artifact_retention_policy.py).
+          retention-days: 1
 
   # O runner tem Python e Node no PATH e esconde o que falta no pacote; o container windows/server não tem nenhum dos dois.
   smoke:
