@@ -2660,3 +2660,36 @@ async def test_public_poll_to_a_channel_is_refused_with_422(client):
     assert resp.status_code == 422
     assert resp.json() == {"detail": "Non-anonymous polls can only be sent when every destination is a group"}
     assert await broadcast_repo.list_by_profile(profile.id) == []
+
+
+@pytest.mark.asyncio
+async def test_patch_text_of_an_existing_public_poll_keeps_working(client):
+    # Enquete pública de antes da #99: o modo edição reenvia os mesmos destinos e não pode receber 422.
+    from src.domain.broadcast.broadcast_message import BroadcastPoll
+
+    profile = Profile(
+        id="prof-poll-legacy",
+        name="Acme",
+        credentials=BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="acme_bot"),
+    )
+    await profile_repo.save(profile)
+    await channel_repo.save(Channel(id="c-legacy", profile_id=profile.id, title="Canal", chat_id="-1001234567890"))
+    scheduled_at = _datetime.fromisoformat(future_at(5, "14:00:00").replace("Z", "+00:00"))
+    await broadcast_repo.save(
+        BroadcastMessage(
+            id="b-legacy-poll",
+            profile_id=profile.id,
+            target_channel_ids=["-1001234567890"],
+            poll=BroadcastPoll(question="Qual?", options=["A", "B"], is_anonymous=False),
+            scheduled_at=scheduled_at,
+            status=BroadcastStatus.SCHEDULED,
+        )
+    )
+
+    resp = await client.patch(
+        "/api/v1/broadcasts/b-legacy-poll",
+        json={"text": "Agora com texto", "target_channel_ids": ["-1001234567890"]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert (await broadcast_repo.get_by_id("b-legacy-poll")).text == "Agora com texto"

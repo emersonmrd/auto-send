@@ -1454,8 +1454,7 @@ async def create_broadcast(
         }
 
     # Cenário de Disparo Imediato
-    profile = await profile_repo.get_by_id(profile_id)
-    bot_token = profile.credentials.token
+    bot_token = ""
 
     async def send(chat_id: str, progress_callback, file_id: Optional[str]):
         res, legacy_err = await _dispatch_and_record(
@@ -1475,6 +1474,11 @@ async def create_broadcast(
         if curr_task:
             active_broadcast_tasks[tracking_id] = curr_task
     try:
+        # Dentro do try: se o perfil sumiu desde a criação, a mídia temporária ainda é apagada no finally.
+        profile = await profile_repo.get_by_id(profile_id)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="Profile not found")
+        bot_token = profile.credentials.token
         outcome = await DispatchBroadcastUseCase(broadcast_repo).execute(
             broadcast, send, _UploadTrackingObserver(tracking_id, request)
         )

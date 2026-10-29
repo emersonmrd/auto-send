@@ -26,7 +26,7 @@ test.describe("extractApiError", () => {
     expect(
       extractApiError({ detail: "Non-anonymous polls can only be sent when every destination is a group" }, "fallback")
     ).toBe(
-      "Enquete com votos visíveis só pode ir para grupos: algum destino é canal ou ainda não tem tipo. Marque o voto anônimo ou deixe só grupos."
+      "Enquete com votos visíveis só pode ir para grupos: algum destino é canal ou ainda não tem tipo. Deixe só grupos entre os destinos ou crie a enquete com voto anônimo."
     );
   });
 

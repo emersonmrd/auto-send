@@ -59,7 +59,12 @@ class UpdateBroadcastUseCase:
         ):
             ensure_schedulable(broadcast.scheduled_at, now=now)
 
-        if command.target_channel_ids is not None:
+        # Só confere a enquete se os destinos mudaram: o modo edição sempre os reenvia, e uma enquete pública
+        # de antes da #99 não pode ficar impossível de editar.
+        targets_changed = command.target_channel_ids is not None and set(command.target_channel_ids) != set(
+            broadcast.target_channel_ids
+        )
+        if targets_changed:
             await ensure_poll_fits_targets(broadcast.poll, broadcast.profile_id, command.target_channel_ids, self.channel_repo)
         text = command.text if command.text is not None else broadcast.text
         broadcast.update_content(text=text, button=button)

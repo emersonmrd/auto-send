@@ -157,9 +157,8 @@ export default function Home() {
   const [tempPollCorrectOptionId, setTempPollCorrectOptionId] = useState<number | null>(null);
   const [tempPollExplanation, setTempPollExplanation] = useState("");
   const [tempPollIsClosed, setTempPollIsClosed] = useState(false);
-  // Com algum canal entre os destinos, a enquete sai anônima, seja qual for a escolha salva (#99).
+  // Com algum canal entre os destinos, a enquete nova sai anônima, seja qual for a escolha salva (#99).
   const publicPollAllowed = allowsPublicPoll(selectedChannelIds, channels);
-  const effectivePollIsAnonymous = pollIsAnonymous || !publicPollAllowed;
 
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
@@ -183,6 +182,8 @@ export default function Home() {
 
   // Modo edição de um agendamento carregado no compositor (#15)
   const [composerEditing, setComposerEditing] = useState<{ id: string; scheduledAt: string | null } | null>(null);
+  // No modo edição o PATCH não altera a enquete: a prévia mostra o valor salvo, não o derivado (#99).
+  const effectivePollIsAnonymous = pollIsAnonymous || (!publicPollAllowed && !composerEditing);
   useEffect(() => {
     if (!composerEditing) return;
     const renew = setInterval(() => {
@@ -3111,8 +3112,9 @@ export default function Home() {
                   >
                     <Info className="w-3.5 h-3.5 shrink-0 text-[#71aaeb] mt-0.5" />
                     <span>
-                      Algum destino é canal (ou ainda não tem tipo conhecido): o Telegram exige voto anônimo. Para votos
-                      visíveis, deixe selecionados só grupos.
+                      {selectedChannelIds.length === 0
+                        ? "Nenhum destino selecionado: para votos visíveis, selecione só grupos como destino."
+                        : "Algum destino é canal (ou ainda não tem tipo conhecido): o Telegram exige voto anônimo. Para votos visíveis, deixe selecionados só grupos."}
                     </span>
                   </p>
                 )}

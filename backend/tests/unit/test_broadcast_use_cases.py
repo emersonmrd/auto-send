@@ -1,4 +1,5 @@
 import asyncio
+import copy
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -38,6 +39,17 @@ LEGACY_ID = "-1004444444444"
 PUBLIC_POLL_DETAIL = r"^Non-anonymous polls can only be sent when every destination is a group$"
 
 
+class CopyingBroadcastRepository(InMemoryBroadcastRepository):
+    """Guarda e devolve cópias, como o SQLite: ler de volta só mostra o que o caso de uso gravou."""
+
+    async def save(self, broadcast):
+        await super().save(copy.deepcopy(broadcast))
+
+    async def get_by_id(self, broadcast_id):
+        found = await super().get_by_id(broadcast_id)
+        return copy.deepcopy(found)
+
+
 class FakeScheduler(IBroadcastScheduler):
     def __init__(self):
         self.scheduled: list[tuple[str, datetime]] = []
@@ -54,7 +66,7 @@ class FakeScheduler(IBroadcastScheduler):
 async def ctx():
     profiles = InMemoryProfileRepository()
     channels = InMemoryChannelRepository()
-    broadcasts = InMemoryBroadcastRepository()
+    broadcasts = CopyingBroadcastRepository()
     await profiles.save(Profile(id="p-1", name="Acme", credentials=BotCredentials(token=TOKEN, bot_username="acme_bot")))
     for id_, chat_id, kind, forum in [
         ("c-1", CHANNEL_ID, ChatType.CHANNEL, False),
@@ -506,3 +518,17 @@ async def test_saving_an_edit_lock_of_a_misfired_broadcast_releases_it_without_r
 
     assert (b.edit_locked_until, b.status) == (None, BroadcastStatus.MISFIRED)
     assert ctx[3].scheduled == []
+
+
+
+async def test_editing_only_the_text_of_an_existing_public_poll_still_works(ctx):
+    # Enquete pública de antes da #99 (criada pela API, ou para canal ainda sem tipo): o modo edição
+    # sempre manda os destinos; se eles não mudaram, a regra não pode travar a edição.
+    await scheduled(ctx, [LEGACY_ID, CHANNEL_ID], poll="public")
+
+    b = await update(ctx).execute(
+        UpdateBroadcastCommand(broadcast_id="b-1", text="Novo", target_channel_ids=[CHANNEL_ID, LEGACY_ID])
+    )
+
+    assert (b.text, b.target_channel_ids) == ("Novo", [CHANNEL_ID, LEGACY_ID])
+    assert (await ctx[2].get_by_id("b-1")).text == "Novo"
