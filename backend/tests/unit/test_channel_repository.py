@@ -54,11 +54,14 @@ async def test_in_memory_channel_repo_delete():
     result_non_existent = await repo.delete("c-mem-del")
     assert result_non_existent is False
 
-@pytest.fixture
-def sqlite_session_factory():
+@pytest_asyncio.fixture
+async def sqlite_session_factory():
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    return engine, session_factory
+    try:
+        yield engine, session_factory
+    finally:
+        await engine.dispose()
 
 @pytest.mark.asyncio
 async def test_sqlalchemy_channel_repo_save_and_update(sqlite_session_factory):
