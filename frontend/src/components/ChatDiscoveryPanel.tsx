@@ -115,8 +115,8 @@ export default function ChatDiscoveryPanel({ apiBaseUrl, profileId, registeredCh
   return (
     <section className="mb-5 space-y-3 border-b border-[#242f3d] pb-5" aria-label="Buscar canais do bot">
       <ol className="list-decimal space-y-0.5 pl-4 text-xs leading-relaxed text-gray-400">
-        <li>Adicione o bot do perfil como administrador do canal.</li>
-        <li>Publique uma mensagem no canal e clique em buscar: o bot só enxerga canais com mensagem recente.</li>
+        <li>Adicione o bot do perfil ao canal como administrador. Em grupo, basta adicioná-lo como membro.</li>
+        <li>Clique em buscar. Em canal, publique uma mensagem antes; em grupo, busque em até 24 horas depois de adicionar o bot. Se não aparecer, cole abaixo o link de um post ou o ID.</li>
       </ol>
 
       <button

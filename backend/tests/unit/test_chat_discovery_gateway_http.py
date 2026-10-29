@@ -368,6 +368,78 @@ async def test_ensure_bot_can_post_rejects_non_admin_or_admin_without_post_permi
     assert TOKEN not in str(exc.value)
 
 
+# Issue #100: em grupo, o bot só precisa ser membro; administrador é exigência de canal.
+def member_handler(member: dict, chat: dict | None):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 123456789}})
+        if req.url.path.endswith("/getChatMember"):
+            return httpx.Response(200, json={"ok": True, "result": member})
+        if req.url.path.endswith("/getChat") and chat is not None:
+            return httpx.Response(200, json={"ok": True, "result": chat})
+        return httpx.Response(400, json={"ok": False, "error_code": 400, "description": "Bad Request: chat not found"})
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    "member, chat",
+    [
+        ({"status": "member"}, {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": True}}),
+        ({"status": "member"}, {"id": -1001234567890, "type": "supergroup"}),
+        ({"status": "member"}, {"id": -123456789, "type": "group", "permissions": {"can_send_messages": True}}),
+        ({"status": "restricted", "is_member": True, "can_send_messages": True}, {"id": -1001234567890, "type": "supergroup"}),
+    ],
+    ids=["member-supergroup", "member-without-permissions-field", "member-basic-group", "restricted-allowed"],
+)
+async def test_ensure_bot_can_post_accepts_a_member_bot_in_a_group(monkeypatch, member, chat):
+    requests = use_transport(monkeypatch, member_handler(member, chat))
+
+    await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+
+    assert [r.url.path.rsplit("/", 1)[1] for r in requests] == ["getMe", "getChatMember", "getChat"]
+    assert requests[2].url.params["chat_id"] == "-1001234567890"
+
+
+@pytest.mark.parametrize(
+    "member, chat",
+    [
+        ({"status": "member"}, {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": False}}),
+        ({"status": "restricted", "is_member": True, "can_send_messages": False}, {"id": -1001234567890, "type": "supergroup"}),
+    ],
+    ids=["group-forbids-members", "restricted-without-messages"],
+)
+async def test_ensure_bot_can_post_links_a_group_even_when_the_bot_cannot_send_yet(monkeypatch, member, chat):
+    # O vínculo só confere que o bot está no grupo; o que ele pode enviar aparece no painel e no envio (#107).
+    use_transport(monkeypatch, member_handler(member, chat))
+
+    await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+
+
+@pytest.mark.parametrize(
+    "chat",
+    [{"id": -1001234567890, "type": "channel"}, None],
+    ids=["member-of-a-channel", "get-chat-fails"],
+)
+async def test_ensure_bot_can_post_still_requires_admin_outside_groups(monkeypatch, chat):
+    use_transport(monkeypatch, member_handler({"status": "member"}, chat))
+
+    with pytest.raises(BotNotChannelAdminError, match=r"^Bot is not administrator in the channel$") as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert type(exc.value) is BotNotChannelAdminError
+
+
+async def test_restricted_bot_that_left_the_group_gets_the_generic_reason(monkeypatch):
+    # is_member=False: o bot não está mais no grupo; o motivo é adicioná-lo de novo, não as permissões.
+    member = {"status": "restricted", "is_member": False, "can_send_messages": True}
+    use_transport(monkeypatch, member_handler(member, {"id": -1001234567890, "type": "supergroup"}))
+
+    with pytest.raises(BotNotChannelAdminError) as exc:
+        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
+    assert type(exc.value) is BotNotChannelAdminError
+
+
+
 @pytest.mark.parametrize(
     "status, description",
     [

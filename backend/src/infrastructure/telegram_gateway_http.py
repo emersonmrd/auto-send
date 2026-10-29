@@ -32,6 +32,7 @@ PUBLIC_API_MAX_BYTES = 50 * 1024 * 1024
 # Tipos de update que trazem o chat onde o bot está (canal, supergrupo ou grupo).
 _CHAT_UPDATE_KINDS = ("my_chat_member", "channel_post", "edited_channel_post", "message", "edited_message")
 _BOT_LEFT_STATUSES = ("left", "kicked")
+_GROUP_CHAT_TYPES = ("group", "supergroup")
 _BOT_TOKEN_IN_URL_RE = re.compile(r"/bot[^/\s\"']+")
 _BARE_BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{10,}\b")
 
@@ -50,9 +51,9 @@ def redact_bot_token(text: str, bot_token: Optional[str] = None) -> str:
 TELEGRAM_ERROR_TRANSLATIONS_PT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"chat not found", re.I), "Canal ou grupo não encontrado. Verifique se o ID ou @username está correto e se o bot é membro."),
     (re.compile(r"group chat was upgraded to a supergroup", re.I), "O grupo foi promovido para supergrupo e o identificador mudou. Atualize o canal com o novo ID (-100...)."),
-    (re.compile(r"not enough rights|have no rights|chat_write_forbidden|need administrator rights", re.I), "O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar."),
+    (re.compile(r"not enough rights|have no rights|chat_write_forbidden|need administrator rights", re.I), "O bot não tem permissão para enviar isto neste chat. Em canal, ele precisa ser administrador com permissão de publicar; em grupo, confira se as permissões do grupo deixam enviar esse tipo de mensagem (texto, mídia ou enquete)."),
     (re.compile(r"bot was blocked by the user", re.I), "O bot foi bloqueado pelo usuário."),
-    (re.compile(r"bot was kicked|bot is not a member", re.I), "O bot não é membro ou foi removido deste canal. Adicione-o novamente como administrador."),
+    (re.compile(r"bot was kicked|bot is not a member", re.I), "O bot não é membro ou foi removido deste chat. Adicione-o de novo (em canal, como administrador)."),
     (re.compile(r"message is too long", re.I), "A mensagem excede o limite de caracteres permitido pelo Telegram (máximo 4.096 caracteres)."),
     (re.compile(r"message caption is too long", re.I), "A legenda da mídia excede o limite de 1.024 caracteres do Telegram."),
     (re.compile(r"message text is empty", re.I), "O texto da mensagem não pode estar vazio."),
@@ -553,11 +554,20 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
             "getChatMember",
             {"chat_id": chat_id, "user_id": str(bot_id)},
         )
-        status = member.get("status") if isinstance(member, dict) else None
+        member = member if isinstance(member, dict) else {}
+        status = member.get("status")
         if status == "creator":
             return
         if status == "administrator" and member.get("can_post_messages", True) is not False:
             return
+        if status in ("member", "restricted"):
+            # Administrador só é exigência de canal; em grupo basta o bot estar nele (#100). O que ele pode
+            # enviar não bloqueia o vínculo: aparece no painel do destino e no envio (#107).
+            # Restrito com is_member=False saiu do grupo e é recusado como qualquer bot fora do chat.
+            chat = await self._call_member_api(bot_token, "getChat", {"chat_id": chat_id})
+            in_group = status == "member" or member.get("is_member") is not False
+            if in_group and isinstance(chat, dict) and chat.get("type") in _GROUP_CHAT_TYPES:
+                return
         raise BotNotChannelAdminError("Bot is not administrator in the channel")
 
     async def _call_member_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:

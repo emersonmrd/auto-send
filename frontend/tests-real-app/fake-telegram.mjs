@@ -104,7 +104,8 @@ const server = http.createServer(async (req, res) => {
   }
   if (method === "getChatMember") {
     const chatId = url.searchParams.get("chat_id");
-    if (chatId === "-1009999999999") {
+    // No supergrupo de teste o bot é só membro, como no supergrupo real dos bots de teste (#100).
+    if (chatId === "-1009999999999" || chatId === "-1005555555555") {
       return send(res, 200, {
         ok: true,
         result: { status: "member", user: { id: Number(token.split(":")[0]), is_bot: true, first_name: "Bot de Teste" } },
