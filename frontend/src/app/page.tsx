@@ -13,6 +13,7 @@ import {
   EditLockResponse,
   TelegramApiConfigResponse,
   MessageTemplate,
+  ValidateBotResponse,
 } from "@/types";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
@@ -52,7 +53,7 @@ interface TelegramUploadProgress {
 interface ToastNotice {
   id: string;
   message: string;
-  type: "success" | "error" | "info";
+  type: "success" | "error" | "info" | "warning";
 }
 
 // "" no export estático = mesma origem do backend que serve a tela (next.config.ts); no `npm run dev`, a porta 8000.
@@ -97,6 +98,7 @@ import {
   Tv,
   Check,
   AlertCircle,
+  AlertTriangle,
   Video,
   Image as ImageIcon,
   Calendar,
@@ -118,7 +120,7 @@ import {
 export default function Home() {
   const [toast, setToast] = useState<ToastNotice | null>(null);
 
-  const showToast = (message: string, type: "success" | "error" | "info" = "info") => {
+  const showToast = (message: string, type: "success" | "error" | "info" | "warning" = "info") => {
     setToast({ id: Date.now().toString(), message, type });
     setTimeout(() => {
       setToast((current) => (current?.message === message ? null : current));
@@ -230,7 +232,7 @@ export default function Home() {
   const [isSending, setIsSending] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploadPhase, setUploadPhase] = useState<"uploading" | "transmitting" | null>(null);
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error" | "warning"; message: string } | null>(null);
   const activeXhrRef = useRef<XMLHttpRequest | null>(null);
   const activeTrackingIdRef = useRef<string | null>(null);
   const transmittingStartTimeRef = useRef<number | null>(null);
@@ -248,6 +250,8 @@ export default function Home() {
   const [editProfileName, setEditProfileName] = useState("");
   const [editProfileBotToken, setEditProfileBotToken] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileWarning, setProfileWarning] = useState<string | null>(null);
+  const [isValidatingBotToken, setIsValidatingBotToken] = useState(false);
 
   // Modal de Excluir Perfil
   const [showDeleteProfileModal, setShowDeleteProfileModal] = useState(false);
@@ -1613,6 +1617,32 @@ export default function Home() {
 
 
 
+  // Validar Bot Token proativamente (#102)
+  const handleValidateBotToken = async (token: string) => {
+    if (!token.trim()) {
+      setProfileWarning(null);
+      return;
+    }
+    setIsValidatingBotToken(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/v1/profiles/validate-bot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bot_token: token.trim() }),
+      });
+      if (res.ok) {
+        const data: ValidateBotResponse = await res.json();
+        setProfileWarning(data.warning || null);
+      } else {
+        setProfileWarning(null);
+      }
+    } catch {
+      setProfileWarning(null);
+    } finally {
+      setIsValidatingBotToken(false);
+    }
+  };
+
   // Criar Perfil
   const handleCreateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1625,10 +1655,23 @@ export default function Home() {
         body: JSON.stringify({ name: newProfileName, bot_token: newBotToken }),
       });
       if (res.ok) {
+        const created: Profile = await res.json();
         setShowAddProfileModal(false);
         setNewProfileName("");
         setNewBotToken("");
-        fetchProfiles();
+        setProfileWarning(null);
+        if (created.warning) {
+          setFeedback({
+            type: "warning",
+            message: `Perfil "${created.name}" cadastrado! ${created.warning}`,
+          });
+        } else {
+          setFeedback({
+            type: "success",
+            message: `Perfil "${created.name}" cadastrado com sucesso!`,
+          });
+        }
+        await fetchProfiles();
       } else {
         const err = await res.json();
         showToast(extractApiError(err, "Erro ao adicionar perfil"), "error");
@@ -1645,6 +1688,7 @@ export default function Home() {
     setEditingProfile(profile);
     setEditProfileName(profile.name);
     setEditProfileBotToken("");
+    setProfileWarning(null);
     setShowEditProfileModal(true);
   };
 
@@ -1676,10 +1720,18 @@ export default function Home() {
 
       if (res.ok) {
         const updated: Profile = await res.json();
-        setFeedback({
-          type: "success",
-          message: `Perfil "${updated.name}" atualizada com sucesso!`,
-        });
+        setProfileWarning(null);
+        if (updated.warning) {
+          setFeedback({
+            type: "warning",
+            message: `Perfil "${updated.name}" atualizado! ${updated.warning}`,
+          });
+        } else {
+          setFeedback({
+            type: "success",
+            message: `Perfil "${updated.name}" atualizado com sucesso!`,
+          });
+        }
         setShowEditProfileModal(false);
         setEditingProfile(null);
         setEditProfileName("");
@@ -2001,6 +2053,8 @@ export default function Home() {
           className={`fixed bottom-6 right-6 z-[120] max-w-sm w-full shadow-2xl rounded-xl p-4 border flex items-start justify-between gap-3 animate-in fade-in slide-in-from-bottom-2 duration-200 ${
             toast.type === "success"
               ? "bg-[#132a1c] text-green-200 border-green-600/80 shadow-green-950/40"
+              : toast.type === "warning"
+              ? "bg-[#2d2212] text-amber-200 border-amber-600/80 shadow-amber-950/40"
               : toast.type === "error"
               ? "bg-[#2c1518] text-red-200 border-red-600/80 shadow-red-950/40"
               : "bg-[#182533] text-blue-200 border-blue-600/80 shadow-blue-950/40"
@@ -2009,6 +2063,8 @@ export default function Home() {
           <div className="flex items-start gap-2.5 text-xs leading-relaxed">
             {toast.type === "success" ? (
               <Check className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
+            ) : toast.type === "warning" ? (
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             ) : toast.type === "error" ? (
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             ) : (
@@ -2016,7 +2072,7 @@ export default function Home() {
             )}
             <div>
               <strong className="block font-semibold mb-0.5 text-white">
-                {toast.type === "success" ? "Sucesso" : toast.type === "error" ? "Atenção" : "Informação"}
+                {toast.type === "success" ? "Sucesso" : toast.type === "warning" ? "Aviso" : toast.type === "error" ? "Atenção" : "Informação"}
               </strong>
               <span>{toast.message}</span>
             </div>
@@ -2040,18 +2096,22 @@ export default function Home() {
           className={`fixed top-4 right-4 z-[100] max-w-md w-full shadow-2xl rounded-xl p-4 border flex items-start justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-200 ${
             feedback.type === "success"
               ? "bg-[#132a1c] text-green-200 border-green-600/80"
+              : feedback.type === "warning"
+              ? "bg-[#2d2212] text-amber-200 border-amber-600/80 shadow-amber-950/40"
               : "bg-[#2c1518] text-red-200 border-red-600/80"
           }`}
         >
           <div className="flex items-start gap-2.5 text-xs leading-relaxed">
             {feedback.type === "success" ? (
               <Check className="w-4 h-4 text-green-400 shrink-0 mt-0.5" />
+            ) : feedback.type === "warning" ? (
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
             ) : (
               <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             )}
             <div>
               <strong className="block font-semibold mb-0.5 text-white">
-                {feedback.type === "success" ? "Operação Concluída" : "Atenção — Ocorreu um Erro"}
+                {feedback.type === "success" ? "Operação Concluída" : feedback.type === "warning" ? "Aviso" : "Atenção — Ocorreu um Erro"}
               </strong>
               <span>{feedback.message}</span>
             </div>
@@ -2062,6 +2122,8 @@ export default function Home() {
             className={`px-2.5 py-1 rounded-lg text-xs font-semibold shrink-0 transition ${
               feedback.type === "success"
                 ? "bg-green-800/70 hover:bg-green-700 text-white"
+                : feedback.type === "warning"
+                ? "bg-amber-800/70 hover:bg-amber-700 text-white"
                 : "bg-red-800/70 hover:bg-red-700 text-white"
             }`}
           >
@@ -2079,9 +2141,13 @@ export default function Home() {
             <h1 className="font-semibold text-lg tracking-wide">Auto-Send Profiles</h1>
           </div>
           <button
-            onClick={() => setShowAddProfileModal(true)}
+            onClick={() => {
+              setProfileWarning(null);
+              setShowAddProfileModal(true);
+            }}
             className="p-1.5 rounded-full hover:bg-[#242f3d] text-[#5288c1] transition"
             title="Adicionar Novo Perfil"
+            aria-label="Adicionar Novo Perfil"
           >
             <Plus className="w-5 h-5" />
           </button>
@@ -3396,12 +3462,34 @@ export default function Home() {
                   required
                   placeholder="123456789:ABCdefGhIJKlmNoPQRstu..."
                   value={editProfileBotToken}
-                  onChange={(e) => setEditProfileBotToken(e.target.value)}
+                  onChange={(e) => {
+                    setEditProfileBotToken(e.target.value);
+                    if (profileWarning) setProfileWarning(null);
+                  }}
+                  onBlur={() => handleValidateBotToken(editProfileBotToken)}
                   className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
                 />
                 <span className="text-[11px] text-gray-500 mt-1 block">
                   Informe o token para salvar. Se o token for alterado, o @username será revalidado no Telegram.
                 </span>
+                {isValidatingBotToken && (
+                  <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#5288c1]" />
+                    <span>Verificando bot no Telegram...</span>
+                  </div>
+                )}
+                {profileWarning && (
+                  <div
+                    role="alert"
+                    className="mt-3 p-3 rounded-lg bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5 leading-relaxed"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <strong className="block font-semibold text-amber-300 mb-0.5">Aviso de Configuração</strong>
+                      <span>{profileWarning}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
@@ -3412,6 +3500,7 @@ export default function Home() {
                   setEditingProfile(null);
                   setEditProfileName("");
                   setEditProfileBotToken("");
+                  setProfileWarning(null);
                 }}
                 disabled={isSavingProfile}
                 className="px-3 py-1.5 text-xs text-gray-400 hover:text-white disabled:opacity-50"
@@ -3536,18 +3625,43 @@ export default function Home() {
                   required
                   placeholder="123456789:ABCdefGhIJKlmNoPQRstu..."
                   value={newBotToken}
-                  onChange={(e) => setNewBotToken(e.target.value)}
+                  onChange={(e) => {
+                    setNewBotToken(e.target.value);
+                    if (profileWarning) setProfileWarning(null);
+                  }}
+                  onBlur={() => handleValidateBotToken(newBotToken)}
                   className="w-full bg-[#242f3d] rounded-lg px-3 py-2 text-sm text-white outline-none border border-transparent focus:border-[#5288c1]"
                 />
                 <span className="text-[11px] text-gray-500 mt-1 block">
                   O bot será verificado em tempo real com a API do Telegram.
                 </span>
+                {isValidatingBotToken && (
+                  <div className="flex items-center gap-1.5 text-xs text-gray-400 mt-2">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#5288c1]" />
+                    <span>Verificando bot no Telegram...</span>
+                  </div>
+                )}
+                {profileWarning && (
+                  <div
+                    role="alert"
+                    className="mt-3 p-3 rounded-lg bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-start gap-2.5 leading-relaxed"
+                  >
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <strong className="block font-semibold text-amber-300 mb-0.5">Aviso de Configuração</strong>
+                      <span>{profileWarning}</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setShowAddProfileModal(false)}
+                onClick={() => {
+                  setShowAddProfileModal(false);
+                  setProfileWarning(null);
+                }}
                 className="px-3 py-1.5 text-xs text-gray-400 hover:text-white"
               >
                 Cancelar

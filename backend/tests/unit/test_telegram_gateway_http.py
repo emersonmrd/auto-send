@@ -1606,6 +1606,97 @@ async def test_send_broadcast_poll_handles_telegram_error(monkeypatch):
     assert gateway.last_failure_category is not None
 
 
+@pytest.mark.asyncio
+async def test_validate_bot_token_detects_active_webhook(monkeypatch):
+    """Issue #102: validate_bot_token consulta getWebhookInfo e identifica webhook ativo."""
+    requests = []
+
+    def mock_handler(request: httpx.Request):
+        requests.append(request)
+        if request.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 1, "username": "webhook_bot"}})
+        if request.url.path.endswith("/getWebhookInfo"):
+            return httpx.Response(200, json={"ok": True, "result": {"url": "https://external.app/webhook"}})
+        return httpx.Response(404, json={"ok": False})
+
+    orig_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    info = await gateway.validate_bot_token("123456:FAKE-TOKEN-WEBHOOK")
+    assert info["username"] == "webhook_bot"
+    assert info["has_active_webhook"] is True
+    assert info["webhook_url"] == "https://external.app/webhook"
+    assert info["has_active_polling"] is False
+
+
+@pytest.mark.asyncio
+async def test_validate_bot_token_detects_exclusive_bot_without_webhook_or_polling(monkeypatch):
+    """Issue #102: bot sem webhook e sem polling ativo é detectado como exclusivo."""
+    def mock_handler(request: httpx.Request):
+        if request.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 2, "username": "clean_bot"}})
+        if request.url.path.endswith("/getWebhookInfo"):
+            return httpx.Response(200, json={"ok": True, "result": {"url": ""}})
+        if request.url.path.endswith("/getUpdates"):
+            return httpx.Response(200, json={"ok": True, "result": []})
+        return httpx.Response(404, json={"ok": False})
+
+    orig_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    info = await gateway.validate_bot_token("123456:FAKE-TOKEN-CLEAN")
+    assert info["username"] == "clean_bot"
+    assert info["has_active_webhook"] is False
+    assert info["webhook_url"] is None
+    assert info["has_active_polling"] is False
+
+
+@pytest.mark.asyncio
+async def test_validate_bot_token_detects_polling_conflict(monkeypatch):
+    """Issue #102: sonda de polling detecta 409 conflict de outra instância getUpdates."""
+    def mock_handler(request: httpx.Request):
+        if request.url.path.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 3, "username": "polling_bot"}})
+        if request.url.path.endswith("/getWebhookInfo"):
+            return httpx.Response(200, json={"ok": True, "result": {"url": ""}})
+        if request.url.path.endswith("/getUpdates"):
+            return httpx.Response(
+                409,
+                json={
+                    "ok": False,
+                    "error_code": 409,
+                    "description": "Conflict: terminated by other getUpdates request; make sure that only one bot instance is running",
+                },
+            )
+        return httpx.Response(404, json={"ok": False})
+
+    orig_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org")
+    info = await gateway.validate_bot_token("123456:FAKE-TOKEN-POLL")
+    assert info["username"] == "polling_bot"
+    assert info["has_active_webhook"] is False
+    assert info["has_active_polling"] is True
+
+
 
 
 

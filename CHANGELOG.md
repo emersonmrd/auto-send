@@ -6,6 +6,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 ## [Unreleased]
 
 ### Added
+- Detecção proativa e aviso não bloqueante sobre bot em uso por outro sistema (webhook ativo ou polling concorrente com detecção de erro 409) e detecção de duplicidade de token no cadastro e edição de perfil (#102).
 - Suporte completo a enquetes nativas do Telegram (`sendPoll`) no compositor e agendamentos: modos enquete comum e quiz/questionário, opções dinâmicas (2 a 10), voto anônimo, múltiplas escolhas, resposta correta, explicação pós-voto e prévia interativa no balão (#97).
 - Rota `POST /api/v1/broadcasts/abort-upload/{tracking_id}`: cancelar um envio na tela interrompe o disparo no backend, apaga a mídia temporária e marca o broadcast como `CANCELLED`, guardando os canais que já receberam (#86).
 - Teste automatizado garantindo que os modelos de mensagem sobrevivem a atualizações futuras do banco de dados, e menção explícita aos modelos de mensagem no `COMO_USAR.txt` do pacote portátil (#92).

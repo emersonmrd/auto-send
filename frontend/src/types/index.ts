@@ -29,6 +29,21 @@ export interface Profile {
   avatar_url?: string | null;
   is_active: boolean;
   created_at?: string;
+  warning?: string | null;
+  has_active_webhook?: boolean;
+  webhook_url?: string | null;
+  has_active_polling?: boolean;
+  is_duplicate_token?: boolean;
+}
+
+export interface ValidateBotResponse {
+  is_valid: boolean;
+  bot_username: string;
+  has_active_webhook: boolean;
+  webhook_url?: string | null;
+  has_active_polling: boolean;
+  is_duplicate_token: boolean;
+  warning?: string | null;
 }
 
 export interface ProfileListItem extends Profile {

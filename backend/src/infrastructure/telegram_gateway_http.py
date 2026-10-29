@@ -272,7 +272,39 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
                 if not data.get("ok"):
                     clean = redact_bot_token(str(data.get("description", "Unknown error")), bot_token=token)
                     raise ValueError(f"Telegram Bot Token validation failed: {clean}")
-                return data.get("result", {})
+                bot_info = dict(data.get("result", {}))
+
+                # Issue #102: Consulta getWebhookInfo para detectar webhook configurado
+                has_active_webhook = False
+                webhook_url = None
+                try:
+                    wh_resp = await client.get(f"{effective_url}/bot{token}/getWebhookInfo")
+                    wh_data = await self._handle_response(wh_resp)
+                    if wh_data.get("ok"):
+                        raw_wh_url = str(wh_data.get("result", {}).get("url", "")).strip()
+                        if raw_wh_url:
+                            has_active_webhook = True
+                            webhook_url = raw_wh_url
+                except Exception as wh_exc:
+                    logger.warning("Falha ao consultar getWebhookInfo do bot: %s", redact_bot_token(str(wh_exc), bot_token=token))
+
+                # Issue #102: Se não houver webhook, sonda getUpdates para detectar conflito de polling concorrente
+                has_active_polling = False
+                if not has_active_webhook:
+                    try:
+                        up_resp = await client.get(f"{effective_url}/bot{token}/getUpdates?limit=1&timeout=0")
+                        if up_resp.status_code == 409:
+                            up_data = up_resp.json()
+                            desc = str(up_data.get("description", ""))
+                            if "terminated by other getUpdates request" in desc:
+                                has_active_polling = True
+                    except Exception as up_exc:
+                        logger.warning("Falha na sonda de getUpdates do bot: %s", redact_bot_token(str(up_exc), bot_token=token))
+
+                bot_info["has_active_webhook"] = has_active_webhook
+                bot_info["webhook_url"] = webhook_url
+                bot_info["has_active_polling"] = has_active_polling
+                return bot_info
         except httpx.RequestError as exc:
             await self.circuit_breaker.record_failure()
             logger.error("Network error validating bot token: %s", redact_bot_token(str(exc), bot_token=token))
