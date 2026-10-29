@@ -1060,3 +1060,22 @@ def test_public_poll_is_refused_when_any_destination_may_be_a_channel():
         match=r"^Non-anonymous polls can only be sent when every destination is a group$",
     ):
         poll.ensure_fits_destinations(only_groups=False)
+
+
+# #107 parte B: o que o bot precisa poder enviar no destino para cada forma de despacho.
+@pytest.mark.parametrize(
+    "text, media_type, poll, expected",
+    [
+        ("Olá", None, None, ["text"]),
+        ("A" * 1024, MediaType.PHOTO, None, ["photo"]),
+        ("A" * 1024, MediaType.VIDEO, None, ["video"]),
+        ("A" * 1025, MediaType.PHOTO, None, ["text", "photo"]),
+        ("A" * 1025, MediaType.VIDEO, None, ["text", "video"]),
+        ("", None, BroadcastPoll(question="Nova enquete?", options=["Sim", "Não"]), ["poll"]),
+    ],
+    ids=["text-only", "photo-caption", "video-caption", "split-photo", "split-video", "poll"],
+)
+def test_required_contents_follow_the_dispatch_strategy(text, media_type, poll, expected):
+    media = MediaAttachment(file_path="/tmp/m", media_type=media_type, file_size=100) if media_type else None
+    msg = BroadcastMessage(id="b-req", profile_id="p-1", target_channel_ids=["-1001234567890"], text=text, media=media, poll=poll)
+    assert [c.value for c in msg.required_contents()] == expected

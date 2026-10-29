@@ -5,7 +5,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 import httpx
 from datetime import datetime, timezone
-from src.domain.channels.bot_permissions import BotMemberStatus, BotPermissions, SendPermissions
+from src.domain.channels.bot_permissions import BotMemberStatus, BotPermissions, SendContent, SendPermissions
 from src.domain.channels.channel import ChatType
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
 from src.domain.ports.bot_permissions_gateway import IBotPermissionsGateway
@@ -71,7 +71,20 @@ TELEGRAM_ERROR_TRANSLATIONS_PT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"poll options must be completely different", re.I), "As opções da enquete devem ser diferentes entre si."),
     (re.compile(r"poll must have at least 2 option", re.I), "A enquete deve ter pelo menos 2 opções."),
     (re.compile(r"poll can'?t have more than 10 options", re.I), "A enquete não pode ter mais de 10 opções."),
+    # Recusas da conferência de permissões antes do envio (#107).
+    (re.compile(r"bot cannot send text messages in this group", re.I), "O bot não pode enviar mensagens de texto neste grupo: as permissões do grupo não deixam. Veja o painel \"i\" do destino."),
+    (re.compile(r"bot cannot send photos in this group", re.I), "O bot não pode enviar fotos neste grupo: as permissões do grupo não deixam. Veja o painel \"i\" do destino."),
+    (re.compile(r"bot cannot send videos in this group", re.I), "O bot não pode enviar vídeos neste grupo: as permissões do grupo não deixam. Veja o painel \"i\" do destino."),
+    (re.compile(r"bot cannot send polls in this group", re.I), "O bot não pode enviar enquetes neste grupo: as permissões do grupo não deixam. Veja o painel \"i\" do destino."),
 ]
+
+# Motivo de cada conteúdo recusado pela conferência de permissões em grupo (#107).
+_GROUP_DENIAL_DETAIL = {
+    SendContent.TEXT: "Bot cannot send text messages in this group",
+    SendContent.PHOTO: "Bot cannot send photos in this group",
+    SendContent.VIDEO: "Bot cannot send videos in this group",
+    SendContent.POLL: "Bot cannot send polls in this group",
+}
 
 
 def translate_telegram_error_pt(description: Optional[str]) -> Optional[str]:
@@ -133,10 +146,13 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
         self,
         base_url: Optional[str] = None,
         circuit_breaker: Optional[CircuitBreaker] = None,
+        check_send_permissions: bool = False,
     ):
         resolved_url = base_url or os.getenv("TELEGRAM_API_BASE_URL", PUBLIC_TELEGRAM_API_URL)
         self.base_url = resolved_url.rstrip("/")
         self.circuit_breaker = circuit_breaker or CircuitBreaker()
+        # Ligado no app: antes de cada envio lê as permissões do bot e não tenta o conteúdo que ele não pode mandar (#107).
+        self.check_send_permissions = check_send_permissions
         self.last_error: Optional[str] = None
         self.last_failure_category: Optional[DeliveryFailureCategory] = None
         self.last_failure_detail: Optional[str] = None
@@ -309,6 +325,13 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
         self.last_failure_category = None
         self.last_failure_detail = None
         await self.circuit_breaker.can_execute()
+        if self.check_send_permissions:
+            refusal = await self._send_permission_refusal(bot_token, chat_id, message)
+            if refusal:
+                self.last_error = refusal
+                self.last_failure_category = DeliveryFailureCategory.NO_POST_PERMISSION
+                self.last_failure_detail = refusal
+                return False
         effective_url = await self.resolve_effective_base_url()
         strategy = message.get_dispatch_strategy()
 
@@ -603,6 +626,22 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway, IBotPermissio
             chat_default=self._to_send_permissions(chat.get("permissions") or {}),
             checked_at=datetime.now(timezone.utc),
         )
+
+    async def _send_permission_refusal(self, bot_token: str, chat_id: str, message: BroadcastMessage) -> Optional[str]:
+        """Motivo para não enviar ao chat, ou None para tentar o envio como sempre."""
+        try:
+            permissions = await self.read_bot_permissions(bot_token, chat_id)
+        except ChatDiscoveryError:
+            # Bot fora do chat ou Telegram fora do ar: o próprio envio classifica o erro, como antes da #107.
+            return None
+        if permissions.is_outside_chat:
+            return None
+        denied = permissions.denied(message.required_contents())
+        if denied is None:
+            return None
+        if permissions.chat_type is ChatType.CHANNEL:
+            return "Bot is not administrator in the channel"
+        return _GROUP_DENIAL_DETAIL[denied]
 
     @staticmethod
     def _to_send_permissions(raw: Dict[str, Any]) -> SendPermissions:

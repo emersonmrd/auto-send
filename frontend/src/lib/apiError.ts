@@ -150,6 +150,16 @@ export const TELEGRAM_ERROR_CATALOG: Array<{
   pattern: RegExp;
   translation: string;
 }> = [
+  // Recusas da conferência de permissões antes do envio, mesmo texto do backend (#107).
+  ...([
+    ["text messages", "mensagens de texto"],
+    ["photos", "fotos"],
+    ["videos", "vídeos"],
+    ["polls", "enquetes"],
+  ] as const).map(([en, pt]) => ({
+    pattern: new RegExp(`bot cannot send ${en} in this group`, "i"),
+    translation: `O bot não pode enviar ${pt} neste grupo: as permissões do grupo não deixam. Veja o painel "i" do destino.`,
+  })),
   {
     pattern: /chat not found/i,
     translation:
