@@ -22,3 +22,7 @@ class IBroadcastRepository(ABC):
     @abstractmethod
     async def list_pending_scheduled(self) -> List[BroadcastMessage]:
         pass
+
+    @abstractmethod
+    async def reconcile_orphan_dispatching(self) -> int:
+        pass

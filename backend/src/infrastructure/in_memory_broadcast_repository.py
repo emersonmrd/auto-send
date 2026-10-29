@@ -32,3 +32,11 @@ class InMemoryBroadcastRepository(IBroadcastRepository):
             b for b in self._broadcasts.values()
             if b.status in [BroadcastStatus.PENDING, BroadcastStatus.SCHEDULED] and b.scheduled_at is not None
         ]
+
+    async def reconcile_orphan_dispatching(self) -> int:
+        count = 0
+        for b in self._broadcasts.values():
+            if b.status == BroadcastStatus.DISPATCHING:
+                b.status = BroadcastStatus.FAILED
+                count += 1
+        return count

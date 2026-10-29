@@ -215,6 +215,12 @@ async def lifespan(app: FastAPI):
 
     # Inicializa tabelas SQLite
     await init_db()
+    try:
+        reconciled = await broadcast_repo.reconcile_orphan_dispatching()
+        if reconciled > 0:
+            logger.info("Reconciliados %d broadcast(s) órfãos com status DISPATCHING no startup", reconciled)
+    except Exception as exc:
+        logger.warning("Falha ao reconciliar broadcasts órfãos no startup: %s", exc)
     scheduler_service.start()
     await scheduler_service.reconcile_due_broadcasts()
     try:
@@ -239,7 +245,7 @@ def _resolve_app_version() -> str:
         return version("auto-send-backend")
     except Exception:
         pass
-    return "0.6.1"
+    return "0.7.0"
 
 app = FastAPI(title="Auto-Send Multi-Bot API", version=_resolve_app_version(), lifespan=lifespan)
 

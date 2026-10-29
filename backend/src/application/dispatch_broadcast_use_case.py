@@ -63,4 +63,8 @@ class DispatchBroadcastUseCase:
             broadcast.abort_dispatch(results)
             await self.broadcast_repo.save(broadcast)
             raise BroadcastAbortedError() from None
+        except Exception:
+            broadcast.abort_dispatch(results)
+            await self.broadcast_repo.save(broadcast)
+            raise
         return DispatchOutcome(dispatched_count=sum(r.delivered for r in results), errors=errors)

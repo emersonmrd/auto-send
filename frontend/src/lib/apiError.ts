@@ -49,6 +49,8 @@ export const API_ERROR_CATALOG: Record<string, string> = {
     "Identificador de canal inválido. Use @username, t.me/username, o link de um post (t.me/c/...) ou o ID -100...",
   "Invalid discovered chat (expected a channel or group with a negative numeric id)":
     "Esse chat não é um canal nem supergrupo válido do Telegram.",
+  "message_thread_id must be a positive integer":
+    "O ID do tópico deve ser um número inteiro positivo.",
 
   // Broadcasts, fila e agendamento
   "Broadcast not found": "Agendamento não encontrado.",

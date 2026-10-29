@@ -182,6 +182,9 @@ test.describe("Buscar canais do bot", () => {
     await expect(help).toContainText("Grupos comuns do Telegram não possuem identificador permanente");
     await expect(help).toContainText("Histórico de Mensagens para Novos Membros");
     await expect(help).toContainText("Tópicos");
+    // Garante que mesmo com a mensagem de ajuda e múltiplos canais, os botões do modal estão acessíveis
+    await expect(page.getByRole("button", { name: "Fechar", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Vincular Canal", exact: true })).toBeVisible();
   });
 
   test("sem grupo comum na lista, não mostra a explicação de conversão", async ({ page }) => {

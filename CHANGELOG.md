@@ -5,6 +5,8 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-29
+
 ### Added
 - Suporte a tópicos de fóruns de supergrupos (`message_thread_id`): cadastro de múltiplos tópicos independentes no mesmo grupo, extração automática do ID do tópico a partir de links de mensagens (`t.me/c/<id>/<topic>`), exibição de selo do tópico nos chips de destino (`💬 Grupo VIP (#Anúncios)`), repasse do parâmetro nas chamadas de mensagens, fotos, vídeos e enquetes do gateway do Telegram, e migração 9 do banco de dados (#101).
 - Detecção proativa e aviso não bloqueante sobre bot em uso por outro sistema (webhook ativo ou polling concorrente com detecção de erro 409) e detecção de duplicidade de token no cadastro e edição de perfil (#102).
@@ -19,6 +21,9 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Antes de cada envio (imediato, "enviar agora" ou agendado), o backend confere se o bot pode mandar aquele conteúdo ao destino: texto, foto, vídeo ou enquete. Sem permissão, o destino aparece como falha com o motivo em português (ex.: "O bot não pode enviar fotos neste grupo"), nenhum envio é tentado a ele, e os outros destinos recebem normalmente. Se o Telegram não responder à consulta, o envio segue como antes (#107).
 
 ### Fixed
+- Reconciliação automática de envios órfãos com status `DISPATCHING` no startup do backend e tratamento resiliente de erros em `DispatchBroadcastUseCase`, destravando a exclusão de canais e perfis com erro 422.
+- Campo de ID do Tópico nos modais de adicionar e editar canal sanitizado para aceitar estritamente inteiros positivos sem setas nativas de incremento, com tradução amigável em português e aviso preventivo de envio em andamento no modal de exclusão.
+- Barra superior com seletor compacto e modal vertical com busca e ações completas quando houver múltiplos destinos cadastrados (> 4 canais), evitando rolagem lateral e mantendo a interface limpa e responsiva.
 - Eliminação do aviso intermitente "Event loop is closed" do aiosqlite na suíte de testes do backend através do descarte explícito de conexões de engine no teardown de fixtures e ativação de filtro de erro para exceções de thread no pytest (#115).
 - Botões "Editar Canal" e "Excluir Canal" nos chips de destino agora abrem a edição e o diálogo de exclusão ao pressionar Enter ou Espaço, sem alternar a seleção do destino (#114).
 - Enquete criada pela API sem o campo `poll_is_anonymous` saía pública: o FastAPI trata booleano de formulário ausente como `false`. Agora a ausência vale como voto anônimo, o padrão documentado (#99).
