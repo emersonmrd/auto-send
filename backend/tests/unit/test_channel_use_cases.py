@@ -268,3 +268,52 @@ async def test_relink_persists_nothing_when_get_chat_fails_unexpectedly(repos):
     with pytest.raises(RuntimeError):
         await update(repos, gateway).execute(UpdateChannelCommand(channel_id="c-1", title="A", chat_id=OTHER_CHAT_ID))
     assert (await broadcasts.get_by_id("b-1")).target_channel_ids == [CHAT_ID]
+
+
+async def test_register_channel_with_forum_topic(repos):
+    # Issue #101: cadastro de canal com tópico de fórum
+    gateway = FakeGateway(chat=forum())
+    channel = await register(repos, gateway).execute(
+        RegisterChannelCommand(
+            profile_id="p-1",
+            title="Grupo VIP (#Anúncios)",
+            chat_id=CHAT_ID,
+            message_thread_id=45,
+            topic_name="Anúncios",
+        )
+    )
+    assert channel.message_thread_id == 45
+    assert channel.topic_name == "Anúncios"
+    assert channel.destination_id == f"{CHAT_ID}:45"
+
+
+async def test_register_multiple_topics_of_same_forum_group(repos):
+    # Issue #101: permite cadastrar múltiplos tópicos diferentes do mesmo supergrupo
+    gateway = FakeGateway(chat=forum())
+    c1 = await register(repos, gateway).execute(
+        RegisterChannelCommand(profile_id="p-1", title="Grupo Geral", chat_id=CHAT_ID)
+    )
+    c2 = await register(repos, gateway).execute(
+        RegisterChannelCommand(profile_id="p-1", title="Grupo Anúncios", chat_id=CHAT_ID, message_thread_id=45, topic_name="Anúncios")
+    )
+    assert c1.chat_id == c2.chat_id
+    assert c1.message_thread_id is None
+    assert c2.message_thread_id == 45
+
+    # Tentar cadastrar exatamente o mesmo tópico 45 novamente falha
+    with pytest.raises(ChannelAlreadyRegisteredError):
+        await register(repos, gateway).execute(
+            RegisterChannelCommand(profile_id="p-1", title="Duplicado", chat_id=CHAT_ID, message_thread_id=45)
+        )
+
+
+async def test_update_channel_topic(repos):
+    # Issue #101: atualiza tópico de um canal existente
+    await repos[1].save(Channel(id="c-1", profile_id="p-1", title="Grupo", chat_id=CHAT_ID, chat_type=ChatType.SUPERGROUP, is_forum=True))
+    gateway = FakeGateway(chat=forum())
+
+    updated = await update(repos, gateway).execute(
+        UpdateChannelCommand(channel_id="c-1", title="Grupo (#Geral)", chat_id=CHAT_ID, message_thread_id=10, topic_name="Geral")
+    )
+    assert updated.message_thread_id == 10
+    assert updated.topic_name == "Geral"

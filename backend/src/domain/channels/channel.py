@@ -28,10 +28,32 @@ class Channel:
     # None: canal vinculado antes da #99, ainda sem tipo; é preenchido na próxima edição.
     chat_type: Optional[ChatType] = None
     is_forum: bool = False
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
 
     def __post_init__(self):
         self.check_chat_id(self.chat_id)
         self._check_kind(self.chat_type, self.is_forum)
+        self._check_topic(self.message_thread_id)
+        if self.topic_name is not None:
+            self.topic_name = self.topic_name.strip() or None
+
+    @staticmethod
+    def _check_topic(message_thread_id: Optional[int]) -> None:
+        if message_thread_id is not None:
+            if not isinstance(message_thread_id, int) or isinstance(message_thread_id, bool) or message_thread_id <= 0:
+                raise ValueError("message_thread_id must be a positive integer")
+
+    @property
+    def destination_id(self) -> str:
+        if self.message_thread_id:
+            return f"{self.chat_id}:{self.message_thread_id}"
+        return self.chat_id
+
+    def set_topic(self, message_thread_id: Optional[int], topic_name: Optional[str] = None) -> None:
+        self._check_topic(message_thread_id)
+        self.message_thread_id = message_thread_id
+        self.topic_name = topic_name.strip() or None if topic_name is not None else None
 
     @staticmethod
     def check_chat_id(chat_id: str) -> None:
@@ -45,6 +67,8 @@ class Channel:
         self.chat_id = chat_id
         self.chat_type = None
         self.is_forum = False
+        self.message_thread_id = None
+        self.topic_name = None
 
     def classify(self, chat_type: ChatType, is_forum: bool) -> None:
         self._check_kind(chat_type, is_forum)

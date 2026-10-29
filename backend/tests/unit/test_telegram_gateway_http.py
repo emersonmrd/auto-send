@@ -1697,6 +1697,60 @@ async def test_validate_bot_token_detects_polling_conflict(monkeypatch):
     assert info["has_active_polling"] is True
 
 
+@pytest.mark.asyncio
+async def test_send_broadcast_forwards_message_thread_id(monkeypatch):
+    """Issue #101: send_broadcast encaminha message_thread_id para o Telegram."""
+    captured_requests = []
+
+    def mock_handler(request: httpx.Request):
+        captured_requests.append(request)
+        if request.url.path.endswith("/sendMessage"):
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 100}})
+        if request.url.path.endswith("/sendPoll"):
+            return httpx.Response(200, json={"ok": True, "result": {"message_id": 101, "poll": {}}})
+        return httpx.Response(404, json={"ok": False})
+
+    orig_init = httpx.AsyncClient.__init__
+
+    def patched_init(self, *args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(mock_handler)
+        orig_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(httpx.AsyncClient, "__init__", patched_init)
+
+    gateway = TelegramGatewayHttp(base_url="https://api.telegram.org", check_send_permissions=False)
+
+    # 1. Mensagem de texto
+    msg = BroadcastMessage(id="b-1", profile_id="p-1", target_channel_ids=["-1001234567890"], text="Olá tópico!")
+    ok = await gateway.send_broadcast(
+        bot_token="123456:FAKE-TOKEN",
+        chat_id="-1001234567890",
+        message=msg,
+        message_thread_id=45,
+    )
+    assert ok is True
+    req = captured_requests[-1]
+    body = json.loads(req.content.decode("utf-8"))
+    assert body["chat_id"] == "-1001234567890"
+    assert body["message_thread_id"] == 45
+    assert body["text"] == "Olá tópico!"
+
+    # 2. Enquete
+    poll = BroadcastPoll(question="Pergunta do tópico?", options=["Opção 1", "Opção 2"])
+    msg_poll = BroadcastMessage(id="b-2", profile_id="p-1", target_channel_ids=["-1001234567890"], poll=poll)
+    ok_poll = await gateway.send_broadcast(
+        bot_token="123456:FAKE-TOKEN",
+        chat_id="-1001234567890",
+        message=msg_poll,
+        message_thread_id=45,
+    )
+    assert ok_poll is True
+    req_poll = captured_requests[-1]
+    body_poll = json.loads(req_poll.content.decode("utf-8"))
+    assert body_poll["chat_id"] == "-1001234567890"
+    assert body_poll["message_thread_id"] == 45
+
+
 
 
 

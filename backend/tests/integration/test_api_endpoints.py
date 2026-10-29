@@ -2800,3 +2800,82 @@ async def test_validate_bot_endpoint(client, monkeypatch):
     # Token inválido -> 422
     res_err = await client.post("/api/v1/profiles/validate-bot", json={"bot_token": "invalid"})
     assert res_err.status_code == 422
+
+
+async def test_forum_topic_channels_registration_and_dispatch(client, monkeypatch):
+    creds = BotCredentials(token="1234567890:ABCdefGhIJKlmNoPQRstuVWXyz12345", bot_username="test_bot")
+    profile = Profile(id="profile-forum-topics", name="Forum Profile", credentials=creds)
+    await profile_repo.save(profile)
+
+    # 1. Registrar tópico 10 no supergrupo
+    payload1 = {
+        "title": "Supergrupo VIP (#Geral)",
+        "chat_id": "-1001999999999",
+        "message_thread_id": 10,
+        "topic_name": "Geral",
+    }
+    resp1 = await client.post(f"/api/v1/profiles/{profile.id}/channels", json=payload1)
+    assert resp1.status_code == 201
+    data1 = resp1.json()
+    assert data1["message_thread_id"] == 10
+    assert data1["topic_name"] == "Geral"
+    assert data1["destination_id"] == "-1001999999999:10"
+
+    # 2. Registrar tópico 20 no mesmo supergrupo
+    payload2 = {
+        "title": "Supergrupo VIP (#Anúncios)",
+        "chat_id": "-1001999999999",
+        "message_thread_id": 20,
+        "topic_name": "Anúncios",
+    }
+    resp2 = await client.post(f"/api/v1/profiles/{profile.id}/channels", json=payload2)
+    assert resp2.status_code == 201
+    data2 = resp2.json()
+    assert data2["message_thread_id"] == 20
+    assert data2["topic_name"] == "Anúncios"
+    assert data2["destination_id"] == "-1001999999999:20"
+
+    # 3. Tentar registrar tópico duplicado 10 falha com 409 Conflict
+    resp_dup = await client.post(f"/api/v1/profiles/{profile.id}/channels", json=payload1)
+    assert resp_dup.status_code == 409
+
+    # 4. Listar canais do perfil retorna os dois destinos
+    list_resp = await client.get(f"/api/v1/profiles/{profile.id}/channels")
+    assert list_resp.status_code == 200
+    items = list_resp.json()
+    assert len(items) == 2
+    assert {it["destination_id"] for it in items} == {"-1001999999999:10", "-1001999999999:20"}
+
+    # 5. Atualizar nome do tópico
+    update_payload = {
+        "name": "Supergrupo VIP (#Avisos)",
+        "telegram_channel_id": "-1001999999999",
+        "message_thread_id": 20,
+        "topic_name": "Avisos",
+    }
+    update_resp = await client.put(f"/api/v1/channels/{data2['id']}", json=update_payload)
+    assert update_resp.status_code == 200
+    assert update_resp.json()["topic_name"] == "Avisos"
+
+    # 6. Disparar broadcast imediato para os dois tópicos
+    dispatched_calls = []
+    async def mock_send_broadcast(bot_token, chat_id, message, **kwargs):
+        dispatched_calls.append({
+            "chat_id": chat_id,
+            "message_thread_id": kwargs.get("message_thread_id"),
+        })
+        return True
+
+    from src.presentation import main as presentation_main
+    monkeypatch.setattr(presentation_main.telegram_gateway, "send_broadcast", mock_send_broadcast)
+
+    form_data = {
+        "profile_id": profile.id,
+        "target_channel_ids": json.dumps(["-1001999999999:10", "-1001999999999:20"]),
+        "text": "Novidade nos dois tópicos!",
+    }
+    dispatch_resp = await client.post("/api/v1/broadcasts", data=form_data)
+    assert dispatch_resp.status_code == 201
+    assert len(dispatched_calls) == 2
+    assert dispatched_calls[0] == {"chat_id": "-1001999999999", "message_thread_id": 10}
+    assert dispatched_calls[1] == {"chat_id": "-1001999999999", "message_thread_id": 20}

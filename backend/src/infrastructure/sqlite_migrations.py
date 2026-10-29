@@ -138,6 +138,15 @@ def _migration_008_channel_chat_type_and_forum(cursor: sqlite3.Cursor) -> None:
         _add_column_if_missing(cursor, "channels", col_name, col_def)
 
 
+def _migration_009_channel_topics(cursor: sqlite3.Cursor) -> None:
+    # Suporte a tópicos em fóruns de supergrupos (#101)
+    for col_name, col_def in (
+        ("message_thread_id", "INTEGER"),
+        ("topic_name", "VARCHAR"),
+    ):
+        _add_column_if_missing(cursor, "channels", col_name, col_def)
+
+
 MIGRATIONS: tuple[MigrationStep, ...] = (
     MigrationStep(
         version=1,
@@ -178,6 +187,11 @@ MIGRATIONS: tuple[MigrationStep, ...] = (
         version=8,
         description="Tipo do chat e fórum em channels (#99)",
         apply=_migration_008_channel_chat_type_and_forum,
+    ),
+    MigrationStep(
+        version=9,
+        description="Campos message_thread_id e topic_name em channels (#101)",
+        apply=_migration_009_channel_topics,
     ),
 )
 

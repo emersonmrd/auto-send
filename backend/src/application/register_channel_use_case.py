@@ -1,3 +1,4 @@
+from typing import Optional
 from dataclasses import dataclass
 import uuid
 
@@ -15,6 +16,8 @@ class RegisterChannelCommand:
     title: str
     chat_id: str
     invite_link: str = ""
+    message_thread_id: Optional[int] = None
+    topic_name: Optional[str] = None
 
 
 class RegisterChannelUseCase:
@@ -34,7 +37,7 @@ class RegisterChannelUseCase:
             raise ProfileNotFoundError(command.profile_id)
 
         existing = await self.channel_repo.list_by_profile(command.profile_id)
-        if any(c.chat_id == command.chat_id for c in existing):
+        if any(c.chat_id == command.chat_id and c.message_thread_id == command.message_thread_id for c in existing):
             raise ChannelAlreadyRegisteredError()
 
         # Chat_id inválido levanta ValueError antes de qualquer chamada ao Telegram.
@@ -44,6 +47,8 @@ class RegisterChannelUseCase:
             title=command.title,
             chat_id=command.chat_id,
             invite_link=command.invite_link,
+            message_thread_id=command.message_thread_id,
+            topic_name=command.topic_name,
         )
         token = profile.credentials.token
         await self.discovery_gateway.ensure_bot_can_post(token, channel.chat_id)

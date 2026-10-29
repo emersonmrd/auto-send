@@ -16,6 +16,7 @@ class ITelegramGateway(ABC):
         message: BroadcastMessage,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         file_id: Optional[str] = None,
+        message_thread_id: Optional[int] = None,
     ) -> bool:
         """Despacha a mensagem para o chat_id respeitando a estratégia (legenda ou divisão)"""
         pass

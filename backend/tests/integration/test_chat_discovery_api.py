@@ -22,8 +22,9 @@ GROUP = DiscoveredChat(chat_id="-444444444", title="Grupo comum", chat_type="gro
 
 
 class StubGateway(IChatDiscoveryGateway):
-    def __init__(self, error: Exception | None = None):
+    def __init__(self, error: Exception | None = None, resolved_chat: DiscoveredChat | None = None):
         self.error = error
+        self.resolved_chat = resolved_chat or CHANNEL
         self.resolved: list[str] = []
 
     async def discover_chats(self, bot_token):
@@ -35,7 +36,7 @@ class StubGateway(IChatDiscoveryGateway):
         if self.error:
             raise self.error
         self.resolved.append(identifier.as_chat_id())
-        return CHANNEL
+        return self.resolved_chat
 
     async def ensure_bot_can_post(self, bot_token, chat_id):
         if self.error:
@@ -74,8 +75,28 @@ async def test_discover_lists_chats_marking_registered_and_registrable(client):
     assert resp.status_code == 200
     assert resp.json() == {
         "chats": [
-            {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True, "is_forum": False, "already_registered": True},
-            {"chat_id": "-444444444", "title": "Grupo comum", "type": "group", "username": None, "registrable": False, "is_forum": False, "already_registered": False},
+            {
+                "chat_id": "-1001234567890",
+                "title": "Canal de Novidades",
+                "type": "channel",
+                "username": "canalnovidades",
+                "registrable": True,
+                "is_forum": False,
+                "message_thread_id": None,
+                "topic_name": None,
+                "already_registered": True,
+            },
+            {
+                "chat_id": "-444444444",
+                "title": "Grupo comum",
+                "type": "group",
+                "username": None,
+                "registrable": False,
+                "is_forum": False,
+                "message_thread_id": None,
+                "topic_name": None,
+                "already_registered": False,
+            },
         ]
     }
     assert TOKEN not in resp.text
@@ -109,8 +130,46 @@ async def test_resolve_returns_the_chat(client):
     resp = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": "t.me/canalnovidades"})
 
     assert resp.status_code == 200
-    assert resp.json() == {"chat_id": "-1001234567890", "title": "Canal de Novidades", "type": "channel", "username": "canalnovidades", "registrable": True, "is_forum": False}
+    assert resp.json() == {
+        "chat_id": "-1001234567890",
+        "title": "Canal de Novidades",
+        "type": "channel",
+        "username": "canalnovidades",
+        "registrable": True,
+        "is_forum": False,
+        "message_thread_id": None,
+        "topic_name": None,
+    }
     assert gateway.resolved == ["@canalnovidades"]
+
+
+async def test_resolve_returns_the_chat_with_topic(client):
+    forum = DiscoveredChat(chat_id="-1001234567890", title="Fórum VIP", chat_type="supergroup", is_forum=True)
+    gateway = use_gateway(StubGateway(resolved_chat=forum))
+
+    resp = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": "https://t.me/c/1234567890/45"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "chat_id": "-1001234567890",
+        "title": "Fórum VIP",
+        "type": "supergroup",
+        "username": None,
+        "registrable": True,
+        "is_forum": True,
+        "message_thread_id": 45,
+        "topic_name": None,
+    }
+    assert gateway.resolved == ["-1001234567890"]
+
+
+async def test_resolve_channel_ignores_post_id_as_thread_id(client):
+    gateway = use_gateway(StubGateway())
+
+    resp = await client.post("/api/v1/profiles/p-1/resolve-chat", json={"identifier": "https://t.me/c/1234567890/15"})
+
+    assert resp.status_code == 200
+    assert resp.json()["message_thread_id"] is None
 
 
 @pytest.mark.parametrize(

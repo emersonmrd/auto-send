@@ -13,6 +13,7 @@ from src.domain.broadcast.broadcast_message import (
 )
 from src.domain.ports.broadcast_repository import IBroadcastRepository
 from src.domain.ports.broadcast_scheduler import IBroadcastScheduler
+from src.domain.ports.channel_repository import IChannelRepository
 from src.domain.ports.profile_repository import IProfileRepository
 from src.domain.ports.telegram_gateway import ITelegramGateway
 from src.infrastructure.telegram_gateway_http import dispatch_broadcast_to_channel, redact_bot_token
@@ -38,6 +39,7 @@ class AutomationSchedulerService(IBroadcastScheduler):
         broadcast_repo: Optional[IBroadcastRepository] = None,
         profile_repo: Optional[IProfileRepository] = None,
         telegram_gateway: Optional[ITelegramGateway] = None,
+        channel_repo: Optional[IChannelRepository] = None,
         reconcile_interval_seconds: int = 10,
         misfire_grace_minutes: Optional[int] = None,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -51,6 +53,7 @@ class AutomationSchedulerService(IBroadcastScheduler):
         self.broadcast_repo = broadcast_repo
         self.profile_repo = profile_repo
         self.telegram_gateway = telegram_gateway
+        self.channel_repo = channel_repo
         self.reconcile_interval_seconds = reconcile_interval_seconds
         self._explicit_grace_minutes = misfire_grace_minutes
         self._clock = clock
@@ -220,15 +223,45 @@ class AutomationSchedulerService(IBroadcastScheduler):
 
             results: list[ChannelDeliveryResult] = []
             cached_file_id: Optional[str] = None
+            channels_map = {}
+            if self.channel_repo:
+                try:
+                    profile_channels = await self.channel_repo.list_by_profile(broadcast.profile_id)
+                    for c in profile_channels:
+                        channels_map[c.destination_id] = c
+                        channels_map[c.chat_id] = c
+                except Exception as e:
+                    logger.warning(f"Could not load channels for profile {broadcast.profile_id}: {e}")
+
             try:
-                for chat_id in broadcast.target_channel_ids:
+                for target in broadcast.target_channel_ids:
+                    real_chat_id = target
+                    thread_id: Optional[int] = None
+                    if ":" in target:
+                        parts = target.split(":", 1)
+                        real_chat_id = parts[0]
+                        try:
+                            thread_id = int(parts[1])
+                        except ValueError:
+                            thread_id = None
+                    elif target in channels_map:
+                        ch = channels_map[target]
+                        real_chat_id = ch.chat_id
+                        thread_id = ch.message_thread_id
+
                     res = await dispatch_broadcast_to_channel(
                         gateway=self.telegram_gateway,
                         bot_token=profile.credentials.token,
-                        chat_id=chat_id,
+                        chat_id=real_chat_id,
                         message=broadcast,
                         file_id=cached_file_id,
+                        message_thread_id=thread_id,
                     )
+                    if res.chat_id != target:
+                        if res.delivered:
+                            res = ChannelDeliveryResult.success(target)
+                        else:
+                            res = ChannelDeliveryResult.failure(target, res.failure_category, res.detail)
                     results.append(res)
                     if res.delivered and not cached_file_id:
                         cached_file_id = getattr(self.telegram_gateway, "last_uploaded_file_id", None)

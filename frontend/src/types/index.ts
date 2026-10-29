@@ -67,6 +67,9 @@ export interface Channel {
   is_active: boolean;
   chat_type: ChannelChatType | null;
   is_forum: boolean;
+  message_thread_id?: number | null;
+  topic_name?: string | null;
+  destination_id?: string | null;
 }
 
 // Situação do bot no destino, como o getChatMember a informa (#107).
@@ -92,6 +95,9 @@ export interface ChannelCreateResponse {
   invite_link: string;
   chat_type: ChannelChatType | null;
   is_forum: boolean;
+  message_thread_id?: number | null;
+  topic_name?: string | null;
+  destination_id?: string | null;
 }
 
 export interface ChannelUpdateResponse {
@@ -103,6 +109,9 @@ export interface ChannelUpdateResponse {
   chat_id: string;
   chat_type: ChannelChatType | null;
   is_forum: boolean;
+  message_thread_id?: number | null;
+  topic_name?: string | null;
+  destination_id?: string | null;
 }
 
 export type DeliveryFailureCategory =
@@ -239,6 +248,8 @@ export interface DiscoveredChat {
   registrable: boolean;
   // Supergrupo com tópicos ativados (#99).
   is_forum: boolean;
+  message_thread_id?: number | null;
+  topic_name?: string | null;
 }
 
 // POST /api/v1/profiles/{profile_id}/discover-chats

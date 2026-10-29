@@ -6,6 +6,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 ## [Unreleased]
 
 ### Added
+- Suporte a tópicos de fóruns de supergrupos (`message_thread_id`): cadastro de múltiplos tópicos independentes no mesmo grupo, extração automática do ID do tópico a partir de links de mensagens (`t.me/c/<id>/<topic>`), exibição de selo do tópico nos chips de destino (`💬 Grupo VIP (#Anúncios)`), repasse do parâmetro nas chamadas de mensagens, fotos, vídeos e enquetes do gateway do Telegram, e migração 9 do banco de dados (#101).
 - Detecção proativa e aviso não bloqueante sobre bot em uso por outro sistema (webhook ativo ou polling concorrente com detecção de erro 409) e detecção de duplicidade de token no cadastro e edição de perfil (#102).
 - Suporte completo a enquetes nativas do Telegram (`sendPoll`) no compositor e agendamentos: modos enquete comum e quiz/questionário, opções dinâmicas (2 a 10), voto anônimo, múltiplas escolhas, resposta correta, explicação pós-voto e prévia interativa no balão (#97).
 - Rota `POST /api/v1/broadcasts/abort-upload/{tracking_id}`: cancelar um envio na tela interrompe o disparo no backend, apaga a mídia temporária e marca o broadcast como `CANCELLED`, guardando os canais que já receberam (#86).

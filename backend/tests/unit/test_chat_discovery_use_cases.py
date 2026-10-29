@@ -15,8 +15,9 @@ NEWS = DiscoveredChat(chat_id="-1009876543210", title="Novidades", chat_type="ch
 
 
 class FakeDiscoveryGateway(IChatDiscoveryGateway):
-    def __init__(self, error: Exception | None = None):
+    def __init__(self, error: Exception | None = None, resolved_chat: DiscoveredChat | None = None):
         self.error = error
+        self.resolved_chat = resolved_chat or CHANNEL
         self.calls: list[tuple] = []
 
     async def discover_chats(self, bot_token):
@@ -29,7 +30,7 @@ class FakeDiscoveryGateway(IChatDiscoveryGateway):
         self.calls.append(("resolve", bot_token, identifier))
         if self.error:
             raise self.error
-        return CHANNEL
+        return self.resolved_chat
 
     async def ensure_bot_can_post(self, bot_token, chat_id):
         self.calls.append(("ensure_bot_can_post", bot_token, chat_id))
@@ -106,9 +107,23 @@ async def test_resolve_converts_a_private_post_link_to_the_channel_id(repos):
     profiles, _ = repos
     gateway = FakeDiscoveryGateway()
 
-    await ResolveChatUseCase(profiles, gateway).execute("p-1", "https://t.me/c/1234567890/15")
+    chat = await ResolveChatUseCase(profiles, gateway).execute("p-1", "https://t.me/c/1234567890/15")
 
-    assert gateway.calls == [("resolve", TOKEN, ChatIdentifier("-1001234567890"))]
+    assert gateway.calls == [("resolve", TOKEN, ChatIdentifier("-1001234567890", message_thread_id=15))]
+    assert chat.chat_id == "-1001234567890"
+    assert chat.message_thread_id is None
+
+
+async def test_resolve_converts_forum_topic_link_preserving_thread_id(repos):
+    profiles, _ = repos
+    forum_chat = DiscoveredChat(chat_id="-1001234567890", title="Fórum VIP", chat_type="supergroup", is_forum=True)
+    gateway = FakeDiscoveryGateway(resolved_chat=forum_chat)
+
+    chat = await ResolveChatUseCase(profiles, gateway).execute("p-1", "https://t.me/c/1234567890/45")
+
+    assert gateway.calls == [("resolve", TOKEN, ChatIdentifier("-1001234567890", message_thread_id=45))]
+    assert chat.message_thread_id == 45
+    assert chat.is_forum is True
 
 
 async def test_resolve_for_missing_profile_does_not_call_telegram(repos):

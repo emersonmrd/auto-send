@@ -49,6 +49,8 @@ class ChannelModel(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     chat_type = Column(String, nullable=True)
     is_forum = Column(Boolean, default=False)
+    message_thread_id = Column(Integer, nullable=True)
+    topic_name = Column(String, nullable=True)
 
 class BroadcastModel(Base):
     __tablename__ = "broadcasts"
@@ -165,6 +167,8 @@ class SqlAlchemyChannelRepository(IChannelRepository):
                     existing.is_active = channel.is_active
                     existing.chat_type = channel.chat_type.value if channel.chat_type else None
                     existing.is_forum = channel.is_forum
+                    existing.message_thread_id = channel.message_thread_id
+                    existing.topic_name = channel.topic_name
                 else:
                     db_obj = ChannelModel(
                         id=channel.id,
@@ -176,6 +180,8 @@ class SqlAlchemyChannelRepository(IChannelRepository):
                         created_at=channel.created_at,
                         chat_type=channel.chat_type.value if channel.chat_type else None,
                         is_forum=channel.is_forum,
+                        message_thread_id=channel.message_thread_id,
+                        topic_name=channel.topic_name,
                     )
                     session.add(db_obj)
 
@@ -194,6 +200,8 @@ class SqlAlchemyChannelRepository(IChannelRepository):
             created_at=created_dt,
             chat_type=ChatType(obj.chat_type) if obj.chat_type else None,
             is_forum=bool(obj.is_forum),
+            message_thread_id=obj.message_thread_id,
+            topic_name=obj.topic_name,
         )
 
     async def get_by_id(self, channel_id: str) -> Optional[Channel]:
