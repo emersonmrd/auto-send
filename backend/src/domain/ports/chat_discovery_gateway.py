@@ -19,10 +19,6 @@ class BotNotChannelAdminError(ChatDiscoveryError):
     """O bot não está no canal ou não é administrador com permissão de publicar (getChatMember, #2)."""
 
 
-class BotCannotSendInGroupError(BotNotChannelAdminError):
-    """O bot está no grupo, mas o grupo não deixa ele enviar mensagens (permissões de membro, #100)."""
-
-
 class TelegramUnavailableError(ChatDiscoveryError):
     """O Telegram não respondeu ou falhou (rede, timeout, 429, 5xx ou circuito aberto, #2)."""
 
@@ -40,6 +36,6 @@ class IChatDiscoveryGateway(ABC):
 
     @abstractmethod
     async def ensure_bot_can_post(self, bot_token: str, chat_id: str) -> None:
-        """Confere que o bot pode postar: em canal, administrador com permissão de publicar (#2); em grupo, basta
-        ser membro que o grupo deixa enviar mensagens (#100)."""
+        """Confere que o bot pode ser vinculado: em canal, administrador com permissão de publicar (#2); em grupo,
+        basta estar nele (#100)."""
         pass

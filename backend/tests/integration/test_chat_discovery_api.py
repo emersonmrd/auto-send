@@ -342,19 +342,3 @@ async def test_rename_of_a_legacy_channel_works_while_the_circuit_is_open(client
     assert resp.status_code == 200
     assert (resp.json()["name"], resp.json()["chat_type"]) == ("Renomeado", None)
     assert (await channel_repo.get_by_id("c-old")).title == "Renomeado"
-
-
-# Issue #100: bot membro de grupo que não deixa membros enviarem mensagens.
-@pytest.mark.parametrize("method", ["create", "update"])
-async def test_link_to_a_group_that_blocks_the_bot_is_400_with_a_group_reason(client, method):
-    from src.domain.ports.chat_discovery_gateway import BotCannotSendInGroupError
-
-    use_gateway(StubGateway(error=BotCannotSendInGroupError("Bot cannot send messages in this group")))
-    if method == "create":
-        resp = await client.post("/api/v1/profiles/p-1/channels", json={"title": "Grupo", "chat_id": "-1001234567890"})
-    else:
-        await channel_repo.save(Channel(id="c-g", profile_id="p-1", title="Grupo", chat_id="-1001111111111"))
-        resp = await client.put("/api/v1/channels/c-g", json={"name": "Grupo", "telegram_channel_id": "-1001234567890"})
-
-    assert resp.status_code == 400
-    assert resp.json() == {"detail": "Bot cannot send messages in this group"}

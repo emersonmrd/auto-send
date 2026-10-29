@@ -12,7 +12,7 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 - Validação automatizada no CI (`Decide what to run`) e script `validate_pr_checklist.py` garantindo que toda Pull Request contenha a seção `## Checklist`, skills utilizadas e confirmação de merge humano (#95).
 - Tipo do chat nos canais: o vínculo lê do Telegram se o destino é canal, supergrupo ou fórum e mostra o selo (📢 Canal, 👥 Grupo, 💬 Fórum) nos canais destino e na busca. Grupo comum ganha uma explicação passo a passo de como convertê-lo em supergrupo, e a busca não lista mais o grupo comum que já virou supergrupo. Canais vinculados antes desta versão recebem o tipo na próxima edição. Contrato: `chat_type` e `is_forum` nas respostas de canal e `is_forum` nos chats descobertos (campos novos, compatíveis); migração 8 do banco (#99).
 - Enquete com votos visíveis só pode ir para grupos: com algum canal (ou canal ainda sem tipo) entre os destinos, o compositor trava o voto anônimo e explica por quê, e a API responde `422` em `POST /api/v1/broadcasts` e no `PATCH` que troca destinos (#99).
-- Bot só como membro funciona em grupos e supergrupos: administrador continua obrigatório só em canal. Se o grupo não deixa membros enviarem mensagens, o vínculo explica isso em vez de pedir para promover o bot (#100).
+- Bot só como membro pode ser vinculado a grupos e supergrupos: administrador continua obrigatório só em canal. O vínculo de grupo não depende das permissões de envio; as mensagens de erro de envio deixam de supor que todo destino é canal (#100).
 
 ### Fixed
 - Enquete criada pela API sem o campo `poll_is_anonymous` saía pública: o FastAPI trata booleano de formulário ausente como `false`. Agora a ausência vale como voto anônimo, o padrão documentado (#99).

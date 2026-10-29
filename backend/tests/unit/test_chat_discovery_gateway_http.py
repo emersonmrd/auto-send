@@ -2,7 +2,6 @@ import pytest
 import httpx
 from src.domain.channels.chat_discovery import DiscoveredChat, ChatIdentifier
 from src.domain.ports.chat_discovery_gateway import (
-    BotCannotSendInGroupError,
     BotInUseError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
@@ -407,19 +406,14 @@ async def test_ensure_bot_can_post_accepts_a_member_bot_in_a_group(monkeypatch, 
     [
         ({"status": "member"}, {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": False}}),
         ({"status": "restricted", "is_member": True, "can_send_messages": False}, {"id": -1001234567890, "type": "supergroup"}),
-        (
-            {"status": "restricted", "is_member": True, "can_send_messages": True},
-            {"id": -1001234567890, "type": "supergroup", "permissions": {"can_send_messages": False}},
-        ),
     ],
-    ids=["group-forbids-members", "restricted-without-messages", "restricted-but-group-forbids"],
+    ids=["group-forbids-members", "restricted-without-messages"],
 )
-async def test_ensure_bot_can_post_explains_when_the_group_does_not_let_the_bot_send(monkeypatch, member, chat):
+async def test_ensure_bot_can_post_links_a_group_even_when_the_bot_cannot_send_yet(monkeypatch, member, chat):
+    # O vínculo só confere que o bot está no grupo; o que ele pode enviar aparece no painel e no envio (#107).
     use_transport(monkeypatch, member_handler(member, chat))
 
-    with pytest.raises(BotCannotSendInGroupError, match=r"^Bot cannot send messages in this group$") as exc:
-        await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
-    assert TOKEN not in str(exc.value)
+    await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
 
 
 @pytest.mark.parametrize(
@@ -444,10 +438,6 @@ async def test_restricted_bot_that_left_the_group_gets_the_generic_reason(monkey
         await TelegramGatewayHttp(base_url="https://api.telegram.org").ensure_bot_can_post(TOKEN, "-1001234567890")
     assert type(exc.value) is BotNotChannelAdminError
 
-
-def test_group_refusal_is_a_kind_of_permission_refusal():
-    # Quem já trata BotNotChannelAdminError continua recusando o vínculo, só que com a mensagem genérica.
-    assert issubclass(BotCannotSendInGroupError, BotNotChannelAdminError)
 
 
 @pytest.mark.parametrize(

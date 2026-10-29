@@ -22,10 +22,6 @@ test.describe("extractApiError", () => {
         "fallback"
       )
     ).toBe("Formato de ID do canal inválido. O ID deve começar com -100 seguido de números.");
-    // #100: bot membro de um grupo que não deixa membros enviarem.
-    expect(extractApiError({ detail: "Bot cannot send messages in this group" }, "fallback")).toBe(
-      "O bot está no grupo, mas não pode enviar mensagens lá. Libere o envio de mensagens para membros nas permissões do grupo (ou para o bot) e tente de novo."
-    );
     // #99: enquete pública com canal entre os destinos.
     expect(
       extractApiError({ detail: "Non-anonymous polls can only be sent when every destination is a group" }, "fallback")

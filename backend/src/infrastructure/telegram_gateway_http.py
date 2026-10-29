@@ -6,7 +6,6 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 from src.domain.channels.chat_discovery import ChatIdentifier, DiscoveredChat
 from src.domain.ports.chat_discovery_gateway import (
-    BotCannotSendInGroupError,
     BotInUseError,
     BotNotChannelAdminError,
     ChatDiscoveryError,
@@ -562,23 +561,14 @@ class TelegramGatewayHttp(ITelegramGateway, IChatDiscoveryGateway):
         if status == "administrator" and member.get("can_post_messages", True) is not False:
             return
         if status in ("member", "restricted"):
-            # Administrador só é exigência de canal; em grupo, basta poder enviar mensagens (#100).
+            # Administrador só é exigência de canal; em grupo basta o bot estar nele (#100). O que ele pode
+            # enviar não bloqueia o vínculo: aparece no painel do destino e no envio (#107).
+            # Restrito com is_member=False saiu do grupo e é recusado como qualquer bot fora do chat.
             chat = await self._call_member_api(bot_token, "getChat", {"chat_id": chat_id})
-            # Restrito com is_member=False saiu do grupo: o motivo é adicioná-lo de novo, não as permissões.
             in_group = status == "member" or member.get("is_member") is not False
             if in_group and isinstance(chat, dict) and chat.get("type") in _GROUP_CHAT_TYPES:
-                if self._member_can_send_in_group(member, chat):
-                    return
-                raise BotCannotSendInGroupError("Bot cannot send messages in this group")
+                return
         raise BotNotChannelAdminError("Bot is not administrator in the channel")
-
-    @staticmethod
-    def _member_can_send_in_group(member: Dict[str, Any], chat: Dict[str, Any]) -> bool:
-        group_allows = (chat.get("permissions") or {}).get("can_send_messages", True) is not False
-        if member.get("status") == "restricted":
-            # A exceção do membro restrito não passa do que o grupo permite: as duas precisam liberar.
-            return group_allows and member.get("can_send_messages") is True
-        return group_allows
 
     async def _call_member_api(self, bot_token: str, method: str, params: Dict[str, str]) -> Any:
         try:

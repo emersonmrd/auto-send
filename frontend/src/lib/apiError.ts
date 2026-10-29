@@ -35,8 +35,6 @@ export const API_ERROR_CATALOG: Record<string, string> = {
     "Formato de ID do canal inválido. O ID deve começar com -100 seguido de números.",
   "Bot is not administrator in the channel":
     "O bot não é administrador deste canal. Adicione-o como administrador com permissão de publicar e tente de novo.",
-  "Bot cannot send messages in this group":
-    "O bot está no grupo, mas não pode enviar mensagens lá. Libere o envio de mensagens para membros nas permissões do grupo (ou para o bot) e tente de novo.",
   "Could not reach Telegram, try again":
     "Não foi possível falar com o Telegram agora. Tente de novo em instantes.",
   "Non-anonymous polls can only be sent when every destination is a group":
