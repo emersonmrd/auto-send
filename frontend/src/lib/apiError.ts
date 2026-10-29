@@ -163,7 +163,7 @@ export const TELEGRAM_ERROR_CATALOG: Array<{
   {
     pattern: /(?:not enough rights|have no rights|chat_write_forbidden|need administrator rights)/i,
     translation:
-      "O bot não tem permissão para enviar mensagens neste canal. Adicione o bot como administrador com permissão de publicar.",
+      "O bot não tem permissão para enviar isto neste chat. Em canal, ele precisa ser administrador com permissão de publicar; em grupo, confira se as permissões do grupo deixam enviar esse tipo de mensagem (texto, mídia ou enquete).",
   },
   {
     pattern: /bot was blocked by the user/i,
@@ -172,7 +172,7 @@ export const TELEGRAM_ERROR_CATALOG: Array<{
   {
     pattern: /(?:bot was kicked|bot is not a member)/i,
     translation:
-      "O bot não é membro ou foi removido deste canal. Adicione-o novamente como administrador.",
+      "O bot não é membro ou foi removido deste chat. Adicione-o de novo (em canal, como administrador).",
   },
   {
     pattern: /message is too long/i,
@@ -285,8 +285,8 @@ const API_ERROR_PATTERNS: Array<{
 ];
 
 const DELIVERY_FAILURE_MESSAGES: Record<string, string> = {
-  BOT_NOT_IN_CHAT: "O bot não está no canal",
-  NO_POST_PERMISSION: "O bot não é administrador ou não tem permissão de publicar",
+  BOT_NOT_IN_CHAT: "O bot não está no canal ou grupo",
+  NO_POST_PERMISSION: "O bot não tem permissão de publicar (em canal, precisa ser administrador)",
   INVALID_TOKEN: "Token do bot inválido ou revogado",
   RATE_LIMITED: "Limite do Telegram; tente mais tarde",
   TELEGRAM_UNAVAILABLE: "Telegram indisponível no momento do envio",

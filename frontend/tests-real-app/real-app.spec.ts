@@ -294,7 +294,7 @@ test.describe.serial("aplicação real", () => {
   });
 
   // Por último: com mais um destino vinculado, os envios acima iriam para dois chats.
-  test("vincula um supergrupo e mostra o tipo lido do Telegram (#99)", async ({ page }) => {
+  test("vincula um supergrupo com o bot só como membro e mostra o tipo lido do Telegram (#99, #100)", async ({ page }) => {
     test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
     const supergroupId = REAL_SUPERGROUP_ID || "-1005555555555";
     await openProfile(page);
@@ -309,7 +309,8 @@ test.describe.serial("aplicação real", () => {
     if (!USES_REAL_TELEGRAM) {
       await expect(chip.getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
       const calls = await telegramCalls(page);
-      expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat"]);
+      // Bot só membro (#100): o getChat do ensure_bot_can_post confere que é grupo; o segundo lê o tipo (#99).
+      expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat", "getChat"]);
       expect(calls[2].query).toEqual({ chat_id: supergroupId });
     }
   });

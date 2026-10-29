@@ -155,8 +155,10 @@ test.describe("Buscar canais do bot", () => {
 
     await page.getByRole("button", { name: "Buscar canais do bot" }).click();
 
-    await expect(page.getByText(/Nenhum canal encontrado/)).toBeVisible();
-    await expect(page.getByText(/link de um post/)).toBeVisible();
+    // O aviso de lista vazia é que precisa sugerir o link; as instruções do topo também o citam (#100).
+    const empty = page.getByText(/Nenhum canal encontrado/);
+    await expect(empty).toBeVisible();
+    await expect(empty).toContainText("link de um post");
   });
 
   // Issue #99: tipo do chat e grupo comum

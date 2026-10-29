@@ -36,5 +36,6 @@ class IChatDiscoveryGateway(ABC):
 
     @abstractmethod
     async def ensure_bot_can_post(self, bot_token: str, chat_id: str) -> None:
-        """Confere via getMe + getChatMember que o bot é administrador do canal com permissão de postar (#2)."""
+        """Confere que o bot pode ser vinculado: em canal, administrador com permissão de publicar (#2); em grupo,
+        basta estar nele (#100)."""
         pass
