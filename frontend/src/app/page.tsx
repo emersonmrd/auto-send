@@ -1661,15 +1661,7 @@ export default function Home() {
         setNewBotToken("");
         setProfileWarning(null);
         if (created.warning) {
-          setFeedback({
-            type: "warning",
-            message: `Perfil "${created.name}" cadastrado! ${created.warning}`,
-          });
-        } else {
-          setFeedback({
-            type: "success",
-            message: `Perfil "${created.name}" cadastrado com sucesso!`,
-          });
+          showToast(created.warning, "warning");
         }
         await fetchProfiles();
       } else {
@@ -1722,14 +1714,11 @@ export default function Home() {
         const updated: Profile = await res.json();
         setProfileWarning(null);
         if (updated.warning) {
-          setFeedback({
-            type: "warning",
-            message: `Perfil "${updated.name}" atualizado! ${updated.warning}`,
-          });
+          showToast(updated.warning, "warning");
         } else {
           setFeedback({
             type: "success",
-            message: `Perfil "${updated.name}" atualizado com sucesso!`,
+            message: `Perfil "${updated.name}" atualizada com sucesso!`,
           });
         }
         setShowEditProfileModal(false);
