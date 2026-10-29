@@ -233,7 +233,7 @@ Monólito modular em Clean Architecture. **Regra de dependência:** as setas apo
   - `Channel.telegram_channel_id` segue `^-100\d{9,}$`.
   - `Channel.chat_type` (`ChatType`) vem do `getChat` do Telegram no vínculo e na edição, nunca do cliente: canal ou supergrupo; grupo comum não vira `Channel`; `is_forum` só em supergrupo; `None` em canal vinculado antes da migração 8, até a próxima edição (#99).
   - Com mídia, um texto de até 1.024 caracteres vai como `caption`; acima disso, o texto (até 4.096) e a mídia saem em duas mensagens ordenadas (`DispatchStrategy`). Sem mídia, o limite é 4.096.
-  - Enquetes nativas (`BroadcastPoll`) suportam modos regular e quiz, de 2 a 10 opções (1 a 100 caracteres cada), pergunta de até 300 caracteres, e exigem `is_anonymous=True` para envio a canais públicos do Telegram (kaizen de 2026-10-28: PR #98).
+  - Enquetes nativas (`BroadcastPoll`) suportam modos regular e quiz, de 2 a 10 opções (1 a 100 caracteres cada), pergunta de até 300 caracteres, e exigem `is_anonymous=True` para envio a canais públicos do Telegram (kaizen de 2026-10-28: PR #98). Voto visível (`is_anonymous=False`) só vai se **todo** destino for supergrupo conhecido do próprio perfil; canal sem `chat_type` conta como canal (`BroadcastPoll.ensure_fits_destinations`, na criação e no `PATCH` de destinos, #99).
   - `InlineButton` só aceita `https://` com host.
   - O arquivo temporário de mídia (`temp_media/`) é apagado depois do envio final, com sucesso ou com erro, e também no cancelamento.
   - Agendamentos são guardados e comparados em UTC; não se aceita agendar no passado.

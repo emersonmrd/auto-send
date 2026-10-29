@@ -255,6 +255,11 @@ class BroadcastPoll:
             if self.explanation is not None:
                 raise ValueError("regular polls cannot have explanation")
 
+    def ensure_fits_destinations(self, only_groups: bool) -> None:
+        # O Telegram recusa enquete pública em canal; destino de tipo desconhecido conta como canal (#99).
+        if not self.is_anonymous and not only_groups:
+            raise ValueError("Non-anonymous polls can only be sent when every destination is a group")
+
 @dataclass(frozen=True)
 class MediaAttachment:
     file_path: str

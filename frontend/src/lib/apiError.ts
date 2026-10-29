@@ -37,6 +37,8 @@ export const API_ERROR_CATALOG: Record<string, string> = {
     "O bot não é administrador deste canal. Adicione-o como administrador com permissão de publicar e tente de novo.",
   "Could not reach Telegram, try again":
     "Não foi possível falar com o Telegram agora. Tente de novo em instantes.",
+  "Non-anonymous polls can only be sent when every destination is a group":
+    "Enquete com votos visíveis só pode ir para grupos: algum destino é canal ou ainda não tem tipo. Deixe só grupos entre os destinos ou crie a enquete com voto anônimo.",
   [WEBHOOK_ACTIVE_DETAIL]:
     "Este bot está ligado a outro sistema (webhook), por isso a busca automática não funciona. Vincule o canal pelo link de um post, pelo ID ou pelo @username.",
   [BOT_IN_USE_DETAIL]:

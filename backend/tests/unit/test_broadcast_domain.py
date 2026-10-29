@@ -1039,3 +1039,24 @@ def test_broadcast_message_with_poll():
             poll=poll,
         )
 
+
+
+# Issue #99 parte B: o Telegram recusa enquete pública (não anônima) em canal.
+@pytest.mark.parametrize("is_anonymous", [True, False])
+def test_poll_of_any_kind_can_go_to_groups_only(is_anonymous):
+    poll = BroadcastPoll(question="Q?", options=["A", "B"], is_anonymous=is_anonymous)
+    assert poll.ensure_fits_destinations(only_groups=True) is None
+
+
+def test_anonymous_poll_can_go_to_channels():
+    poll = BroadcastPoll(question="Q?", options=["A", "B"], is_anonymous=True)
+    assert poll.ensure_fits_destinations(only_groups=False) is None
+
+
+def test_public_poll_is_refused_when_any_destination_may_be_a_channel():
+    poll = BroadcastPoll(question="Q?", options=["A", "B"], is_anonymous=False)
+    with pytest.raises(
+        ValueError,
+        match=r"^Non-anonymous polls can only be sent when every destination is a group$",
+    ):
+        poll.ensure_fits_destinations(only_groups=False)

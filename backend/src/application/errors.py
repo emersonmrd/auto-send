@@ -18,3 +18,21 @@ class ChannelDispatchingError(ValueError):
 
     def __init__(self) -> None:
         super().__init__("There is a broadcast currently dispatching. Wait for it to finish and try again.")
+
+
+class BroadcastNotFoundError(LookupError):
+    """O broadcast pedido pelo caso de uso não existe."""
+
+
+class InvalidScheduleFormatError(ValueError):
+    """scheduled_at não é uma data ISO-8601."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid scheduled_at ISO-8601 format")
+
+
+class BroadcastAbortedError(Exception):
+    """O usuário interrompeu o disparo em voo; as entregas parciais ficam gravadas."""
+
+    def __init__(self) -> None:
+        super().__init__("Broadcast cancelled by user")

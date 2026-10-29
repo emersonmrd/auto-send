@@ -18,6 +18,7 @@ import { formatRelativeTime } from "@/lib/relativeTime";
 import { ApiHttpError, extractApiError, formatDeliveryFailureReason } from "@/lib/apiError";
 import ChatDiscoveryPanel from "@/components/ChatDiscoveryPanel";
 import ChatKindBadge from "@/components/ChatKindBadge";
+import { allowsPublicPoll } from "@/lib/chatKind";
 import ConfirmDialog, { ConfirmDialogProps } from "@/components/ConfirmDialog";
 import {
   TelegramRichEditor,
@@ -156,6 +157,8 @@ export default function Home() {
   const [tempPollCorrectOptionId, setTempPollCorrectOptionId] = useState<number | null>(null);
   const [tempPollExplanation, setTempPollExplanation] = useState("");
   const [tempPollIsClosed, setTempPollIsClosed] = useState(false);
+  // Com algum canal entre os destinos, a enquete nova sai anônima, seja qual for a escolha salva (#99).
+  const publicPollAllowed = allowsPublicPoll(selectedChannelIds, channels);
 
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreviewUrl, setMediaPreviewUrl] = useState<string | null>(null);
@@ -179,6 +182,8 @@ export default function Home() {
 
   // Modo edição de um agendamento carregado no compositor (#15)
   const [composerEditing, setComposerEditing] = useState<{ id: string; scheduledAt: string | null } | null>(null);
+  // No modo edição o PATCH não altera a enquete: a prévia mostra o valor salvo, não o derivado (#99).
+  const effectivePollIsAnonymous = pollIsAnonymous || (!publicPollAllowed && !composerEditing);
   useEffect(() => {
     if (!composerEditing) return;
     const renew = setInterval(() => {
@@ -1016,7 +1021,7 @@ export default function Home() {
     const currentButtonUrl = buttonUrl;
     const currentPollQuestion = pollQuestion.trim();
     const currentPollOptions = pollOptions.map((o) => o.trim()).filter(Boolean);
-    const currentPollIsAnonymous = pollIsAnonymous;
+    const currentPollIsAnonymous = effectivePollIsAnonymous;
     const currentPollAllowsMultipleAnswers = pollAllowsMultipleAnswers;
     const currentPollType = pollType;
     const currentPollCorrectOptionId = pollCorrectOptionId;
@@ -2397,7 +2402,7 @@ export default function Home() {
                         <BarChart2 className="w-4 h-4 shrink-0" />
                         <span>{pollType === "quiz" ? "Quiz / Questionário" : "Enquete"}</span>
                         <span className="text-[10px] text-gray-400 font-normal">
-                          ({pollIsAnonymous ? "Anônima" : "Votos visíveis"}
+                          ({effectivePollIsAnonymous ? "Anônima" : "Votos visíveis"}
                           {pollAllowsMultipleAnswers && pollType !== "quiz" ? " • Múltiplas escolhas" : ""})
                         </span>
                       </div>
@@ -3093,13 +3098,27 @@ export default function Home() {
                 <label className="flex items-center gap-2 cursor-pointer text-xs text-gray-300">
                   <input
                     type="checkbox"
-                    checked={tempPollIsAnonymous}
+                    checked={tempPollIsAnonymous || !publicPollAllowed}
+                    disabled={!publicPollAllowed}
                     onChange={(e) => setTempPollIsAnonymous(e.target.checked)}
-                    className="rounded bg-[#242f3d] border-gray-600 text-[#5288c1] focus:ring-0"
+                    className="rounded bg-[#242f3d] border-gray-600 text-[#5288c1] focus:ring-0 disabled:opacity-60"
                   />
                   <span>Voto Anônimo (os usuários não verão quem votou em quê)</span>
                 </label>
-                {!tempPollIsAnonymous && (
+                {!publicPollAllowed && (
+                  <p
+                    role="note"
+                    className="text-[11px] text-gray-300 bg-[#242f3d] border border-gray-700 rounded-lg p-2 flex items-start gap-1.5 leading-relaxed"
+                  >
+                    <Info className="w-3.5 h-3.5 shrink-0 text-[#71aaeb] mt-0.5" />
+                    <span>
+                      {selectedChannelIds.length === 0
+                        ? "Nenhum destino selecionado: para votos visíveis, selecione só grupos como destino."
+                        : "Algum destino é canal (ou ainda não tem tipo conhecido): o Telegram exige voto anônimo. Para votos visíveis, deixe selecionados só grupos."}
+                    </span>
+                  </p>
+                )}
+                {publicPollAllowed && !tempPollIsAnonymous && (
                   <div className="text-[11px] text-amber-200 bg-amber-950/60 border border-amber-600/60 rounded-lg p-2 flex items-start gap-1.5 leading-relaxed">
                     <Info className="w-3.5 h-3.5 shrink-0 text-amber-400 mt-0.5" />
                     <span>
