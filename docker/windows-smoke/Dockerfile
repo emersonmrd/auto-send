@@ -11,7 +11,7 @@
 # que o ffmpeg importa), e o teste reprovaria o pacote por algo que nao falta na maquina do usuario.
 # Nenhuma das duas traz runtime extra (VC++, .NET, Python), entao o teste continua num Windows limpo.
 # A versao do host precisa casar com a da imagem: ltsc2022 <-> Windows Server 2022 (runner windows-2022).
-FROM mcr.microsoft.com/windows/server:ltsc2022@sha256:7b9f4ac228cf21b6a4f8795e23329442183bd708e3ee55f7b67798481c94f591
+FROM mcr.microsoft.com/windows/server:ltsc2022@sha256:7a15615ebaa86fc085707866747b8806d457ab939a97c98c5af50e6c34b4a5d2
 
 LABEL org.opencontainers.image.title="auto-send-windows-smoke" `
       org.opencontainers.image.description="Smoke test do pacote portatil do Auto-Send num Windows Server limpo" `
