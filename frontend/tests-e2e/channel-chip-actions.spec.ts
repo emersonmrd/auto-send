@@ -23,14 +23,17 @@ async function openComposer(page: Page) {
   );
   await page.goto("/");
   await page.getByText("Acme", { exact: true }).first().click();
-  await expect(page.getByText("Canal de Novidades").first()).toBeVisible();
+  await page.getByRole("button", { name: /Canais Destino/ }).click();
+  const destinationsModal = page.getByTestId("destinations-modal");
+  await expect(destinationsModal).toBeVisible();
+  await expect(destinationsModal.locator("text=Canal de Novidades").first()).toBeVisible();
 }
 
-test.describe("Ações do chip de destino pelo teclado (#114)", () => {
+test.describe("Ações do canal de destino pelo teclado (#114)", () => {
   test("Enter no botão Editar Canal abre modal de edição sem desmarcar o canal", async ({ page }) => {
     await openComposer(page);
 
-    const editBtn = page.getByRole("button", { name: "Editar Canal", exact: true }).first();
+    const editBtn = page.getByTestId("destinations-modal").getByRole("button", { name: "Editar Canal", exact: true }).first();
     await editBtn.focus();
     await page.keyboard.press("Enter");
 
@@ -39,13 +42,13 @@ test.describe("Ações do chip de destino pelo teclado (#114)", () => {
     // Fecha o modal e confirma que o canal continua selecionado
     await page.getByRole("button", { name: "Cancelar", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Editar Canal", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
+    await expect(page.getByTestId("destinations-modal").locator("div").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
   });
 
   test("Espaço no botão Editar Canal abre modal de edição sem desmarcar o canal", async ({ page }) => {
     await openComposer(page);
 
-    const editBtn = page.getByRole("button", { name: "Editar Canal", exact: true }).first();
+    const editBtn = page.getByTestId("destinations-modal").getByRole("button", { name: "Editar Canal", exact: true }).first();
     await editBtn.focus();
     await page.keyboard.press("Space");
 
@@ -53,13 +56,13 @@ test.describe("Ações do chip de destino pelo teclado (#114)", () => {
 
     await page.getByRole("button", { name: "Cancelar", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Editar Canal", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
+    await expect(page.getByTestId("destinations-modal").locator("div").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
   });
 
   test("Enter no botão Excluir Canal abre modal de confirmação sem desmarcar o canal", async ({ page }) => {
     await openComposer(page);
 
-    const deleteBtn = page.getByRole("button", { name: "Excluir Canal", exact: true }).first();
+    const deleteBtn = page.getByTestId("destinations-modal").getByRole("button", { name: "Excluir Canal", exact: true }).first();
     await deleteBtn.focus();
     await page.keyboard.press("Enter");
 
@@ -67,13 +70,13 @@ test.describe("Ações do chip de destino pelo teclado (#114)", () => {
 
     await page.getByRole("button", { name: "Cancelar", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Excluir Canal", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
+    await expect(page.getByTestId("destinations-modal").locator("div").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
   });
 
   test("Espaço no botão Excluir Canal abre modal de confirmação sem desmarcar o canal", async ({ page }) => {
     await openComposer(page);
 
-    const deleteBtn = page.getByRole("button", { name: "Excluir Canal", exact: true }).first();
+    const deleteBtn = page.getByTestId("destinations-modal").getByRole("button", { name: "Excluir Canal", exact: true }).first();
     await deleteBtn.focus();
     await page.keyboard.press("Space");
 
@@ -81,6 +84,6 @@ test.describe("Ações do chip de destino pelo teclado (#114)", () => {
 
     await page.getByRole("button", { name: "Cancelar", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Excluir Canal", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
+    await expect(page.getByTestId("destinations-modal").locator("div").filter({ hasText: "Canal de Novidades" }).first().locator("svg.lucide-check")).toHaveCount(1);
   });
 });

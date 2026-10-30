@@ -5,6 +5,13 @@ Correção = patch, adição = minor, mudança incompatível = major. A skill `r
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-29
+
+### Fixed
+- Barra superior agora utiliza exclusivamente o modal vertical com o botão `Canais Destino (X/Y)` para gerenciar e selecionar destinos, eliminando 100% de chips e rolagem horizontal da interface.
+- Atualização e consolidação das suítes de testes E2E e aplicação real para operarem através do seletor e modal de destinos, com identificadores determinísticos `data-testid="destination-item"`.
+- Guardrail §8.11 no `AGENTS.md`: imutabilidade estrita de requisitos de UI aprovados pelo usuário em preview e precedência de requisitos visuais sobre testes legados, vedando alterações na interface para satisfazer testes automatizados.
+
 ## [0.7.0] - 2026-10-29
 
 ### Added

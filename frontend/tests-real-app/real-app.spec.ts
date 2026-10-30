@@ -47,13 +47,19 @@ async function clearTelegramCalls(page: Page) {
 // Deixa marcados só os destinos pedidos. Com a API falsa a suíte vincula mais canais (busca, link, webhook)
 // do que com o Telegram real, então desmarcar um destino só não basta.
 async function selectOnlyDestinations(page: Page, titles: string[]) {
-  const chips = page.getByRole("button").filter({ has: page.getByRole("button", { name: /^O que o bot pode fazer em / }) });
-  for (const chip of await chips.all()) {
-    const title = await chip.getByRole("button", { name: /^O que o bot pode fazer em / }).getAttribute("aria-label");
-    const wanted = titles.some((t) => title === `O que o bot pode fazer em ${t}`);
-    const selected = (await chip.locator("svg.lucide-check").count()) > 0;
-    if (wanted !== selected) await chip.click();
+  await page.getByRole("button", { name: /^Canais Destino/ }).click();
+  const modal = page.getByTestId("destinations-modal");
+  await expect(modal).toBeVisible();
+  const items = modal.getByTestId("destination-item");
+  for (const item of await items.all()) {
+    const btn = item.getByRole("button", { name: /^O que o bot pode fazer em / });
+    const aria = await btn.getAttribute("aria-label");
+    const wanted = titles.some((t) => aria === `O que o bot pode fazer em ${t}`);
+    const selected = (await item.locator("svg.lucide-check").count()) > 0;
+    if (wanted !== selected) await item.click();
   }
+  await modal.getByRole("button", { name: "Fechar" }).click();
+  await expect(modal).not.toBeVisible();
 }
 
 async function fillPoll(page: Page, question: string) {
@@ -68,7 +74,7 @@ async function fillPoll(page: Page, question: string) {
 async function openProfile(page: Page) {
   await page.goto("/");
   await page.getByText(profileName, { exact: true }).first().click();
-  await expect(page.getByText("Canal de Teste").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Canais Destino/ })).toBeVisible();
 }
 
 test.describe.serial("aplicação real", () => {
@@ -110,7 +116,11 @@ test.describe.serial("aplicação real", () => {
     await page.getByPlaceholder("-1001234567890").fill(channelId);
     await page.getByRole("button", { name: "Vincular Canal" }).click();
 
-    await expect(page.getByText("Canal de Teste").first()).toBeVisible();
+    await page.getByRole("button", { name: /^Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
+    await expect(modal.getByText("Canal de Teste").first()).toBeVisible();
+    await modal.getByRole("button", { name: "Fechar" }).click();
   });
 
   test("envia texto para o canal", async ({ page }) => {
@@ -261,13 +271,17 @@ test.describe.serial("aplicação real", () => {
     expect(calls[4].query).toEqual({ chat_id: "@canalpublico" });
     expect(calls[8].query).toEqual({ chat_id: "-1004444444444" });
 
-    // Os canais vinculados pela busca aparecem na barra de canais do perfil, com o tipo lido do Telegram (#99).
+    // Os canais vinculados pela busca aparecem no modal de destinos do perfil, com o tipo lido do Telegram (#99).
     await page.goto("/");
     await page.getByText(profileName, { exact: true }).first().click();
-    await expect(page.getByText("Canal Descoberto").first()).toBeVisible();
-    await expect(page.getByText("Canal Público").first()).toBeVisible();
-    const chip = page.getByRole("button").filter({ hasText: "Canal Descoberto" }).first();
-    await expect(chip.getByRole("img", { name: "Canal", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /^Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
+    await expect(modal.getByText("Canal Descoberto").first()).toBeVisible();
+    await expect(modal.getByText("Canal Público").first()).toBeVisible();
+    const item = modal.getByTestId("destination-item").filter({ hasText: "Canal Descoberto" }).first();
+    await expect(item.getByRole("img", { name: "Canal", exact: true })).toBeVisible();
+    await modal.getByRole("button", { name: "Fechar" }).click();
   });
 
   // Também roda com o Telegram real: o bot de teste está no canal de teste, e o getChat por ID não depende de mensagens.
@@ -334,22 +348,30 @@ test.describe.serial("aplicação real", () => {
     await page.getByPlaceholder("-1001234567890").fill(supergroupId);
     await page.getByRole("button", { name: "Vincular Canal" }).click();
 
-    const chip = page.getByRole("button").filter({ hasText: "Supergrupo de Teste" }).first();
+    await page.getByRole("button", { name: /^Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
+
+    const target = modal.getByTestId("destination-item").filter({ hasText: "Supergrupo de Teste" }).first();
     // Supergrupo com tópicos aparece como fórum; o de teste real pode ter ou não.
-    await expect(chip.getByRole("img", { name: /^(Grupo|Fórum)$/ })).toBeVisible();
+    await expect(target.getByRole("img", { name: /^(Grupo|Fórum)$/ })).toBeVisible();
     if (!USES_REAL_TELEGRAM) {
-      await expect(chip.getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
+      await expect(target.getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
       const calls = await telegramCalls(page);
       // Bot só membro (#100): o getChat do ensure_bot_can_post confere que é grupo; o segundo lê o tipo (#99).
       expect(calls.map((c) => c.method)).toEqual(["getMe", "getChatMember", "getChat", "getChat"]);
       expect(calls[2].query).toEqual({ chat_id: supergroupId });
     }
+    await modal.getByRole("button", { name: "Fechar" }).click();
   });
 
   test("o painel do supergrupo mostra a situação do bot e o que o grupo deixa enviar (#107)", async ({ page }) => {
     test.skip(USES_REAL_TELEGRAM && !REAL_SUPERGROUP_ID, "sem E2E_SUPERGROUP_AUTOSEND no ambiente");
     await openProfile(page);
-    await page.getByRole("button", { name: "O que o bot pode fazer em Supergrupo de Teste", exact: true }).click();
+    await page.getByRole("button", { name: /^Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
+    await modal.getByRole("button", { name: "O que o bot pode fazer em Supergrupo de Teste", exact: true }).click();
 
     const dialog = page.getByRole("dialog", { name: "O que o bot pode fazer em Supergrupo de Teste" });
     await expect(dialog).toContainText(/Criador|Administrador|Membro|Restrito/);

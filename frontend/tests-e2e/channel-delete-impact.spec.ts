@@ -104,10 +104,15 @@ test.describe("Exclusão de Canal com Impacto em Agendamentos (Issue #65)", () =
 
     await page.goto("/");
     await expect(page.locator("text=Acme").first()).toBeVisible();
-    await expect(page.locator("text=Canal de Novidades").first()).toBeVisible();
+
+    // Abre o modal de destinos onde os canais são listados
+    await page.getByRole("button", { name: /Canais Destino/ }).click();
+    const destinationsModal = page.getByTestId("destinations-modal");
+    await expect(destinationsModal).toBeVisible();
+    await expect(destinationsModal.locator("text=Canal de Novidades").first()).toBeVisible();
 
     // Clica no botão de excluir canal
-    const deleteBtn = page.getByTitle("Excluir Canal").first();
+    const deleteBtn = destinationsModal.getByRole("button", { name: "Excluir Canal" }).first();
     await deleteBtn.click();
 
     // Valida abertura do modal
@@ -126,7 +131,7 @@ test.describe("Exclusão de Canal com Impacto em Agendamentos (Issue #65)", () =
     await page.getByRole("button", { name: "Cancelar" }).click();
     await expect(modalHeading).toBeHidden();
     expect(deletedChannelIds).toHaveLength(0);
-    await expect(page.locator("text=Canal de Novidades").first()).toBeVisible();
+    await expect(destinationsModal.locator("text=Canal de Novidades").first()).toBeVisible();
   });
 
   test("confirma exclusão do canal, dispara DELETE e atualiza lista com feedback", async ({ page }) => {
@@ -135,10 +140,15 @@ test.describe("Exclusão de Canal com Impacto em Agendamentos (Issue #65)", () =
 
     await page.goto("/");
     await expect(page.locator("text=Acme").first()).toBeVisible();
-    await expect(page.locator("text=Canal de Novidades").first()).toBeVisible();
+
+    // Abre o modal de destinos onde os canais são listados
+    await page.getByRole("button", { name: /Canais Destino/ }).click();
+    const destinationsModal = page.getByTestId("destinations-modal");
+    await expect(destinationsModal).toBeVisible();
+    await expect(destinationsModal.locator("text=Canal de Novidades").first()).toBeVisible();
 
     // Clica no botão de excluir canal
-    await page.getByTitle("Excluir Canal").first().click();
+    await destinationsModal.getByRole("button", { name: "Excluir Canal" }).first().click();
 
     // Confirma exclusão
     const confirmBtn = page.getByRole("button", { name: "Confirmar Exclusão" });

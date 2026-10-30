@@ -42,7 +42,10 @@ async function openComposer(page: Page) {
   await page.route("**/api/v1/profiles/profile-1/channels", (route) => json(route, 200, channels));
   await page.goto("/");
   await page.getByText("Acme", { exact: true }).first().click();
-  await expect(page.getByText("Grupo VIP").first()).toBeVisible();
+  await page.getByRole("button", { name: /Canais Destino/ }).click();
+  const destinationsModal = page.getByTestId("destinations-modal");
+  await expect(destinationsModal).toBeVisible();
+  await expect(destinationsModal.locator("text=Grupo VIP").first()).toBeVisible();
 }
 
 const row = (dialog: ReturnType<Page["getByRole"]>, label: string) =>
@@ -77,7 +80,7 @@ test.describe("Permissões do bot por destino (#107)", () => {
     await dialog.getByRole("button", { name: "Fechar painel de permissões", exact: true }).click();
     await expect(dialog).toHaveCount(0);
     // A página abre com todos os destinos selecionados; abrir o painel não desmarca o grupo.
-    await expect(page.getByRole("button").filter({ hasText: "Grupo VIP" }).first().locator("svg.lucide-check")).toHaveCount(1);
+    await expect(page.getByTestId("destinations-modal").getByTestId("destination-item").filter({ hasText: "Grupo VIP" }).first().locator("svg.lucide-check")).toHaveCount(1);
   });
 
   test("Atualizar lê de novo do Telegram", async ({ page }) => {

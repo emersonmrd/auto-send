@@ -22,16 +22,25 @@ async function openComposer(page: Page) {
   await page.route("**/api/v1/profiles/profile-1/channels", (route) => json(route, 200, channels));
   await page.goto("/");
   await page.getByText("Acme", { exact: true }).first().click();
-  await expect(page.getByText("Grupo VIP").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /Canais Destino/ })).toBeVisible();
 }
 
-const chip = (page: Page, title: string) => page.getByRole("button").filter({ hasText: title }).first();
+async function openDestinationsModal(page: Page) {
+  await page.getByRole("button", { name: /Canais Destino/ }).click();
+  const modal = page.getByTestId("destinations-modal");
+  await expect(modal).toBeVisible();
+  return modal;
+}
 
 async function keepOnly(page: Page, keep: string) {
-  // A página abre com todos os canais selecionados.
+  const modal = await openDestinationsModal(page);
   for (const c of channels) {
-    if (c.title !== keep) await chip(page, c.title).click();
+    if (c.title !== keep) {
+      await modal.getByTestId("destination-item").filter({ hasText: c.title }).first().click();
+    }
   }
+  await modal.getByRole("button", { name: "Fechar" }).click();
+  await expect(modal).not.toBeVisible();
 }
 
 test.describe("Voto anônimo conforme os destinos (#99)", () => {
@@ -74,14 +83,18 @@ test.describe("Voto anônimo conforme os destinos (#99)", () => {
     await dialog.getByRole("button", { name: "Salvar", exact: true }).click();
     await expect(page.getByText("(Votos visíveis)")).toBeVisible();
 
-    await chip(page, "Canal Antigo").click();
+    const modal = await openDestinationsModal(page);
+    await modal.getByTestId("destination-item").filter({ hasText: "Canal Antigo" }).first().click();
+    await modal.getByRole("button", { name: "Fechar" }).click();
 
     await expect(page.getByText("(Anônima)")).toBeVisible();
   });
 
   test("sem destino selecionado, explica que é preciso escolher só grupos", async ({ page }) => {
     await openComposer(page);
-    for (const c of channels) await chip(page, c.title).click();
+    const modal = await openDestinationsModal(page);
+    await modal.getByRole("button", { name: "Desmarcar Todos" }).click();
+    await modal.getByRole("button", { name: "Fechar" }).click();
     await page.getByRole("button", { name: "Criar Enquete", exact: true }).click();
 
     const note = page.getByRole("dialog", { name: "Criar Enquete do Telegram" }).getByRole("note");
