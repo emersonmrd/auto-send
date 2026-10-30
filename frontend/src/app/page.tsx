@@ -2323,119 +2323,20 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Badges / Checkboxes de Canais e Botão da Fila */}
+              {/* Canais Destino e Ações */}
               <div className="flex items-center space-x-2 min-w-0">
-                <span className="text-xs text-gray-400 mr-1 flex items-center gap-1 shrink-0">
-                  <Tv className="w-3.5 h-3.5" /> Canais Destino:
-                </span>
-                <div className="flex items-center space-x-2 overflow-x-auto max-w-[38vw] py-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
-                    {channels.map((c) => {
-                      const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
-                      const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
-                      const topicBadge = c.topic_name ? ` (#${c.topic_name})` : c.message_thread_id ? ` (#${c.message_thread_id})` : "";
-                      return (
-                        <div
-                          key={c.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => {
-                            if (isChecked) {
-                              setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
-                            } else {
-                              setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") {
-                              e.preventDefault();
-                              if (isChecked) {
-                                setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
-                              } else {
-                                setSelectedChannelIds([...selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id), targetId]);
-                              }
-                            }
-                          }}
-                          className={`text-xs px-2.5 py-1 rounded-full border transition flex items-center gap-1.5 cursor-pointer group select-none shrink-0 ${
-                            isChecked
-                              ? "bg-[#5288c1] border-[#5288c1] text-white"
-                              : "border-gray-600 text-gray-400 hover:border-gray-400 bg-[#1e2a38]/40"
-                          }`}
-                        >
-                          {isChecked && <Check className="w-3 h-3 shrink-0" />}
-                          <ChatKindBadge chatType={c.chat_type} isForum={c.is_forum} />
-                          <span className="truncate max-w-[160px]">{c.title}{topicBadge}</span>
-                          <div className="flex items-center gap-0.5 ml-1 opacity-70 group-hover:opacity-100 transition-opacity">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setPermissionsChannel(c);
-                              }}
-                              // Enter/Espaço no botão não pode chegar ao chip, que trataria a tecla como seleção do destino.
-                              onKeyDown={(e) => e.stopPropagation()}
-                              className={`p-0.5 rounded transition ${
-                                isChecked
-                                  ? "hover:bg-white/20 text-white"
-                                  : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
-                              }`}
-                              aria-label={`O que o bot pode fazer em ${c.title}`}
-                              title={`O que o bot pode fazer em ${c.title}`}
-                            >
-                              <Info className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenEditChannel(c);
-                              }}
-                              onKeyDown={(e) => e.stopPropagation()}
-                              className={`p-0.5 rounded transition ${
-                                isChecked
-                                  ? "hover:bg-white/20 text-white"
-                                  : "hover:bg-gray-700 text-gray-400 hover:text-[#71aaeb]"
-                              }`}
-                              aria-label="Editar Canal"
-                              title="Editar Canal"
-                            >
-                              <Edit className="w-3 h-3" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenDeleteChannel(c);
-                              }}
-                              onKeyDown={(e) => e.stopPropagation()}
-                              className={`p-0.5 rounded transition ${
-                                isChecked
-                                  ? "hover:bg-red-500/30 text-white hover:text-red-200"
-                                  : "hover:bg-red-900/40 text-gray-400 hover:text-red-400"
-                              }`}
-                              aria-label="Excluir Canal"
-                              title="Excluir Canal"
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                {channels.length > 4 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowDestinationsModal(true)}
-                    className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-gray-200 hover:text-white px-2.5 py-1 rounded-full transition flex items-center gap-1.5 border border-[#3b6694]/50 font-medium shrink-0 cursor-pointer shadow-sm group"
-                    title="Abrir lista de canais de destino em modal com busca e rolagem vertical"
-                  >
-                    <Tv className="w-3.5 h-3.5 text-[#5288c1] group-hover:text-white transition-colors" />
-                    <span>
-                      Canais Destino ({selectedChannelIds.length}/{channels.length})
-                    </span>
-                    <ChevronDown className="w-3 h-3 text-gray-400 group-hover:text-white transition-colors" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setShowDestinationsModal(true)}
+                  className="text-xs bg-[#242f3d] hover:bg-[#2b5278] text-gray-200 hover:text-white px-2.5 py-1 rounded-full transition flex items-center gap-1.5 border border-[#3b6694]/50 font-medium shrink-0 cursor-pointer shadow-sm group"
+                  title="Abrir lista de canais de destino em modal com busca e rolagem vertical"
+                >
+                  <Tv className="w-3.5 h-3.5 text-[#5288c1] group-hover:text-white transition-colors" />
+                  <span>
+                    Canais Destino ({selectedChannelIds.length}/{channels.length})
+                  </span>
+                  <ChevronDown className="w-3 h-3 text-gray-400 group-hover:text-white transition-colors" />
+                </button>
 
                 <button
                   onClick={() => setShowAddChannelModal(true)}
@@ -4203,23 +4104,29 @@ export default function Home() {
 
             {/* Lista com scroll vertical */}
             <div className="flex-1 overflow-y-auto space-y-2 pr-1 scrollbar-thin scrollbar-thumb-gray-600/50 scrollbar-track-transparent">
-              {channels
-                .filter((c) => {
-                  if (!destinationsSearch.trim()) return true;
-                  const query = destinationsSearch.toLowerCase();
-                  return (
-                    c.title.toLowerCase().includes(query) ||
-                    (c.topic_name && c.topic_name.toLowerCase().includes(query)) ||
-                    c.chat_id.includes(query)
-                  );
-                })
-                .map((c) => {
+              {channels.length === 0 ? (
+                <div className="text-center py-8 text-xs text-gray-400">
+                  Nenhum canal ou grupo vinculado ainda.
+                </div>
+              ) : (
+                channels
+                  .filter((c) => {
+                    if (!destinationsSearch.trim()) return true;
+                    const query = destinationsSearch.toLowerCase();
+                    return (
+                      c.title.toLowerCase().includes(query) ||
+                      (c.topic_name && c.topic_name.toLowerCase().includes(query)) ||
+                      c.chat_id.includes(query)
+                    );
+                  })
+                  .map((c) => {
                   const targetId = c.destination_id || (c.message_thread_id ? `${c.chat_id}:${c.message_thread_id}` : c.chat_id);
                   const isChecked = selectedChannelIds.includes(targetId) || (!c.message_thread_id && selectedChannelIds.includes(c.chat_id));
                   const topicBadge = c.topic_name ? ` (#${c.topic_name})` : c.message_thread_id ? ` (#${c.message_thread_id})` : "";
                   return (
                     <div
                       key={c.id}
+                      data-testid="destination-item"
                       onClick={() => {
                         if (isChecked) {
                           setSelectedChannelIds(selectedChannelIds.filter((id) => id !== targetId && id !== c.chat_id));
@@ -4289,7 +4196,8 @@ export default function Home() {
                       </div>
                     </div>
                   );
-                })}
+                })
+              )}
             </div>
 
             {/* Footer do Modal */}

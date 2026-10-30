@@ -47,29 +47,35 @@ async function openComposerWithTopics(page: Page) {
 }
 
 test.describe("Suporte a tópicos de fóruns de supergrupos (#101)", () => {
-  test("Exibe rótulo do tópico nos chips de destino para múltiplos tópicos no mesmo supergrupo", async ({ page }) => {
+  test("Exibe rótulo do tópico na lista de destinos para múltiplos tópicos no mesmo supergrupo", async ({ page }) => {
     await openComposerWithTopics(page);
+    await page.getByRole("button", { name: /Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
 
     // Confere que ambos os tópicos aparecem com o selo do tópico
-    await expect(page.getByText("Grupo VIP (#Geral)").first()).toBeVisible();
-    await expect(page.getByText("Grupo VIP (#Anúncios)").first()).toBeVisible();
+    await expect(modal.getByText("Grupo VIP (#Geral)").first()).toBeVisible();
+    await expect(modal.getByText("Grupo VIP (#Anúncios)").first()).toBeVisible();
   });
 
   test("Permite alternar a seleção de tópicos de forma independente", async ({ page }) => {
     await openComposerWithTopics(page);
+    await page.getByRole("button", { name: /Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
 
-    const chipGeral = page.getByRole("button").filter({ hasText: "Grupo VIP (#Geral)" }).first();
-    const chipAnuncios = page.getByRole("button").filter({ hasText: "Grupo VIP (#Anúncios)" }).first();
+    const itemGeral = modal.getByTestId("destination-item").filter({ hasText: "Grupo VIP (#Geral)" }).first();
+    const itemAnuncios = modal.getByTestId("destination-item").filter({ hasText: "Grupo VIP (#Anúncios)" }).first();
 
     // Inicialmente ambos estão selecionados (com ícone check)
-    await expect(chipGeral.locator("svg.lucide-check")).toHaveCount(1);
-    await expect(chipAnuncios.locator("svg.lucide-check")).toHaveCount(1);
+    await expect(itemGeral.locator("svg.lucide-check")).toHaveCount(1);
+    await expect(itemAnuncios.locator("svg.lucide-check")).toHaveCount(1);
 
     // Desmarca o tópico Geral clicando nele
-    await chipGeral.click();
-    await expect(chipGeral.locator("svg.lucide-check")).toHaveCount(0);
+    await itemGeral.click();
+    await expect(itemGeral.locator("svg.lucide-check")).toHaveCount(0);
     // Anúncios continua selecionado
-    await expect(chipAnuncios.locator("svg.lucide-check")).toHaveCount(1);
+    await expect(itemAnuncios.locator("svg.lucide-check")).toHaveCount(1);
   });
 
   test("Preenche automaticamente ID do tópico ao colar link t.me/c/<id>/<topic> no modal de adicionar canal", async ({ page }) => {
@@ -110,8 +116,12 @@ test.describe("Suporte a tópicos de fóruns de supergrupos (#101)", () => {
       }),
     );
 
-    const chipGeral = page.getByRole("button").filter({ hasText: "Grupo VIP (#Geral)" }).first();
-    await chipGeral.getByRole("button", { name: "Excluir Canal" }).click();
+    await page.getByRole("button", { name: /Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
+
+    const itemGeral = modal.getByTestId("destination-item").filter({ hasText: "Grupo VIP (#Geral)" }).first();
+    await itemGeral.getByRole("button", { name: "Excluir Canal" }).click();
 
     await expect(page.getByTestId("channel-delete-in-flight-warning")).toBeVisible();
     await expect(page.getByTestId("channel-delete-in-flight-warning")).toContainText("Há 1 envio em andamento para este canal");

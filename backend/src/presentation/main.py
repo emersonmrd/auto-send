@@ -245,7 +245,7 @@ def _resolve_app_version() -> str:
         return version("auto-send-backend")
     except Exception:
         pass
-    return "0.7.0"
+    return "0.7.1"
 
 app = FastAPI(title="Auto-Send Multi-Bot API", version=_resolve_app_version(), lifespan=lifespan)
 

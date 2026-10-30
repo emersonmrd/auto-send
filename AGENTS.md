@@ -202,6 +202,9 @@ Todas as implementações e revisões do time de agentes devem cumprir compulsor
 10. **Feedback Contínuo em Uploads de Longa Duração e APIs com Ingestão Assíncrona:**
    - Em transmissões assíncronas de arquivos pesados para serviços externos (como a Telegram Bot API local, que recebe os bytes via HTTP mas os transfere para a nuvem via MTProto sem stream contínuo de status), a interface nunca deve adotar simulações matemáticas que estacionem em porcentagens fictícias (ex.: 97%), que geram percepção de travamento no usuário.
    - O padrão adotado é a transição para um fluxo contínuo e indeterminado (*shimmer/pulse*), acompanhado compulsoriamente de cronômetro ao vivo com tempo decorrido (`formatElapsed`) e indicação do tamanho real do arquivo, cravando 100% no momento da confirmação pelo servidor (kaizen de 2026-10-28: PR #86).
+11. **Imutabilidade de Design Aprovado em Preview e Precedência de Requisitos de UI sobre Testes Legados:**
+   - Uma vez que o usuário valida e aprova um layout ou comportamento visual via preview/executável de teste (ex.: remoção completa de chips e de qualquer rolagem lateral na barra de topo em favor do botão de modal `Canais Destino (X/Y)`), é **terminantemente proibido** alterar, reintroduzir ou reverter qualquer detalhe visual aprovado sem nova consulta e alinhamento prévio explícito com o usuário.
+   - É expressamente proibido adulterar a interface ou reverter decisões visuais para fazer testes automatizados (E2E / Playwright) passarem. Quando uma mudança de design aprovada pelo usuário impacta testes existentes, **são os testes que devem ser compulsoriamente adaptados e atualizados** ao novo fluxo da interface. Se surgir qualquer dúvida ou necessidade de ajuste no design, o agente deve parar e submeter a decisão para nova validação e aprovação do usuário antes de commitar ou abrir PR (kaizen de 2026-10-29: release v0.7.1).
 
 
 ## 9. Checklist de Segurança do Domínio

@@ -65,6 +65,24 @@ jobs:
           name: AutoSend-Portable
           path: dist
 
+      - name: Ensure Docker daemon is ready
+        shell: powershell
+        run: |
+          Start-Service docker -ErrorAction SilentlyContinue
+          $maxRetries = 20
+          $retryCount = 0
+          while ($retryCount -lt $maxRetries) {
+              try {
+                  docker info | Out-Null
+                  Write-Host "Docker daemon is ready!"
+                  break
+              } catch {
+                  Write-Host "Waiting for Docker daemon to start..."
+                  Start-Sleep -s 3
+                  $retryCount++
+              }
+          }
+
       - name: Build smoke test image
         run: docker build -f docker/windows-smoke/Dockerfile -t auto-send-windows-smoke:${{ github.sha }} .
 

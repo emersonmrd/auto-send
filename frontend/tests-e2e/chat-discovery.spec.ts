@@ -224,10 +224,14 @@ test.describe("Tipo do chat nos canais destino (issue #99)", () => {
     await page.goto("/");
     await page.getByText("Acme", { exact: true }).first().click();
 
-    const chip = (title: string) => page.getByRole("button").filter({ hasText: title }).first();
-    await expect(chip("Canal de Novidades").getByRole("img", { name: "Canal", exact: true })).toBeVisible();
-    await expect(chip("Grupo VIP").getByRole("img", { name: "Fórum", exact: true })).toBeVisible();
-    await expect(chip("Comunidade").getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
-    await expect(chip("Canal Antigo").getByRole("img")).toHaveCount(0);
+    await page.getByRole("button", { name: /Canais Destino/ }).click();
+    const modal = page.getByTestId("destinations-modal");
+    await expect(modal).toBeVisible();
+
+    const item = (title: string) => modal.getByTestId("destination-item").filter({ hasText: title }).first();
+    await expect(item("Canal de Novidades").getByRole("img", { name: "Canal", exact: true })).toBeVisible();
+    await expect(item("Grupo VIP").getByRole("img", { name: "Fórum", exact: true })).toBeVisible();
+    await expect(item("Comunidade").getByRole("img", { name: "Grupo", exact: true })).toBeVisible();
+    await expect(item("Canal Antigo").getByRole("img")).toHaveCount(0);
   });
 });
