@@ -1,6 +1,6 @@
 services:
   telegram-bot-api:
-    image: aiogram/telegram-bot-api:10.3@sha256:779f6a18990d7df3b89b335e314bc3a92812530cfe08264824ac586225a6d6b3
+    image: aiogram/telegram-bot-api:10.4@sha256:67fc1c033fab0ed8266cb76bbeadbafe1924c25b6515f7ca4e6d398ece8e9372
     container_name: auto-send-telegram-bot-api
     environment:
       - TELEGRAM_API_ID=${TELEGRAM_API_ID:-}
